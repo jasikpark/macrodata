@@ -4,15 +4,13 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-patchedDependencies:
-  agents:
-    hash: pi4anlup3bo22hsjghdfdu27g4
-    path: patches/agents.patch
-
 importers:
 
   .:
     dependencies:
+      '@cloudflare/codemode':
+        specifier: ^0.0.5
+        version: 0.0.5(agents@0.3.6)(ai@6.0.61(zod@3.25.76))(typescript@5.9.3)(zod@3.25.76)
       '@cloudflare/workers-oauth-provider':
         specifier: ^0.2.2
         version: 0.2.2
@@ -21,7 +19,7 @@ importers:
         version: 1.25.2(@cfworker/json-schema@4.1.1)(hono@4.11.7)(zod@3.25.76)
       agents:
         specifier: ^0.3.6
-        version: 0.3.6(patch_hash=pi4anlup3bo22hsjghdfdu27g4)(@ai-sdk/openai@3.0.22(zod@3.25.76))(@cloudflare/ai-chat@0.0.4)(@cloudflare/codemode@0.0.5)(@cloudflare/workers-types@4.20260129.0)(ai@6.0.61(zod@3.25.76))(hono@4.11.7)(react@19.2.4)(zod@3.25.76)
+        version: 0.3.6(@ai-sdk/openai@3.0.22(zod@3.25.76))(@cloudflare/ai-chat@0.0.4)(@cloudflare/codemode@0.0.5)(@cloudflare/workers-types@4.20260129.0)(ai@6.0.61(zod@3.25.76))(hono@4.11.7)(react@19.2.4)(zod@3.25.76)
       ai:
         specifier: ^6.0.27
         version: 6.0.61(zod@3.25.76)
@@ -2281,14 +2279,14 @@ snapshots:
 
   '@cloudflare/ai-chat@0.0.4(agents@0.3.6)(ai@6.0.61(zod@3.25.76))(react@19.2.4)(zod@3.25.76)':
     dependencies:
-      agents: 0.3.6(patch_hash=pi4anlup3bo22hsjghdfdu27g4)(@ai-sdk/openai@3.0.22(zod@3.25.76))(@cloudflare/ai-chat@0.0.4)(@cloudflare/codemode@0.0.5)(@cloudflare/workers-types@4.20260129.0)(ai@6.0.61(zod@3.25.76))(hono@4.11.7)(react@19.2.4)(zod@3.25.76)
+      agents: 0.3.6(@ai-sdk/openai@3.0.22(zod@3.25.76))(@cloudflare/ai-chat@0.0.4)(@cloudflare/codemode@0.0.5)(@cloudflare/workers-types@4.20260129.0)(ai@6.0.61(zod@3.25.76))(hono@4.11.7)(react@19.2.4)(zod@3.25.76)
       ai: 6.0.61(zod@3.25.76)
       react: 19.2.4
       zod: 3.25.76
 
   '@cloudflare/codemode@0.0.5(agents@0.3.6)(ai@6.0.61(zod@3.25.76))(typescript@5.9.3)(zod@3.25.76)':
     dependencies:
-      agents: 0.3.6(patch_hash=pi4anlup3bo22hsjghdfdu27g4)(@ai-sdk/openai@3.0.22(zod@3.25.76))(@cloudflare/ai-chat@0.0.4)(@cloudflare/codemode@0.0.5)(@cloudflare/workers-types@4.20260129.0)(ai@6.0.61(zod@3.25.76))(hono@4.11.7)(react@19.2.4)(zod@3.25.76)
+      agents: 0.3.6(@ai-sdk/openai@3.0.22(zod@3.25.76))(@cloudflare/ai-chat@0.0.4)(@cloudflare/codemode@0.0.5)(@cloudflare/workers-types@4.20260129.0)(ai@6.0.61(zod@3.25.76))(hono@4.11.7)(react@19.2.4)(zod@3.25.76)
       ai: 6.0.61(zod@3.25.76)
       zod: 3.25.76
       zod-to-ts: 2.0.0(typescript@5.9.3)(zod@3.25.76)
@@ -2921,7 +2919,7 @@ snapshots:
   agent-base@7.1.4:
     optional: true
 
-  agents@0.3.6(patch_hash=pi4anlup3bo22hsjghdfdu27g4)(@ai-sdk/openai@3.0.22(zod@3.25.76))(@cloudflare/ai-chat@0.0.4)(@cloudflare/codemode@0.0.5)(@cloudflare/workers-types@4.20260129.0)(ai@6.0.61(zod@3.25.76))(hono@4.11.7)(react@19.2.4)(zod@3.25.76):
+  agents@0.3.6(@ai-sdk/openai@3.0.22(zod@3.25.76))(@cloudflare/ai-chat@0.0.4)(@cloudflare/codemode@0.0.5)(@cloudflare/workers-types@4.20260129.0)(ai@6.0.61(zod@3.25.76))(hono@4.11.7)(react@19.2.4)(zod@3.25.76):
     dependencies:
       '@cfworker/json-schema': 4.1.1
       '@cloudflare/ai-chat': 0.0.4(agents@0.3.6)(ai@6.0.61(zod@3.25.76))(react@19.2.4)(zod@3.25.76)

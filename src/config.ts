@@ -8,7 +8,7 @@
 
 /** Extract keys from T where the value extends V */
 export type KeysWithValue<T, V> = {
-  [K in keyof T]: T[K] extends V ? K : never;
+	[K in keyof T]: T[K] extends V ? K : never;
 }[keyof T];
 
 // ==========================================
@@ -21,11 +21,11 @@ type BaseTypedEmbedding = KeysWithValue<AiModels, BaseAiTextEmbeddings>;
 
 /** Models with specific classes (newer models) - match by naming convention */
 type SpecificTextGen = Extract<
-  keyof AiModels,
-  | `@cf/meta/llama-${string}`
-  | `@cf/qwen/${string}`
-  | `@cf/moonshotai/${string}`
-  | `@cf/deepseek-ai/${string}`
+	keyof AiModels,
+	| `@cf/meta/llama-${string}`
+	| `@cf/qwen/${string}`
+	| `@cf/moonshotai/${string}`
+	| `@cf/deepseek-ai/${string}`
 >;
 type SpecificEmbedding = Extract<keyof AiModels, `@cf/baai/bge-${string}`>;
 
@@ -58,25 +58,25 @@ export type OAuthProvider = Google | GitHub;
 
 /** OAuth provider credentials */
 export interface OAuthCredentials {
-  clientId: string | undefined;
-  clientSecret: string | undefined;
+	clientId: string | undefined;
+	clientSecret: string | undefined;
 }
 
 export interface MacrodataConfig<
-  Tiers extends string = CoreModelTier,
-  E extends EmbeddingModel = EmbeddingModel,
+	Tiers extends string = CoreModelTier,
+	E extends EmbeddingModel = EmbeddingModel,
 > {
-  /** Model IDs by tier */
-  models: Record<Tiers | CoreModelTier, ModelId>;
+	/** Model IDs by tier */
+	models: Record<Tiers | CoreModelTier, ModelId>;
 
-  /** Embedding model for vectorize */
-  embedding: E;
+	/** Embedding model for vectorize */
+	embedding: E;
 
-  /** OAuth provider credentials (env var names for clientId/clientSecret) */
-  oauth?: {
-    google?: OAuthCredentials;
-    github?: OAuthCredentials;
-  };
+	/** OAuth provider credentials (env var names for clientId/clientSecret) */
+	oauth?: {
+		google?: OAuthCredentials;
+		github?: OAuthCredentials;
+	};
 }
 
 // ==========================================
@@ -87,7 +87,7 @@ export interface MacrodataConfig<
  * Define your Macrodata configuration with full type safety
  */
 export function defineConfig<Tiers extends string, E extends EmbeddingModel>(
-  config: MacrodataConfig<Tiers, E>,
+	config: MacrodataConfig<Tiers, E>,
 ): MacrodataConfig<Tiers, E> {
-  return config;
+	return config;
 }

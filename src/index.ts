@@ -10,14 +10,12 @@
 
 import { Hono } from "hono";
 import { html, raw } from "hono/html";
-import {
-  OAuthProvider,
-  type OAuthHelpers,
-} from "@cloudflare/workers-oauth-provider";
+import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { Google, GitHub, generateState, generateCodeVerifier } from "arctic";
+import { getAgentByName } from "agents";
 import { MemoryAgent } from "./mcp-agent";
 
-// Re-export the Durable Object class for wrangler
+// Re-export classes for wrangler
 export { MemoryAgent };
 
 // ==========================================
@@ -25,29 +23,29 @@ export { MemoryAgent };
 // ==========================================
 
 interface PendingIdentityAuth {
-  provider: "google" | "github";
-  state: string;
-  codeVerifier: string | null;
-  mcpOAuthRequest: unknown;
-  createdAt: number;
+	provider: "google" | "github";
+	state: string;
+	codeVerifier: string | null;
+	mcpOAuthRequest: unknown;
+	createdAt: number;
 }
 
 interface PendingMcpAuth {
-  mcpName: string;
-  mcpEndpoint: string;
-  state: string;
-  codeVerifier: string;
-  userId: string;
-  createdAt: number;
+	mcpName: string;
+	mcpEndpoint: string;
+	state: string;
+	codeVerifier: string;
+	userId: string;
+	createdAt: number;
 }
 
 interface ConnectedMcp {
-  name: string;
-  endpoint: string;
-  accessToken: string;
-  refreshToken?: string;
-  tokenExpiresAt?: number;
-  connectedAt: string;
+	name: string;
+	endpoint: string;
+	accessToken: string;
+	refreshToken?: string;
+	tokenExpiresAt?: number;
+	connectedAt: string;
 }
 
 // Augment Cloudflare.Env with OAUTH_PROVIDER
@@ -55,14 +53,14 @@ import "./types";
 
 // Hono context with OAuth props
 type OAuthProps = {
-  userId: string;
-  email: string;
-  provider: string;
-  login?: string;
+	userId: string;
+	email: string;
+	provider: string;
+	login?: string;
 };
 
 type Variables = {
-  props?: OAuthProps;
+	props?: OAuthProps;
 };
 
 // ==========================================
@@ -70,57 +68,57 @@ type Variables = {
 // ==========================================
 
 function createIdentityProviders(env: Env) {
-  const providers: { google?: Google; github?: GitHub } = {};
-  const baseUrl = env.OAUTH_REDIRECT_BASE;
+	const providers: { google?: Google; github?: GitHub } = {};
+	const baseUrl = env.OAUTH_REDIRECT_BASE;
 
-  if (!baseUrl) {
-    console.warn("[OAUTH] OAUTH_REDIRECT_BASE not set");
-    return providers;
-  }
+	if (!baseUrl) {
+		console.warn("[OAUTH] OAUTH_REDIRECT_BASE not set");
+		return providers;
+	}
 
-  if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) {
-    providers.google = new Google(
-      env.GOOGLE_CLIENT_ID,
-      env.GOOGLE_CLIENT_SECRET,
-      `${baseUrl}/callback/google`,
-    );
-  }
+	if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) {
+		providers.google = new Google(
+			env.GOOGLE_CLIENT_ID,
+			env.GOOGLE_CLIENT_SECRET,
+			`${baseUrl}/callback/google`,
+		);
+	}
 
-  if (env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET) {
-    providers.github = new GitHub(
-      env.GITHUB_CLIENT_ID,
-      env.GITHUB_CLIENT_SECRET,
-      `${baseUrl}/callback/github`,
-    );
-  }
+	if (env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET) {
+		providers.github = new GitHub(
+			env.GITHUB_CLIENT_ID,
+			env.GITHUB_CLIENT_SECRET,
+			`${baseUrl}/callback/github`,
+		);
+	}
 
-  return providers;
+	return providers;
 }
 
 function isAllowedUser(email: string, env: Env): boolean {
-  const allowedUsers = env.ALLOWED_USERS;
-  if (!allowedUsers) return false;
-  const allowed = allowedUsers.split(",").map((e) => e.trim().toLowerCase());
-  return allowed.includes(email.toLowerCase());
+	const allowedUsers = env.ALLOWED_USERS;
+	if (!allowedUsers) return false;
+	const allowed = allowedUsers.split(",").map((e) => e.trim().toLowerCase());
+	return allowed.includes(email.toLowerCase());
 }
 
 async function generateCodeChallenge(verifier: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(verifier);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return btoa(String.fromCharCode(...new Uint8Array(digest)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=/g, "");
+	const encoder = new TextEncoder();
+	const data = encoder.encode(verifier);
+	const digest = await crypto.subtle.digest("SHA-256", data);
+	return btoa(String.fromCharCode(...new Uint8Array(digest)))
+		.replace(/\+/g, "-")
+		.replace(/\//g, "_")
+		.replace(/=/g, "");
 }
 
 function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+	return str
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#039;");
 }
 
 // ==========================================
@@ -243,274 +241,258 @@ const defaultApp = new Hono<{ Bindings: Env }>();
 
 // Health check
 defaultApp.get("/health", (c) => {
-  return c.json({
-    name: "macrodata",
-    status: "ok",
-    version: "0.3.0",
-    oauth: "cloudflare-provider",
-  });
+	return c.json({
+		name: "macrodata",
+		status: "ok",
+		version: "0.3.0",
+		oauth: "cloudflare-provider",
+	});
 });
 
 // MCP OAuth authorization endpoint
 defaultApp.get("/authorize", async (c) => {
-  try {
-    const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw);
-    const clientInfo = await c.env.OAUTH_PROVIDER.lookupClient(
-      oauthReqInfo.clientId,
-    );
+	try {
+		const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw);
+		const clientInfo = await c.env.OAUTH_PROVIDER.lookupClient(oauthReqInfo.clientId);
 
-    if (!clientInfo) {
-      return c.text("Unknown client", 400);
-    }
+		if (!clientInfo) {
+			return c.text("Unknown client", 400);
+		}
 
-    const providers = createIdentityProviders(c.env);
+		const providers = createIdentityProviders(c.env);
 
-    if (providers.google) {
-      const state = generateState();
-      const codeVerifier = generateCodeVerifier();
-      const scopes = ["openid", "email", "profile"];
+		if (providers.google) {
+			const state = generateState();
+			const codeVerifier = generateCodeVerifier();
+			const scopes = ["openid", "email", "profile"];
 
-      const authUrl = providers.google.createAuthorizationURL(
-        state,
-        codeVerifier,
-        scopes,
-      );
-      authUrl.searchParams.set("access_type", "offline");
-      authUrl.searchParams.set("prompt", "consent");
+			const authUrl = providers.google.createAuthorizationURL(state, codeVerifier, scopes);
+			authUrl.searchParams.set("access_type", "offline");
+			authUrl.searchParams.set("prompt", "consent");
 
-      const pending: PendingIdentityAuth = {
-        provider: "google",
-        state,
-        codeVerifier,
-        mcpOAuthRequest: oauthReqInfo,
-        createdAt: Date.now(),
-      };
-      await c.env.OAUTH_KV.put(`pending:${state}`, JSON.stringify(pending), {
-        expirationTtl: 600,
-      });
+			const pending: PendingIdentityAuth = {
+				provider: "google",
+				state,
+				codeVerifier,
+				mcpOAuthRequest: oauthReqInfo,
+				createdAt: Date.now(),
+			};
+			await c.env.OAUTH_KV.put(`pending:${state}`, JSON.stringify(pending), {
+				expirationTtl: 600,
+			});
 
-      return c.redirect(authUrl.toString());
-    } else if (providers.github) {
-      const state = generateState();
-      const scopes = ["user:email"];
+			return c.redirect(authUrl.toString());
+		} else if (providers.github) {
+			const state = generateState();
+			const scopes = ["user:email"];
 
-      const authUrl = providers.github.createAuthorizationURL(state, scopes);
+			const authUrl = providers.github.createAuthorizationURL(state, scopes);
 
-      const pending: PendingIdentityAuth = {
-        provider: "github",
-        state,
-        codeVerifier: null,
-        mcpOAuthRequest: oauthReqInfo,
-        createdAt: Date.now(),
-      };
-      await c.env.OAUTH_KV.put(`pending:${state}`, JSON.stringify(pending), {
-        expirationTtl: 600,
-      });
+			const pending: PendingIdentityAuth = {
+				provider: "github",
+				state,
+				codeVerifier: null,
+				mcpOAuthRequest: oauthReqInfo,
+				createdAt: Date.now(),
+			};
+			await c.env.OAUTH_KV.put(`pending:${state}`, JSON.stringify(pending), {
+				expirationTtl: 600,
+			});
 
-      return c.redirect(authUrl.toString());
-    }
+			return c.redirect(authUrl.toString());
+		}
 
-    return c.text(
-      "No identity provider configured. Set GOOGLE_CLIENT_ID/SECRET or GITHUB_CLIENT_ID/SECRET.",
-      500,
-    );
-  } catch (error) {
-    console.error("[AUTHORIZE] Error:", error);
-    return c.text(
-      `Authorization error: ${error instanceof Error ? error.message : String(error)}`,
-      400,
-    );
-  }
+		return c.text(
+			"No identity provider configured. Set GOOGLE_CLIENT_ID/SECRET or GITHUB_CLIENT_ID/SECRET.",
+			500,
+		);
+	} catch (error) {
+		console.error("[AUTHORIZE] Error:", error);
+		return c.text(
+			`Authorization error: ${error instanceof Error ? error.message : String(error)}`,
+			400,
+		);
+	}
 });
 
 // Google OAuth callback
 defaultApp.get("/callback/google", async (c) => {
-  const code = c.req.query("code");
-  const state = c.req.query("state");
-  const error = c.req.query("error");
+	const code = c.req.query("code");
+	const state = c.req.query("state");
+	const error = c.req.query("error");
 
-  if (error) return c.text(`OAuth error: ${error}`, 400);
-  if (!code || !state) return c.text("Missing code or state", 400);
+	if (error) return c.text(`OAuth error: ${error}`, 400);
+	if (!code || !state) return c.text("Missing code or state", 400);
 
-  const pendingJson = await c.env.OAUTH_KV.get(`pending:${state}`);
-  if (!pendingJson) return c.text("Invalid or expired OAuth state", 400);
+	const pendingJson = await c.env.OAUTH_KV.get(`pending:${state}`);
+	if (!pendingJson) return c.text("Invalid or expired OAuth state", 400);
 
-  const pending = JSON.parse(pendingJson) as PendingIdentityAuth;
-  if (pending.provider !== "google" || !pending.codeVerifier) {
-    return c.text("Invalid OAuth state", 400);
-  }
+	const pending = JSON.parse(pendingJson) as PendingIdentityAuth;
+	if (pending.provider !== "google" || !pending.codeVerifier) {
+		return c.text("Invalid OAuth state", 400);
+	}
 
-  const providers = createIdentityProviders(c.env);
-  if (!providers.google) {
-    return c.text("Google OAuth not configured", 500);
-  }
+	const providers = createIdentityProviders(c.env);
+	if (!providers.google) {
+		return c.text("Google OAuth not configured", 500);
+	}
 
-  try {
-    const tokens = await providers.google.validateAuthorizationCode(
-      code,
-      pending.codeVerifier,
-    );
+	try {
+		const tokens = await providers.google.validateAuthorizationCode(code, pending.codeVerifier);
 
-    const userResponse = await fetch(
-      "https://www.googleapis.com/oauth2/v2/userinfo",
-      { headers: { Authorization: `Bearer ${tokens.accessToken()}` } },
-    );
+		const userResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+			headers: { Authorization: `Bearer ${tokens.accessToken()}` },
+		});
 
-    if (!userResponse.ok) {
-      throw new Error(`Failed to get user info: ${userResponse.status}`);
-    }
+		if (!userResponse.ok) {
+			throw new Error(`Failed to get user info: ${userResponse.status}`);
+		}
 
-    const userInfo = (await userResponse.json()) as {
-      email: string;
-      name?: string;
-    };
+		const userInfo = (await userResponse.json()) as {
+			email: string;
+			name?: string;
+		};
 
-    if (!isAllowedUser(userInfo.email, c.env)) {
-      console.warn(`[CALLBACK/GOOGLE] Rejected user: ${userInfo.email}`);
-      return c.text(
-        "Access denied. Your account is not authorized to use this service.",
-        403,
-      );
-    }
+		if (!isAllowedUser(userInfo.email, c.env)) {
+			console.warn(`[CALLBACK/GOOGLE] Rejected user: ${userInfo.email}`);
+			return c.text("Access denied. Your account is not authorized to use this service.", 403);
+		}
 
-    const mcpRequest = pending.mcpOAuthRequest as Awaited<
-      ReturnType<OAuthHelpers["parseAuthRequest"]>
-    >;
-    const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
-      request: mcpRequest,
-      userId: userInfo.email,
-      metadata: {
-        provider: "google",
-        email: userInfo.email,
-        name: userInfo.name,
-        authenticatedAt: new Date().toISOString(),
-      },
-      scope: mcpRequest.scope ?? [],
-      props: {
-        userId: userInfo.email,
-        provider: "google",
-        email: userInfo.email,
-      },
-    });
+		const mcpRequest = pending.mcpOAuthRequest as Awaited<
+			ReturnType<OAuthHelpers["parseAuthRequest"]>
+		>;
+		const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
+			request: mcpRequest,
+			userId: userInfo.email,
+			metadata: {
+				provider: "google",
+				email: userInfo.email,
+				name: userInfo.name,
+				authenticatedAt: new Date().toISOString(),
+			},
+			scope: mcpRequest.scope ?? [],
+			props: {
+				userId: userInfo.email,
+				provider: "google",
+				email: userInfo.email,
+			},
+		});
 
-    await c.env.OAUTH_KV.delete(`pending:${state}`);
-    return c.redirect(redirectTo);
-  } catch (error) {
-    console.error("[CALLBACK/GOOGLE] Error:", error);
-    return c.text(
-      `OAuth callback error: ${error instanceof Error ? error.message : String(error)}`,
-      400,
-    );
-  }
+		await c.env.OAUTH_KV.delete(`pending:${state}`);
+		return c.redirect(redirectTo);
+	} catch (error) {
+		console.error("[CALLBACK/GOOGLE] Error:", error);
+		return c.text(
+			`OAuth callback error: ${error instanceof Error ? error.message : String(error)}`,
+			400,
+		);
+	}
 });
 
 // GitHub OAuth callback
 defaultApp.get("/callback/github", async (c) => {
-  const code = c.req.query("code");
-  const state = c.req.query("state");
-  const error = c.req.query("error");
+	const code = c.req.query("code");
+	const state = c.req.query("state");
+	const error = c.req.query("error");
 
-  if (error) return c.text(`OAuth error: ${error}`, 400);
-  if (!code || !state) return c.text("Missing code or state", 400);
+	if (error) return c.text(`OAuth error: ${error}`, 400);
+	if (!code || !state) return c.text("Missing code or state", 400);
 
-  const pendingJson = await c.env.OAUTH_KV.get(`pending:${state}`);
-  if (!pendingJson) return c.text("Invalid or expired OAuth state", 400);
+	const pendingJson = await c.env.OAUTH_KV.get(`pending:${state}`);
+	if (!pendingJson) return c.text("Invalid or expired OAuth state", 400);
 
-  const pending = JSON.parse(pendingJson) as PendingIdentityAuth;
-  if (pending.provider !== "github") return c.text("Invalid OAuth state", 400);
+	const pending = JSON.parse(pendingJson) as PendingIdentityAuth;
+	if (pending.provider !== "github") return c.text("Invalid OAuth state", 400);
 
-  const providers = createIdentityProviders(c.env);
-  if (!providers.github) return c.text("GitHub OAuth not configured", 500);
+	const providers = createIdentityProviders(c.env);
+	if (!providers.github) return c.text("GitHub OAuth not configured", 500);
 
-  try {
-    const tokens = await providers.github.validateAuthorizationCode(code);
+	try {
+		const tokens = await providers.github.validateAuthorizationCode(code);
 
-    const userResponse = await fetch("https://api.github.com/user", {
-      headers: {
-        Authorization: `Bearer ${tokens.accessToken()}`,
-        Accept: "application/vnd.github.v3+json",
-        "User-Agent": "macrodata-mcp",
-      },
-    });
+		const userResponse = await fetch("https://api.github.com/user", {
+			headers: {
+				Authorization: `Bearer ${tokens.accessToken()}`,
+				Accept: "application/vnd.github.v3+json",
+				"User-Agent": "macrodata-mcp",
+			},
+		});
 
-    if (!userResponse.ok) {
-      throw new Error(`Failed to get user info: ${userResponse.status}`);
-    }
+		if (!userResponse.ok) {
+			throw new Error(`Failed to get user info: ${userResponse.status}`);
+		}
 
-    const user = (await userResponse.json()) as {
-      email: string | null;
-      login: string;
-      name?: string;
-    };
+		const user = (await userResponse.json()) as {
+			email: string | null;
+			login: string;
+			name?: string;
+		};
 
-    let email = user.email;
-    if (!email) {
-      const emailsResponse = await fetch("https://api.github.com/user/emails", {
-        headers: {
-          Authorization: `Bearer ${tokens.accessToken()}`,
-          Accept: "application/vnd.github.v3+json",
-          "User-Agent": "macrodata-mcp",
-        },
-      });
+		let email = user.email;
+		if (!email) {
+			const emailsResponse = await fetch("https://api.github.com/user/emails", {
+				headers: {
+					Authorization: `Bearer ${tokens.accessToken()}`,
+					Accept: "application/vnd.github.v3+json",
+					"User-Agent": "macrodata-mcp",
+				},
+			});
 
-      if (emailsResponse.ok) {
-        const emails = (await emailsResponse.json()) as Array<{
-          email: string;
-          primary: boolean;
-        }>;
-        const primary = emails.find((e) => e.primary);
-        email = primary?.email ?? emails[0]?.email ?? user.login;
-      } else {
-        email = user.login;
-      }
-    }
+			if (emailsResponse.ok) {
+				const emails = (await emailsResponse.json()) as Array<{
+					email: string;
+					primary: boolean;
+				}>;
+				const primary = emails.find((e) => e.primary);
+				email = primary?.email ?? emails[0]?.email ?? user.login;
+			} else {
+				email = user.login;
+			}
+		}
 
-    if (!isAllowedUser(email, c.env)) {
-      console.warn(`[CALLBACK/GITHUB] Rejected user: ${email}`);
-      return c.text(
-        "Access denied. Your account is not authorized to use this service.",
-        403,
-      );
-    }
+		if (!isAllowedUser(email, c.env)) {
+			console.warn(`[CALLBACK/GITHUB] Rejected user: ${email}`);
+			return c.text("Access denied. Your account is not authorized to use this service.", 403);
+		}
 
-    const mcpRequest = pending.mcpOAuthRequest as Awaited<
-      ReturnType<OAuthHelpers["parseAuthRequest"]>
-    >;
-    const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
-      request: mcpRequest,
-      userId: email,
-      metadata: {
-        provider: "github",
-        email,
-        login: user.login,
-        name: user.name,
-        authenticatedAt: new Date().toISOString(),
-      },
-      scope: mcpRequest.scope ?? [],
-      props: {
-        userId: email,
-        provider: "github",
-        email,
-        login: user.login,
-      },
-    });
+		const mcpRequest = pending.mcpOAuthRequest as Awaited<
+			ReturnType<OAuthHelpers["parseAuthRequest"]>
+		>;
+		const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
+			request: mcpRequest,
+			userId: email,
+			metadata: {
+				provider: "github",
+				email,
+				login: user.login,
+				name: user.name,
+				authenticatedAt: new Date().toISOString(),
+			},
+			scope: mcpRequest.scope ?? [],
+			props: {
+				userId: email,
+				provider: "github",
+				email,
+				login: user.login,
+			},
+		});
 
-    await c.env.OAUTH_KV.delete(`pending:${state}`);
-    return c.redirect(redirectTo);
-  } catch (error) {
-    console.error("[CALLBACK/GITHUB] Error:", error);
-    return c.text(
-      `OAuth callback error: ${error instanceof Error ? error.message : String(error)}`,
-      400,
-    );
-  }
+		await c.env.OAUTH_KV.delete(`pending:${state}`);
+		return c.redirect(redirectTo);
+	} catch (error) {
+		console.error("[CALLBACK/GITHUB] Error:", error);
+		return c.text(
+			`OAuth callback error: ${error instanceof Error ? error.message : String(error)}`,
+			400,
+		);
+	}
 });
 
 // Default handler converts Hono app to worker handler
 const defaultHandler = {
-  async fetch(request: Request, env: unknown, ctx: unknown) {
-    return defaultApp.fetch(request, env as Env, ctx as ExecutionContext);
-  },
+	async fetch(request: Request, env: unknown, ctx: unknown) {
+		return defaultApp.fetch(request, env as Env, ctx as ExecutionContext);
+	},
 };
 
 // ==========================================
@@ -521,26 +503,26 @@ const apiApp = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // Settings: List connected MCPs
 apiApp.get("/settings/mcps", async (c) => {
-  const props = c.get("props");
-  if (!props) return c.text("Unauthorized", 401);
+	const props = c.get("props");
+	if (!props) return c.text("Unauthorized", 401);
 
-  const userId = props.email;
-  const mcpsJson = await c.env.OAUTH_KV.get(`user:${userId}:mcps`);
-  const mcps: ConnectedMcp[] = mcpsJson ? JSON.parse(mcpsJson) : [];
+	const userId = props.email;
+	const mcpsJson = await c.env.OAUTH_KV.get(`user:${userId}:mcps`);
+	const mcps: ConnectedMcp[] = mcpsJson ? JSON.parse(mcpsJson) : [];
 
-  const status = c.req.query("status");
-  const statusHtml =
-    status === "connected"
-      ? '<div class="status status-success">MCP connected successfully!</div>'
-      : status === "error"
-        ? `<div class="status status-error">Error: ${c.req.query("message") || "Connection failed"}</div>`
-        : "";
+	const status = c.req.query("status");
+	const statusHtml =
+		status === "connected"
+			? '<div class="status status-success">MCP connected successfully!</div>'
+			: status === "error"
+				? `<div class="status status-error">Error: ${c.req.query("message") || "Connection failed"}</div>`
+				: "";
 
-  const mcpListHtml =
-    mcps.length > 0
-      ? mcps
-          .map(
-            (mcp) => `
+	const mcpListHtml =
+		mcps.length > 0
+			? mcps
+					.map(
+						(mcp) => `
           <div class="mcp-item">
             <div>
               <div class="mcp-name">${escapeHtml(mcp.name)}</div>
@@ -552,14 +534,14 @@ apiApp.get("/settings/mcps", async (c) => {
             </form>
           </div>
         `,
-          )
-          .join("")
-      : '<p class="empty">No MCPs connected yet.</p>';
+					)
+					.join("")
+			: '<p class="empty">No MCPs connected yet.</p>';
 
-  return c.html(
-    settingsLayout(
-      "Connected MCPs",
-      `
+	return c.html(
+		settingsLayout(
+			"Connected MCPs",
+			`
     ${statusHtml}
     <div class="card">
       <h2>Your MCPs</h2>
@@ -580,248 +562,242 @@ apiApp.get("/settings/mcps", async (c) => {
       </form>
     </div>
   `,
-    ),
-  );
+		),
+	);
 });
 
 // Settings: Add MCP (initiate OAuth discovery and redirect)
 apiApp.post("/settings/mcps/add", async (c) => {
-  const props = c.get("props");
-  if (!props) return c.text("Unauthorized", 401);
+	const props = c.get("props");
+	if (!props) return c.text("Unauthorized", 401);
 
-  const userId = props.email;
-  const formData = await c.req.formData();
-  const name = formData.get("name") as string;
-  const endpoint = formData.get("endpoint") as string;
+	const userId = props.email;
+	const formData = await c.req.formData();
+	const name = formData.get("name") as string;
+	const endpoint = formData.get("endpoint") as string;
 
-  if (!name || !endpoint) {
-    return c.redirect(
-      `${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=Missing+name+or+endpoint`,
-    );
-  }
+	if (!name || !endpoint) {
+		return c.redirect(
+			`${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=Missing+name+or+endpoint`,
+		);
+	}
 
-  try {
-    const metadataUrl = new URL(
-      "/.well-known/oauth-authorization-server",
-      endpoint,
-    );
-    const metadataRes = await fetch(metadataUrl.toString());
+	try {
+		const metadataUrl = new URL("/.well-known/oauth-authorization-server", endpoint);
+		const metadataRes = await fetch(metadataUrl.toString());
 
-    if (!metadataRes.ok) {
-      throw new Error(
-        `MCP doesn't support OAuth discovery (${metadataRes.status})`,
-      );
-    }
+		if (!metadataRes.ok) {
+			throw new Error(`MCP doesn't support OAuth discovery (${metadataRes.status})`);
+		}
 
-    const metadata = (await metadataRes.json()) as {
-      authorization_endpoint: string;
-      token_endpoint: string;
-      scopes_supported?: string[];
-    };
+		const metadata = (await metadataRes.json()) as {
+			authorization_endpoint: string;
+			token_endpoint: string;
+			scopes_supported?: string[];
+		};
 
-    const state = generateState();
-    const codeVerifier = generateCodeVerifier();
+		const state = generateState();
+		const codeVerifier = generateCodeVerifier();
 
-    const pending: PendingMcpAuth = {
-      mcpName: name,
-      mcpEndpoint: endpoint,
-      state,
-      codeVerifier,
-      userId,
-      createdAt: Date.now(),
-    };
-    await c.env.OAUTH_KV.put(
-      `pending-mcp:${state}`,
-      JSON.stringify({ ...pending, tokenEndpoint: metadata.token_endpoint }),
-      { expirationTtl: 600 },
-    );
+		const pending: PendingMcpAuth = {
+			mcpName: name,
+			mcpEndpoint: endpoint,
+			state,
+			codeVerifier,
+			userId,
+			createdAt: Date.now(),
+		};
+		await c.env.OAUTH_KV.put(
+			`pending-mcp:${state}`,
+			JSON.stringify({ ...pending, tokenEndpoint: metadata.token_endpoint }),
+			{ expirationTtl: 600 },
+		);
 
-    const authUrl = new URL(metadata.authorization_endpoint);
-    authUrl.searchParams.set("response_type", "code");
-    authUrl.searchParams.set("client_id", `macrodata:${userId}`);
-    authUrl.searchParams.set(
-      "redirect_uri",
-      `${c.env.OAUTH_REDIRECT_BASE}/settings/mcps/callback`,
-    );
-    authUrl.searchParams.set("state", state);
-    authUrl.searchParams.set(
-      "code_challenge",
-      await generateCodeChallenge(codeVerifier),
-    );
-    authUrl.searchParams.set("code_challenge_method", "S256");
-    if (metadata.scopes_supported?.length) {
-      authUrl.searchParams.set("scope", metadata.scopes_supported.join(" "));
-    }
+		const authUrl = new URL(metadata.authorization_endpoint);
+		authUrl.searchParams.set("response_type", "code");
+		authUrl.searchParams.set("client_id", `macrodata:${userId}`);
+		authUrl.searchParams.set("redirect_uri", `${c.env.OAUTH_REDIRECT_BASE}/settings/mcps/callback`);
+		authUrl.searchParams.set("state", state);
+		authUrl.searchParams.set("code_challenge", await generateCodeChallenge(codeVerifier));
+		authUrl.searchParams.set("code_challenge_method", "S256");
+		if (metadata.scopes_supported?.length) {
+			authUrl.searchParams.set("scope", metadata.scopes_supported.join(" "));
+		}
 
-    return c.redirect(authUrl.toString());
-  } catch (error) {
-    const message = encodeURIComponent(
-      error instanceof Error ? error.message : "Unknown error",
-    );
-    return c.redirect(
-      `${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=${message}`,
-    );
-  }
+		return c.redirect(authUrl.toString());
+	} catch (error) {
+		const message = encodeURIComponent(error instanceof Error ? error.message : "Unknown error");
+		return c.redirect(`${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=${message}`);
+	}
 });
 
 // Settings: OAuth callback from external MCP
 apiApp.get("/settings/mcps/callback", async (c) => {
-  const props = c.get("props");
-  if (!props) return c.text("Unauthorized", 401);
+	const props = c.get("props");
+	if (!props) return c.text("Unauthorized", 401);
 
-  const code = c.req.query("code");
-  const state = c.req.query("state");
-  const error = c.req.query("error");
+	const code = c.req.query("code");
+	const state = c.req.query("state");
+	const error = c.req.query("error");
 
-  if (error) {
-    return c.redirect(
-      `${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=${encodeURIComponent(error)}`,
-    );
-  }
+	if (error) {
+		return c.redirect(
+			`${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=${encodeURIComponent(error)}`,
+		);
+	}
 
-  if (!code || !state) {
-    return c.redirect(
-      `${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=Missing+code+or+state`,
-    );
-  }
+	if (!code || !state) {
+		return c.redirect(
+			`${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=Missing+code+or+state`,
+		);
+	}
 
-  const pendingJson = await c.env.OAUTH_KV.get(`pending-mcp:${state}`);
-  if (!pendingJson) {
-    return c.redirect(
-      `${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=Invalid+or+expired+state`,
-    );
-  }
+	const pendingJson = await c.env.OAUTH_KV.get(`pending-mcp:${state}`);
+	if (!pendingJson) {
+		return c.redirect(
+			`${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=Invalid+or+expired+state`,
+		);
+	}
 
-  const pending = JSON.parse(pendingJson) as PendingMcpAuth & {
-    tokenEndpoint: string;
-  };
+	const pending = JSON.parse(pendingJson) as PendingMcpAuth & {
+		tokenEndpoint: string;
+	};
 
-  try {
-    const tokenRes = await fetch(pending.tokenEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: `${c.env.OAUTH_REDIRECT_BASE}/settings/mcps/callback`,
-        client_id: `macrodata:${pending.userId}`,
-        code_verifier: pending.codeVerifier,
-      }),
-    });
+	try {
+		const tokenRes = await fetch(pending.tokenEndpoint, {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: new URLSearchParams({
+				grant_type: "authorization_code",
+				code,
+				redirect_uri: `${c.env.OAUTH_REDIRECT_BASE}/settings/mcps/callback`,
+				client_id: `macrodata:${pending.userId}`,
+				code_verifier: pending.codeVerifier,
+			}),
+		});
 
-    if (!tokenRes.ok) {
-      const errorText = await tokenRes.text();
-      throw new Error(`Token exchange failed: ${errorText}`);
-    }
+		if (!tokenRes.ok) {
+			const errorText = await tokenRes.text();
+			throw new Error(`Token exchange failed: ${errorText}`);
+		}
 
-    const tokens = (await tokenRes.json()) as {
-      access_token: string;
-      refresh_token?: string;
-      expires_in?: number;
-    };
+		const tokens = (await tokenRes.json()) as {
+			access_token: string;
+			refresh_token?: string;
+			expires_in?: number;
+		};
 
-    const mcpsJson = await c.env.OAUTH_KV.get(`user:${pending.userId}:mcps`);
-    const mcps: ConnectedMcp[] = mcpsJson ? JSON.parse(mcpsJson) : [];
+		const mcpsJson = await c.env.OAUTH_KV.get(`user:${pending.userId}:mcps`);
+		const mcps: ConnectedMcp[] = mcpsJson ? JSON.parse(mcpsJson) : [];
 
-    const filtered = mcps.filter((m) => m.name !== pending.mcpName);
-    filtered.push({
-      name: pending.mcpName,
-      endpoint: pending.mcpEndpoint,
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      tokenExpiresAt: tokens.expires_in
-        ? Date.now() + tokens.expires_in * 1000
-        : undefined,
-      connectedAt: new Date().toISOString(),
-    });
+		const filtered = mcps.filter((m) => m.name !== pending.mcpName);
+		filtered.push({
+			name: pending.mcpName,
+			endpoint: pending.mcpEndpoint,
+			accessToken: tokens.access_token,
+			refreshToken: tokens.refresh_token,
+			tokenExpiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : undefined,
+			connectedAt: new Date().toISOString(),
+		});
 
-    await c.env.OAUTH_KV.put(
-      `user:${pending.userId}:mcps`,
-      JSON.stringify(filtered),
-    );
-    await c.env.OAUTH_KV.delete(`pending-mcp:${state}`);
+		await c.env.OAUTH_KV.put(`user:${pending.userId}:mcps`, JSON.stringify(filtered));
+		await c.env.OAUTH_KV.delete(`pending-mcp:${state}`);
 
-    return c.redirect(
-      `${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=connected`,
-    );
-  } catch (error) {
-    const message = encodeURIComponent(
-      error instanceof Error ? error.message : "Unknown error",
-    );
-    return c.redirect(
-      `${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=${message}`,
-    );
-  }
+		return c.redirect(`${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=connected`);
+	} catch (error) {
+		const message = encodeURIComponent(error instanceof Error ? error.message : "Unknown error");
+		return c.redirect(`${c.env.OAUTH_REDIRECT_BASE}/settings/mcps?status=error&message=${message}`);
+	}
 });
 
 // Settings: Delete MCP
 apiApp.post("/settings/mcps/delete", async (c) => {
-  const props = c.get("props");
-  if (!props) return c.text("Unauthorized", 401);
+	const props = c.get("props");
+	if (!props) return c.text("Unauthorized", 401);
 
-  const userId = props.email;
-  const formData = await c.req.formData();
-  const name = formData.get("name") as string;
+	const userId = props.email;
+	const formData = await c.req.formData();
+	const name = formData.get("name") as string;
 
-  if (name) {
-    const mcpsJson = await c.env.OAUTH_KV.get(`user:${userId}:mcps`);
-    const mcps: ConnectedMcp[] = mcpsJson ? JSON.parse(mcpsJson) : [];
-    const filtered = mcps.filter((m) => m.name !== name);
-    await c.env.OAUTH_KV.put(`user:${userId}:mcps`, JSON.stringify(filtered));
-  }
+	if (name) {
+		const mcpsJson = await c.env.OAUTH_KV.get(`user:${userId}:mcps`);
+		const mcps: ConnectedMcp[] = mcpsJson ? JSON.parse(mcpsJson) : [];
+		const filtered = mcps.filter((m) => m.name !== name);
+		await c.env.OAUTH_KV.put(`user:${userId}:mcps`, JSON.stringify(filtered));
+	}
 
-  return c.redirect(`${c.env.OAUTH_REDIRECT_BASE}/settings/mcps`);
+	return c.redirect(`${c.env.OAUTH_REDIRECT_BASE}/settings/mcps`);
 });
 
 // MCP requests - route to Durable Object
 apiApp.all("/mcp/*", async (c) => {
-  const props = c.get("props");
-  if (!props) return c.text("Unauthorized", 401);
+	const props = c.get("props");
+	if (!props) return c.text("Unauthorized", 401);
 
-  console.log(
-    `[MCP] Authenticated request from: ${props.email} (${props.provider})`,
-  );
+	console.log(`[MCP] Authenticated request from: ${props.email} (${props.provider})`);
 
-  // Route to Durable Object via the agents serve helper
-  return MemoryAgent.serve("/mcp", { sessionId: props.email }).fetch(
-    c.req.raw,
-    c.env,
-    c.executionCtx,
-  );
+	// Route to Durable Object via getAgentByName
+	const agent = await getAgentByName<Env, MemoryAgent>(c.env.MCP_OBJECT, props.email);
+	return agent.onMcpRequest(c.req.raw);
 });
 
 // API handler converts Hono app to worker handler
 const mcpApiHandler = {
-  async fetch(request: Request, env: unknown, ctx: unknown): Promise<Response> {
-    const typedEnv = env as Env;
-    const typedCtx = ctx as ExecutionContext & { props?: OAuthProps };
+	async fetch(request: Request, env: unknown, ctx: unknown): Promise<Response> {
+		const typedEnv = env as Env;
+		const typedCtx = ctx as ExecutionContext & { props?: OAuthProps };
 
-    // Create a new app instance with props injected
-    const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+		// Create a new app instance with props injected
+		const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-    // Middleware to inject OAuth props
-    app.use("*", async (c, next) => {
-      c.set("props", typedCtx.props);
-      await next();
-    });
+		// Middleware to inject OAuth props
+		app.use("*", async (c, next) => {
+			c.set("props", typedCtx.props);
+			await next();
+		});
 
-    // Mount the API routes
-    app.route("/", apiApp);
+		// Mount the API routes
+		app.route("/", apiApp);
 
-    return app.fetch(request, typedEnv, typedCtx);
-  },
+		return app.fetch(request, typedEnv, typedCtx);
+	},
 };
 
 // ==========================================
-// Export OAuth-wrapped worker
+// Export worker
 // ==========================================
 
-export default new OAuthProvider({
-  apiRoute: ["/mcp", "/settings"],
-  apiHandler: mcpApiHandler,
-  defaultHandler,
-  authorizeEndpoint: "/authorize",
-  tokenEndpoint: "/oauth/token",
-  clientRegistrationEndpoint: "/oauth/register",
-  refreshTokenTTL: 30 * 24 * 60 * 60,
+const oauthProvider = new OAuthProvider({
+	apiRoute: ["/mcp", "/settings"],
+	apiHandler: mcpApiHandler,
+	defaultHandler,
+	authorizeEndpoint: "/authorize",
+	tokenEndpoint: "/oauth/token",
+	clientRegistrationEndpoint: "/oauth/register",
+	refreshTokenTTL: 30 * 24 * 60 * 60,
 });
+
+// Dev mode app - bypasses OAuth, uses DEV_USER as identity
+const devApp = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+devApp.use("*", async (c, next) => {
+	c.set("props", {
+		userId: c.env.DEV_USER,
+		email: c.env.DEV_USER,
+		provider: "dev",
+	});
+	await next();
+});
+
+devApp.route("/", defaultApp);
+devApp.route("/", apiApp);
+
+export default {
+	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+		// Dev mode: bypass OAuth when DEV_USER is set
+		if (env.DEV_USER) {
+			return devApp.fetch(request, env, ctx);
+		}
+		return oauthProvider.fetch(request, env, ctx);
+	},
+};
