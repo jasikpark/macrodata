@@ -3,10 +3,12 @@
  *
  * Provides tools for local file-based memory:
  * - get_context: Session bootstrap
- * - log_journal: Append timestamped entries
+ * - log_journal: Append timestamped entries (with auto-indexing)
  * - get_recent_journal: Get recent entries
  * - log_signal: Raw event logging for later analysis
- * - search_memory: Semantic search
+ * - search_memory: Semantic search using Transformers.js
+ * - rebuild_memory_index: Rebuild the search index
+ * - get_memory_index_stats: Index statistics
  * - schedule_reminder: Cron-based reminders
  * - schedule_once: One-shot reminders
  * - list_reminders: List active schedules
@@ -19,6 +21,13 @@ import { z } from "zod";
 import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync } from "fs";
 import { homedir } from "os";
 import { join, basename } from "path";
+import {
+  searchMemory as doSearchMemory,
+  indexJournalEntry,
+  rebuildIndex,
+  getIndexStats,
+  type MemoryItemType,
+} from "./indexer.js";
 
 // Configuration
 const STATE_ROOT = process.env.MACRODATA_ROOT || join(homedir(), ".config", "macrodata");
@@ -231,7 +240,12 @@ server.tool(
     const journalPath = getTodayJournalPath();
     appendFileSync(journalPath, JSON.stringify(entry) + "\n");
 
-    // TODO: Index the entry for semantic search
+    // Index the entry for semantic search
+    try {
+      await indexJournalEntry(entry);
+    } catch (err) {
+      console.error("[log_journal] Failed to index entry:", err);
+    }
 
     return {
       content: [
@@ -314,7 +328,7 @@ server.tool(
 // Tool: search_memory
 server.tool(
   "search_memory",
-  "Semantic search across journal entries and entity files",
+  "Semantic search across journal entries and entity files. Returns ranked results.",
   {
     query: z.string().describe("Natural language search query"),
     type: z.enum(["journal", "person", "project", "all"]).default("all").describe("Filter by content type"),
@@ -322,30 +336,107 @@ server.tool(
     limit: z.number().default(5).describe("Maximum results to return"),
   },
   async ({ query, type, since, limit }) => {
-    // TODO: Implement semantic search with Transformers.js
-    // For now, return a placeholder
+    try {
+      const results = await doSearchMemory(query, {
+        limit,
+        type: type === "all" ? undefined : (type as MemoryItemType),
+        since,
+      });
 
+      if (results.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "(no matches found)",
+            },
+          ],
+        };
+      }
+
+      const formatted = results
+        .map((r, i) => {
+          const header = `[${i + 1}] ${r.type}${r.section ? ` / ${r.section}` : ""} (score: ${r.score.toFixed(3)})`;
+          const meta = r.timestamp ? `  Date: ${r.timestamp}` : "";
+          const source = `  Source: ${r.source}`;
+          const content = r.content.slice(0, 500) + (r.content.length > 500 ? "..." : "");
+          return [header, meta, source, "", content].filter(Boolean).join("\n");
+        })
+        .join("\n\n---\n\n");
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: formatted,
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Search error: ${err}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Tool: rebuild_memory_index
+server.tool(
+  "rebuild_memory_index",
+  "Rebuild the semantic search index from scratch. Use if index seems stale or corrupted.",
+  {},
+  async () => {
+    try {
+      const result = await rebuildIndex();
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Index rebuilt successfully. Indexed ${result.itemCount} items.`,
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Failed to rebuild index: ${err}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Tool: get_memory_index_stats
+server.tool("get_memory_index_stats", "Get statistics about the memory index", {}, async () => {
+  try {
+    const stats = await getIndexStats();
     return {
       content: [
         {
           type: "text" as const,
-          text: JSON.stringify(
-            {
-              query,
-              type,
-              since,
-              limit,
-              results: [],
-              note: "Semantic search not yet implemented. Use Glob and Grep for now.",
-            },
-            null,
-            2
-          ),
+          text: `Index contains ${stats.itemCount} items.`,
+        },
+      ],
+    };
+  } catch (err) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Failed to get index stats: ${err}`,
         },
       ],
     };
   }
-);
+});
 
 // Tool: schedule_reminder
 server.tool(

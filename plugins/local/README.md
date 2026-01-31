@@ -50,15 +50,17 @@ Or add to your Claude settings:
 
 ## MCP Tools
 
-The plugin provides 9 tools. State and entity files are read/written using Claude Code's built-in filesystem tools.
+The plugin provides 11 tools. State and entity files are read/written using Claude Code's built-in filesystem tools.
 
 | Tool | Purpose |
 |------|---------|
 | `get_context` | Session bootstrap - returns identity, state, journal, schedules, paths |
-| `log_journal` | Append timestamped entry to journal |
+| `log_journal` | Append timestamped entry to journal (auto-indexed for search) |
 | `get_recent_journal` | Get N most recent journal entries |
 | `log_signal` | Log raw events for later analysis |
-| `search_memory` | Semantic search across journal and entities |
+| `search_memory` | Semantic search across journal and entities (Transformers.js) |
+| `rebuild_memory_index` | Rebuild the search index from scratch |
+| `get_memory_index_stats` | Get statistics about the memory index |
 | `schedule_reminder` | Create recurring reminder (cron) |
 | `schedule_once` | Create one-shot reminder |
 | `list_reminders` | List active schedules |

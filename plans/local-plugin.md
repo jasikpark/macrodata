@@ -320,19 +320,21 @@ Optional but encouraged:
 
 ## MCP Tool Summary
 
-The plugin provides 9 MCP tools. Everything else uses Claude Code's built-in FS tools.
+The plugin provides 11 MCP tools. Everything else uses Claude Code's built-in FS tools.
 
 | Tool | Purpose |
 |------|---------|
 | `get_context` | Session bootstrap – identity, state, recent journal, schedules, paths |
-| `log_journal` | Append timestamped entry + index it |
+| `log_journal` | Append timestamped entry + auto-index for search |
 | `get_recent_journal` | Get N most recent journal entries |
+| `log_signal` | Log raw events for future analysis |
 | `search_memory` | Semantic search across journal and entities |
+| `rebuild_memory_index` | Rebuild search index from scratch |
+| `get_memory_index_stats` | Get statistics about the memory index |
 | `schedule_reminder` | Create recurring reminder (cron) |
 | `schedule_once` | Create one-shot reminder |
 | `list_reminders` | List active schedules |
 | `remove_reminder` | Delete a reminder |
-| `log_signal` | Log raw events for future analysis |
 
 **Not MCP tools** (use built-in FS tools):
 - Reading/writing state files → `Read`, `Edit`, `Write`
