@@ -2,6 +2,25 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project Structure
+
+```
+macrodata/
+├── plugins/                    # Claude Code plugins
+│   └── cloud/                  # Plugin for cloud macrodata
+│       ├── .claude-plugin/     # Plugin metadata
+│       ├── bin/                # Daemon and hook scripts
+│       └── hooks/              # Plugin hooks config
+├── workers/                    # Cloudflare Workers
+│   └── macrodata/              # Main memory MCP worker
+│       ├── src/                # Worker source code
+│       ├── test/               # Worker tests
+│       ├── wrangler.jsonc      # Wrangler config
+│       └── macrodata.config.ts # User-editable config
+├── package.json                # Root package.json
+└── marketplace.json            # Plugin marketplace config
+```
+
 ## Build and Development Commands
 
 ```bash
@@ -17,20 +36,17 @@ pnpm test           # Run tests
 
 ## Architecture
 
-Macrodata is a cloud memory MCP server for coding agents, built on Cloudflare Workers.
+Macrodata is memory infrastructure for AI coding agents.
 
-**Entry point**: `src/index.ts` - Hono app wrapped with OAuth provider
+### Workers
 
-**Configuration**: `macrodata.config.ts` - User-editable config for models, embedding, OAuth
+**macrodata** (`workers/macrodata/`) - Cloud memory MCP server on Cloudflare Workers.
 
-**Core modules**:
-
-- `src/config.ts` - Type definitions and `defineConfig` helper
-- `src/models.ts` - AI SDK provider setup, reads from config
+- `src/index.ts` - Hono app with OAuth provider
 - `src/mcp-agent.ts` - Durable Object implementing MCP tools
-- `src/types.ts` - Env type augmentation for OAUTH_PROVIDER
-- `src/web-search.ts` - Brave search integration
-- `src/web-fetch.ts` - URL fetching as markdown
+- `src/models.ts` - AI SDK provider setup
+- `src/config.ts` - Type definitions and `defineConfig` helper
+- `macrodata.config.ts` - User-editable config for models, embedding, OAuth
 
 **Key bindings** (in wrangler.jsonc):
 
@@ -39,14 +55,17 @@ Macrodata is a cloud memory MCP server for coding agents, built on Cloudflare Wo
 - `MCP_OBJECT` - Durable Object for per-user state
 - `OAUTH_KV` - KV namespace for OAuth tokens
 
-**Secrets** (in .dev.vars for local, `wrangler secret put` for prod):
+### Plugins
 
-- OAuth credentials (Google/GitHub)
-- API keys (Brave, CF API token)
+**cloud** (`plugins/cloud/`) - Plugin that connects Claude Code to hosted macrodata service.
+
+- Starts a daemon that maintains WebSocket connection to macrodata
+- Injects context via hooks on session start and prompt submit
+- Reads OAuth tokens from macOS keychain
 
 ## Model Configuration
 
-Models are configured in `macrodata.config.ts`:
+Models are configured in `workers/macrodata/macrodata.config.ts`:
 
 - `models.fast` - Quick tasks (default: Gemini Flash via AI Gateway)
 - `models.thinking` - Deep reasoning (default: Claude Opus via AI Gateway)

@@ -1,6 +1,16 @@
 # Macrodata
 
-Cloud memory MCP server for coding agents. Built on Cloudflare Workers with Vectorize for semantic search.
+Memory infrastructure for AI coding agents.
+
+## Structure
+
+```
+macrodata/
+├── plugins/              # Claude Code plugins
+│   └── cloud/            # Connect to hosted macrodata service
+└── workers/              # Cloudflare Workers
+    └── macrodata/        # Cloud memory MCP server
+```
 
 ## Features
 
@@ -13,16 +23,18 @@ Cloud memory MCP server for coding agents. Built on Cloudflare Workers with Vect
 
 ## Setup
 
+### Cloud Worker
+
 ```bash
 pnpm install
-cp .dev.vars.example .dev.vars
+cp workers/macrodata/.dev.vars.example workers/macrodata/.dev.vars
 # Fill in your secrets in .dev.vars
 pnpm dev
 ```
 
-## Configuration
+### Configuration
 
-Edit `macrodata.config.ts` to configure models:
+Edit `workers/macrodata/macrodata.config.ts` to configure models:
 
 ```typescript
 import { env } from "cloudflare:workers";
@@ -44,16 +56,27 @@ export default defineConfig({
 });
 ```
 
-## Deployment
+### Deployment
 
 ```bash
 # Set secrets
-wrangler secret put GOOGLE_CLIENT_ID
-wrangler secret put GOOGLE_CLIENT_SECRET
+wrangler secret put GOOGLE_CLIENT_ID -c workers/macrodata/wrangler.jsonc
+wrangler secret put GOOGLE_CLIENT_SECRET -c workers/macrodata/wrangler.jsonc
 # ... other secrets from .dev.vars.example
 
 # Deploy
 pnpm deploy
+```
+
+## Plugins
+
+### Cloud Plugin
+
+Install the cloud plugin to connect Claude Code to a hosted macrodata service:
+
+```bash
+claude plugin marketplace add github:ascorbic/macrodata
+claude plugin install macrodata@macrodata-cloud --scope user
 ```
 
 ## License

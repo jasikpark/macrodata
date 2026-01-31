@@ -4,7 +4,6 @@
 		"module": "ESNext",
 		"moduleResolution": "bundler",
 		"lib": ["ES2022"],
-		"types": ["./worker-configuration.d.ts"],
 		"strict": true,
 		"noEmit": true,
 		"skipLibCheck": true,
@@ -13,6 +12,5 @@
 		"resolveJsonModule": true,
 		"isolatedModules": true
 	},
-	"include": ["src/**/*.ts", "macrodata.config.ts", "worker-configuration.d.ts"],
 	"exclude": ["node_modules"]
 }

@@ -2,7 +2,7 @@
 	"name": "macrodata",
 	"version": "0.1.0",
 	"private": true,
-	"description": "Cloud memory MCP server for coding agents",
+	"description": "Memory infrastructure for AI coding agents",
 	"keywords": [
 		"agents",
 		"cloudflare",
@@ -22,14 +22,14 @@
 	},
 	"type": "module",
 	"scripts": {
-		"dev": "wrangler dev",
-		"deploy": "wrangler deploy",
-		"types": "wrangler types",
-		"check": "tsc --noEmit",
+		"dev": "wrangler dev -c workers/macrodata/wrangler.jsonc",
+		"deploy": "wrangler deploy -c workers/macrodata/wrangler.jsonc",
+		"types": "wrangler types -c workers/macrodata/wrangler.jsonc",
+		"check": "tsc -p workers/macrodata/tsconfig.json --noEmit",
 		"format": "oxfmt",
 		"lint": "oxlint",
 		"lint:fix": "oxlint --fix",
-		"test": "vitest"
+		"test": "vitest -c workers/macrodata/vitest.config.ts"
 	},
 	"dependencies": {
 		"@cloudflare/codemode": "^0.0.5",

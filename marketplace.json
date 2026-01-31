@@ -9,9 +9,9 @@
   },
   "plugins": [
     {
-      "name": "macrodata",
-      "source": "./plugin",
-      "description": "Real-time cloud memory for Claude Code. Streams context updates via WebSocket.",
+      "name": "macrodata-cloud",
+      "source": "./plugins/cloud",
+      "description": "Cloud memory for Claude Code. Connects to hosted macrodata service.",
       "version": "0.1.0"
     }
   ]
