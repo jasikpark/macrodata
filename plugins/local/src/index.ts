@@ -5,6 +5,7 @@
  * - get_context: Session bootstrap
  * - log_journal: Append timestamped entries
  * - get_recent_journal: Get recent entries
+ * - log_signal: Raw event logging for later analysis
  * - search_memory: Semantic search
  * - schedule_reminder: Cron-based reminders
  * - schedule_once: One-shot reminders
@@ -24,6 +25,7 @@ const STATE_ROOT = process.env.MACRODATA_ROOT || join(homedir(), ".config", "mac
 const STATE_DIR = join(STATE_ROOT, "state");
 const ENTITIES_DIR = join(STATE_ROOT, "entities");
 const JOURNAL_DIR = join(STATE_ROOT, "journal");
+const SIGNALS_DIR = join(STATE_ROOT, "signals");
 const INDEX_DIR = join(STATE_ROOT, ".index");
 const SCHEDULES_FILE = join(STATE_ROOT, ".schedules.json");
 
@@ -47,6 +49,17 @@ interface Schedule {
   createdAt: string;
 }
 
+interface Signal {
+  timestamp: string;
+  type: string;
+  context?: {
+    file?: string;
+    query?: string;
+    trigger?: string;
+  };
+  raw?: unknown;
+}
+
 interface ScheduleStore {
   schedules: Schedule[];
 }
@@ -60,6 +73,7 @@ function ensureDirectories() {
     join(ENTITIES_DIR, "people"),
     join(ENTITIES_DIR, "projects"),
     JOURNAL_DIR,
+    SIGNALS_DIR,
     INDEX_DIR,
   ];
   for (const dir of dirs) {
@@ -245,6 +259,52 @@ server.tool(
         {
           type: "text" as const,
           text: JSON.stringify(entries, null, 2),
+        },
+      ],
+    };
+  }
+);
+
+// Tool: log_signal
+server.tool(
+  "log_signal",
+  "Log a raw event for later analysis. Signals are not indexed for search - they capture events that might matter later.",
+  {
+    type: z.string().describe("Event type (e.g., file_edit, search, reminder_fired)"),
+    file: z.string().optional().describe("File involved, if any"),
+    query: z.string().optional().describe("Search query, if relevant"),
+    trigger: z.string().optional().describe("What triggered this event"),
+    raw: z.any().optional().describe("Arbitrary data for future analysis"),
+  },
+  async ({ type, file, query, trigger, raw }) => {
+    ensureDirectories();
+
+    const signal: Signal = {
+      timestamp: new Date().toISOString(),
+      type,
+    };
+
+    if (file || query || trigger) {
+      signal.context = {
+        ...(file && { file }),
+        ...(query && { query }),
+        ...(trigger && { trigger }),
+      };
+    }
+
+    if (raw !== undefined) {
+      signal.raw = raw;
+    }
+
+    const today = new Date().toISOString().split("T")[0];
+    const signalPath = join(SIGNALS_DIR, `${today}.jsonl`);
+    appendFileSync(signalPath, JSON.stringify(signal) + "\n");
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Logged signal: ${type}`,
         },
       ],
     };

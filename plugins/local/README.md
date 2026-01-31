@@ -44,18 +44,20 @@ Or add to your Claude settings:
 │   ├── people/          # One file per person
 │   └── projects/        # One file per project
 ├── journal/             # JSONL, date-partitioned
+├── signals/             # Raw events for future analysis
 └── .index/              # Embeddings cache
 ```
 
 ## MCP Tools
 
-The plugin provides 8 tools. State and entity files are read/written using Claude Code's built-in filesystem tools.
+The plugin provides 9 tools. State and entity files are read/written using Claude Code's built-in filesystem tools.
 
 | Tool | Purpose |
 |------|---------|
 | `get_context` | Session bootstrap - returns identity, state, journal, schedules, paths |
 | `log_journal` | Append timestamped entry to journal |
 | `get_recent_journal` | Get N most recent journal entries |
+| `log_signal` | Log raw events for later analysis |
 | `search_memory` | Semantic search across journal and entities |
 | `schedule_reminder` | Create recurring reminder (cron) |
 | `schedule_once` | Create one-shot reminder |

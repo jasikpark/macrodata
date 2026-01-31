@@ -9,5 +9,13 @@
   "repository": "https://github.com/ascorbic/macrodata",
   "license": "MIT",
   "keywords": ["memory", "context", "local"],
-  "hooks": "../hooks/hooks.json"
+  "hooks": "../hooks/hooks.json",
+  "mcp": {
+    "servers": {
+      "macrodata-local": {
+        "command": "bun",
+        "args": ["run", "${CLAUDE_PLUGIN_ROOT}/src/index.ts"]
+      }
+    }
+  }
 }
