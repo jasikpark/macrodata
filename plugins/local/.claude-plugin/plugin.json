@@ -1,0 +1,13 @@
+{
+  "name": "macrodata-local",
+  "version": "0.1.0",
+  "description": "Local file-based memory for Claude Code. Zero infrastructure, fully offline, optional git tracking.",
+  "author": {
+    "name": "Matt Kane",
+    "url": "https://mk.gg"
+  },
+  "repository": "https://github.com/ascorbic/macrodata",
+  "license": "MIT",
+  "keywords": ["memory", "context", "local"],
+  "hooks": "../hooks/hooks.json"
+}

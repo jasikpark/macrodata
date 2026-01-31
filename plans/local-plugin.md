@@ -68,6 +68,16 @@ These can grow indefinitely. The agent retrieves relevant context via search.
 
 ## Tools
 
+### Design Principle: Use Built-in Tools Where Possible
+
+Claude Code already has excellent filesystem tools (Read, Write, Edit, Glob, Grep). Rather than wrapping these in custom MCP tools, we:
+
+1. **Use FS tools directly** for reading/writing state and entity files
+2. **Provide MCP tools only** for things FS tools can't do: context bootstrap, journaling, semantic search, scheduling
+3. **Watch for file changes** in the daemon to update the search index when files are modified via FS tools
+
+This keeps the MCP surface small and leverages Claude Code's battle-tested file handling.
+
 ### Session Bootstrap
 
 #### `get_context`
@@ -85,38 +95,35 @@ interface ContextResponse {
   recentJournal: JournalEntry[];  // Last 5 entries
   schedules: Schedule[];          // Active reminders
   isFirstRun: boolean;            // Trigger setup flow if true
+  paths: {
+    root: string;             // e.g., ~/.config/macrodata
+    state: string;            // e.g., ~/.config/macrodata/state
+    entities: string;         // e.g., ~/.config/macrodata/entities
+  };
 }
 ```
 
+The `paths` field tells the agent where to find files for direct Read/Edit operations.
+
 If `isFirstRun` is true, the agent should guide the user through identity setup.
 
-### State Management
+### State and Entity Files (Use FS Tools)
 
-#### `read_state`
+**State files** – read/edit directly via Claude Code's built-in tools:
+- `~/.config/macrodata/identity.md`
+- `~/.config/macrodata/state/inbox.md`
+- `~/.config/macrodata/state/today.md`
+- `~/.config/macrodata/state/commitments.md`
 
-Read a state file by name:
-- `identity` → identity.md
-- `inbox` → state/inbox.md
-- `today` → state/today.md
-- `commitments` → state/commitments.md
+**Entity files** – read/edit/create directly:
+- `~/.config/macrodata/entities/people/*.md`
+- `~/.config/macrodata/entities/projects/*.md`
 
-#### `write_state`
+**Discovery** – use Glob to find entities:
+- `Glob("~/.config/macrodata/entities/people/*.md")`
+- `Glob("~/.config/macrodata/entities/projects/*.md")`
 
-Write to a state file. Handles atomic writes and optional git commit.
-
-#### `read_entity`
-
-Read an entity file:
-- `read_entity("person", "matt")` → entities/people/matt.md
-- `read_entity("project", "acme")` → entities/projects/acme.md
-
-#### `write_entity`
-
-Create or update an entity file.
-
-#### `list_entities`
-
-List all entities of a type.
+The daemon watches these directories and reindexes files when they change.
 
 ### Journaling
 
@@ -200,9 +207,27 @@ Delete a scheduled reminder.
 - **Model:** all-MiniLM-L6-v2 via Transformers.js (384-dimensional)
 - **Storage:** SQLite with vector similarity (or flat file with brute-force search for simplicity)
 - **Update triggers:**
-  - On journal write: index the new entry
-  - On entity write: re-index the entity
-  - Background: periodic re-index of everything
+  - On `log_journal`: index the new entry immediately
+  - On file change (watched by daemon): reindex the changed file
+  - Background: periodic full reindex as fallback
+
+### File Watching
+
+The daemon watches the `entities/` directory for changes:
+
+```typescript
+// Daemon watches for file changes
+chokidar.watch([
+  '~/.config/macrodata/entities/**/*.md',
+], {
+  ignoreInitial: true,
+}).on('all', (event, path) => {
+  // Reindex the changed file
+  indexFile(path);
+});
+```
+
+This means the agent can use Claude Code's FS tools to create/edit entity files, and the daemon will automatically pick up the changes and update the search index.
 
 ### Index Location
 
@@ -254,6 +279,27 @@ Optional but encouraged:
   }
 }
 ```
+
+## MCP Tool Summary
+
+The plugin provides only 7 MCP tools. Everything else uses Claude Code's built-in FS tools.
+
+| Tool | Purpose |
+|------|---------|
+| `get_context` | Session bootstrap – identity, state, recent journal, schedules, paths |
+| `log_journal` | Append timestamped entry + index it |
+| `get_recent_journal` | Get N most recent journal entries |
+| `search_memory` | Semantic search across journal and entities |
+| `schedule_reminder` | Create recurring reminder (cron) |
+| `schedule_once` | Create one-shot reminder |
+| `list_reminders` | List active schedules |
+| `remove_reminder` | Delete a reminder |
+
+**Not MCP tools** (use built-in FS tools):
+- Reading/writing state files → `Read`, `Edit`, `Write`
+- Reading/writing entity files → `Read`, `Edit`, `Write`
+- Finding entity files → `Glob`
+- Searching file contents → `Grep`
 
 ## What This Doesn't Include
 

@@ -1,0 +1,22 @@
+{
+  "name": "@macrodata/local",
+  "version": "0.1.0",
+  "description": "Local file-based memory for Claude Code",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "daemon": "bun run bin/macrodata-daemon.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.1.0",
+    "chokidar": "^4.0.3",
+    "croner": "^9.0.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.2",
+    "typescript": "^5.7.3"
+  }
+}
