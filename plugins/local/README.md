@@ -1,6 +1,8 @@
 # Macrodata Local Plugin
 
-Local file-based memory for Claude Code. Zero infrastructure, fully offline, optional git tracking.
+Local file-based memory for **Claude Code**. Zero infrastructure, fully offline.
+
+> **Using OpenCode?** See [opencode-macrodata](./opencode/) for the OpenCode plugin.
 
 ## Installation
 
@@ -11,9 +13,9 @@ Local file-based memory for Claude Code. Zero infrastructure, fully offline, opt
 
 ## What It Does
 
-1. **Session context injection** - On session start, injects your identity, current state, and recent journal entries
+1. **Session context injection** - On session start, injects your identity, current state, and recent journal
 2. **File-based memory** - All state stored as markdown files in `~/.config/macrodata/`
-3. **Semantic search** - Search across your journal, entity files, and past conversations
+3. **Semantic search** - Search across journal, entity files, and past conversations
 4. **Conversation history** - Search and retrieve context from past Claude Code sessions
 5. **Auto-journaling** - Automatically logs git commands and file changes
 6. **Session summaries** - Auto-saves conversation summaries before context compaction
@@ -23,16 +25,18 @@ Local file-based memory for Claude Code. Zero infrastructure, fully offline, opt
 
 ```
 ~/.config/macrodata/
-├── identity.md          # Your persona and patterns
+├── identity.md          # Agent persona
 ├── state/
 │   ├── today.md         # Daily focus
 │   ├── human.md         # User profile
-│   └── workspace.md     # Active projects
+│   ├── workspace.md     # Current project context
+│   └── topics.md        # Working knowledge index
 ├── entities/
 │   ├── people/          # One file per person
 │   └── projects/        # One file per project
 ├── journal/             # JSONL, date-partitioned
 ├── signals/             # Raw events for future analysis
+├── .schedules.json      # Reminders config
 └── .index/
     ├── vectors/         # Memory embeddings
     └── conversations/   # Conversation embeddings
@@ -40,35 +44,35 @@ Local file-based memory for Claude Code. Zero infrastructure, fully offline, opt
 
 ## MCP Tools
 
-### Core Memory Tools
+### Core Memory
 
 | Tool | Purpose |
 |------|---------|
-| `get_context` | Dynamic context (schedules, recent journal, paths) - static context auto-injected by hooks |
-| `log_journal` | Append timestamped entry to journal (auto-indexed for search) |
+| `get_context` | Paths and dynamic context (schedules, recent journal) |
+| `log_journal` | Append timestamped entry (auto-indexed for search) |
 | `get_recent_journal` | Get recent entries, optionally filtered by topic |
 | `log_signal` | Log raw events for later analysis |
 | `search_memory` | Semantic search across journal and entities |
 | `rebuild_memory_index` | Rebuild the search index from scratch |
 | `get_memory_index_stats` | Index statistics |
 
-### Conversation History Tools
+### Conversation History
 
 | Tool | Purpose |
 |------|---------|
-| `search_conversations` | Search past Claude Code sessions (project-biased, time-weighted) |
+| `search_conversations` | Search past sessions (project-biased, time-weighted) |
 | `expand_conversation` | Load full context from a past conversation |
 | `rebuild_conversation_index` | Index Claude Code's conversation logs |
 | `get_conversation_index_stats` | Conversation index statistics |
 
-### Session Management Tools
+### Session Management
 
 | Tool | Purpose |
 |------|---------|
 | `save_conversation_summary` | Save session summary for context recovery |
 | `get_recent_summaries` | Retrieve recent session summaries |
 
-### Scheduling Tools
+### Scheduling
 
 | Tool | Purpose |
 |------|---------|
@@ -92,7 +96,7 @@ The plugin uses Claude Code hooks for automatic behavior:
 
 ## First Run
 
-On first run (no identity.md exists), the plugin will prompt you to set up your identity through conversation:
+On first run (no identity.md exists), the plugin will prompt you to set up your identity:
 
 1. What should the agent call you?
 2. Any particular way you'd like it to work with you?
@@ -119,3 +123,19 @@ A background daemon handles:
 - File watching for index updates
 
 The daemon is automatically started by the hook script on session start.
+
+## Development
+
+```bash
+cd plugins/local
+bun install
+
+# Run MCP server
+bun run start
+
+# Run daemon
+bun run daemon
+
+# Type check
+bun run check
+```
