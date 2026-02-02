@@ -76,6 +76,7 @@ interface Schedule {
   expression: string;
   description: string;
   payload: string;
+  model?: string; // Optional model override for agent
   createdAt: string;
 }
 
@@ -441,20 +442,22 @@ server.tool("get_memory_index_stats", "Get statistics about the memory index", {
 // Tool: schedule_reminder
 server.tool(
   "schedule_reminder",
-  "Create a recurring reminder using cron syntax",
+  "Create a recurring reminder using cron syntax. The daemon will trigger Claude Code or OpenCode when it fires.",
   {
     id: z.string().describe("Unique identifier for this reminder"),
     cronExpression: z.string().describe("Cron expression (e.g., '0 9 * * *' for 9am daily)"),
     description: z.string().describe("What this reminder is for"),
     payload: z.string().describe("Message to process when reminder fires"),
+    model: z.string().optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-5' for deep thinking tasks)"),
   },
-  async ({ id, cronExpression, description, payload }) => {
+  async ({ id, cronExpression, description, payload, model }) => {
     const schedule: Schedule = {
       id,
       type: "cron",
       expression: cronExpression,
       description,
       payload,
+      model,
       createdAt: new Date().toISOString(),
     };
 
@@ -469,7 +472,7 @@ server.tool(
       content: [
         {
           type: "text" as const,
-          text: `Created recurring reminder: ${id} (${cronExpression})`,
+          text: `Created recurring reminder: ${id} (${cronExpression})${model ? ` with model ${model}` : ""}`,
         },
       ],
     };
@@ -479,20 +482,22 @@ server.tool(
 // Tool: schedule_once
 server.tool(
   "schedule_once",
-  "Create a one-shot reminder at a specific datetime",
+  "Create a one-shot reminder at a specific datetime. The daemon will trigger Claude Code or OpenCode when it fires.",
   {
     id: z.string().describe("Unique identifier for this reminder"),
     datetime: z.string().describe("ISO 8601 datetime (e.g., '2026-01-31T10:00:00')"),
     description: z.string().describe("What this reminder is for"),
     payload: z.string().describe("Message to process when reminder fires"),
+    model: z.string().optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-5' for deep thinking tasks)"),
   },
-  async ({ id, datetime, description, payload }) => {
+  async ({ id, datetime, description, payload, model }) => {
     const schedule: Schedule = {
       id,
       type: "once",
       expression: datetime,
       description,
       payload,
+      model,
       createdAt: new Date().toISOString(),
     };
 
@@ -505,7 +510,7 @@ server.tool(
       content: [
         {
           type: "text" as const,
-          text: `Scheduled one-shot reminder: ${id} at ${datetime}`,
+          text: `Scheduled one-shot reminder: ${id} at ${datetime}${model ? ` with model ${model}` : ""}`,
         },
       ],
     };

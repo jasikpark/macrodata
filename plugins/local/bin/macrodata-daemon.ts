@@ -2,11 +2,15 @@
 /**
  * Macrodata Local Daemon
  *
- * Handles scheduled tasks, file watching for index updates, and can trigger
- * Claude Code via CLI when reminders fire.
+ * Handles scheduled tasks, file watching for index updates, and triggers
+ * Claude Code or OpenCode via CLI when reminders fire.
  *
  * Usage:
  *   MACRODATA_ROOT=~/.config/macrodata bun run macrodata-daemon.ts
+ *
+ * Environment:
+ *   MACRODATA_AGENT=opencode|claude  (default: auto-detect)
+ *   MACRODATA_ROOT=/path/to/state
  */
 
 import { watch } from "chokidar";
@@ -14,6 +18,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, rea
 import { homedir } from "os";
 import { join, basename, relative } from "path";
 import { Cron } from "croner";
+import { spawn, spawnSync } from "child_process";
 import { indexEntityFile, preloadModel } from "../src/indexer.js";
 
 // Configuration
@@ -31,7 +36,102 @@ interface Schedule {
   expression: string; // cron expression or ISO datetime
   description: string;
   payload: string;
+  model?: string; // Optional model override (e.g., "anthropic/claude-opus-4-5")
   createdAt: string;
+}
+
+type AgentType = "opencode" | "claude" | "none";
+
+/**
+ * Detect which agent CLI is available
+ */
+function detectAgent(): AgentType {
+  // Check env override first
+  const envAgent = process.env.MACRODATA_AGENT?.toLowerCase();
+  if (envAgent === "opencode" || envAgent === "claude" || envAgent === "none") {
+    return envAgent;
+  }
+
+  // Try to detect available CLI
+  try {
+    const ocResult = spawnSync("which", ["opencode"], { encoding: "utf-8" });
+    if (ocResult.status === 0) {
+      return "opencode";
+    }
+  } catch {}
+
+  try {
+    const ccResult = spawnSync("which", ["claude"], { encoding: "utf-8" });
+    if (ccResult.status === 0) {
+      return "claude";
+    }
+  } catch {}
+
+  return "none";
+}
+
+/**
+ * Trigger an agent with a message
+ */
+async function triggerAgent(
+  agent: AgentType,
+  message: string,
+  options: { model?: string; description?: string } = {}
+): Promise<boolean> {
+  if (agent === "none") {
+    log("No agent configured, skipping trigger");
+    return false;
+  }
+
+  const timestamp = new Date().toLocaleString();
+  const fullMessage = `[Scheduled reminder: ${options.description || "reminder"}]\nCurrent time: ${timestamp}\n\n${message}`;
+
+  try {
+    if (agent === "opencode") {
+      // opencode run "message" --model provider/model
+      const args = ["run", fullMessage];
+      if (options.model) {
+        args.push("--model", options.model);
+      }
+      
+      log(`Triggering OpenCode: opencode run "..." ${options.model ? `--model ${options.model}` : ""}`);
+      
+      const proc = spawn("opencode", args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: true,
+      });
+
+      proc.unref();
+
+      // Log output for debugging
+      proc.stdout?.on("data", (data) => {
+        log(`[opencode stdout] ${data.toString().trim()}`);
+      });
+      proc.stderr?.on("data", (data) => {
+        log(`[opencode stderr] ${data.toString().trim()}`);
+      });
+
+      return true;
+    } else if (agent === "claude") {
+      // claude --print "message" or claude -p "message"
+      const args = ["--print", fullMessage];
+      
+      log(`Triggering Claude Code: claude --print "..."`);
+      
+      const proc = spawn("claude", args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: true,
+      });
+
+      proc.unref();
+
+      return true;
+    }
+  } catch (err) {
+    log(`Failed to trigger ${agent}: ${err}`);
+  }
+
+  return false;
 }
 
 interface ScheduleStore {
@@ -84,10 +184,15 @@ class MacrodataLocalDaemon {
   private cronJobs: Map<string, Cron> = new Map();
   private watcher: ReturnType<typeof watch> | null = null;
   private shouldRun = true;
+  private agent: AgentType = "none";
 
   async start() {
     log("Starting macrodata local daemon");
     log(`State root: ${STATE_ROOT}`);
+
+    // Detect agent
+    this.agent = detectAgent();
+    log(`Agent: ${this.agent}`);
 
     // Write PID file
     ensureDirectories();
@@ -159,14 +264,24 @@ class MacrodataLocalDaemon {
     }
   }
 
-  private fireSchedule(schedule: Schedule) {
-    log(`Firing schedule: ${schedule.id}`);
-    const message = `[macrodata] ⏰ Reminder: ${schedule.description}\n${schedule.payload}`;
+  private async fireSchedule(schedule: Schedule) {
+    log(`Firing schedule: ${schedule.id} - ${schedule.description}`);
+
+    // Always write to pending context (for hooks to pick up)
+    const message = `[macrodata] Reminder: ${schedule.description}\n${schedule.payload}`;
     writePendingContext(message);
 
-    // TODO: Optionally trigger Claude Code CLI here
-    // const claude = process.env.CLAUDE_CODE_PATH || 'claude';
-    // execSync(`${claude} --print "${schedule.payload}"`);
+    // Trigger the agent
+    const triggered = await triggerAgent(this.agent, schedule.payload, {
+      model: schedule.model,
+      description: schedule.description,
+    });
+
+    if (triggered) {
+      log(`Successfully triggered ${this.agent} for: ${schedule.id}`);
+    } else {
+      log(`Could not trigger agent for: ${schedule.id} (pending context written)`);
+    }
   }
 
   addSchedule(schedule: Schedule) {
