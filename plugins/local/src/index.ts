@@ -443,23 +443,22 @@ server.tool("get_memory_index_stats", "Get statistics about the memory index", {
 // Tool: schedule_reminder
 server.tool(
   "schedule_reminder",
-  "Create a recurring reminder using cron syntax. Specify agent to auto-trigger when it fires.",
+  "Create a recurring reminder using cron syntax. The daemon will trigger Claude Code when it fires.",
   {
     id: z.string().describe("Unique identifier for this reminder"),
     cronExpression: z.string().describe("Cron expression (e.g., '0 9 * * *' for 9am daily)"),
     description: z.string().describe("What this reminder is for"),
     payload: z.string().describe("Message to process when reminder fires"),
-    agent: z.enum(["opencode", "claude"]).optional().describe("Which agent to trigger (opencode or claude)"),
     model: z.string().optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-5' for deep thinking tasks)"),
   },
-  async ({ id, cronExpression, description, payload, agent, model }) => {
+  async ({ id, cronExpression, description, payload, model }) => {
     const schedule: Schedule = {
       id,
       type: "cron",
       expression: cronExpression,
       description,
       payload,
-      agent,
+      agent: "claude", // Hard-coded: MCP server = Claude Code
       model,
       createdAt: new Date().toISOString(),
     };
@@ -475,7 +474,7 @@ server.tool(
       content: [
         {
           type: "text" as const,
-          text: `Created recurring reminder: ${id} (${cronExpression})${agent ? ` via ${agent}` : ""}${model ? ` with model ${model}` : ""}`,
+          text: `Created recurring reminder: ${id} (${cronExpression})${model ? ` with model ${model}` : ""}`,
         },
       ],
     };
@@ -485,23 +484,22 @@ server.tool(
 // Tool: schedule_once
 server.tool(
   "schedule_once",
-  "Create a one-shot reminder at a specific datetime. Specify agent to auto-trigger when it fires.",
+  "Create a one-shot reminder at a specific datetime. The daemon will trigger Claude Code when it fires.",
   {
     id: z.string().describe("Unique identifier for this reminder"),
     datetime: z.string().describe("ISO 8601 datetime (e.g., '2026-01-31T10:00:00')"),
     description: z.string().describe("What this reminder is for"),
     payload: z.string().describe("Message to process when reminder fires"),
-    agent: z.enum(["opencode", "claude"]).optional().describe("Which agent to trigger (opencode or claude)"),
     model: z.string().optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-5' for deep thinking tasks)"),
   },
-  async ({ id, datetime, description, payload, agent, model }) => {
+  async ({ id, datetime, description, payload, model }) => {
     const schedule: Schedule = {
       id,
       type: "once",
       expression: datetime,
       description,
       payload,
-      agent,
+      agent: "claude", // Hard-coded: MCP server = Claude Code
       model,
       createdAt: new Date().toISOString(),
     };
@@ -515,7 +513,7 @@ server.tool(
       content: [
         {
           type: "text" as const,
-          text: `Scheduled one-shot reminder: ${id} at ${datetime}${agent ? ` via ${agent}` : ""}${model ? ` with model ${model}` : ""}`,
+          text: `Scheduled one-shot reminder: ${id} at ${datetime}${model ? ` with model ${model}` : ""}`,
         },
       ],
     };

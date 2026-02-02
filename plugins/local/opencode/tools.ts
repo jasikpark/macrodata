@@ -95,7 +95,6 @@ export const macrodataTool = tool({
     datetime: tool.schema.string().optional().describe("ISO datetime for one-shot"),
     description: tool.schema.string().optional().describe("Reminder description"),
     payload: tool.schema.string().optional().describe("Message when reminder fires"),
-    agent: tool.schema.enum(["opencode", "claude"]).optional().describe("Which agent to trigger"),
     model: tool.schema.string().optional().describe("Model override for reminder"),
     // Read mode
     file: tool.schema.string().optional().describe("File to read (e.g., 'identity', 'today', 'topics')"),
@@ -247,7 +246,7 @@ export const macrodataTool = tool({
               expression: args.cronExpression,
               description: args.description,
               payload: args.payload,
-              agent: args.agent,
+              agent: "opencode", // Hard-coded: OC plugin = OpenCode
               model: args.model,
               createdAt: new Date().toISOString(),
             };
@@ -258,7 +257,7 @@ export const macrodataTool = tool({
 
             return JSON.stringify({
               success: true,
-              message: `Created recurring reminder: ${args.id} (${args.cronExpression})${args.agent ? ` via ${args.agent}` : ""}`,
+              message: `Created recurring reminder: ${args.id} (${args.cronExpression})`,
             });
           } else if (args.datetime) {
             // Create one-shot reminder
@@ -275,7 +274,7 @@ export const macrodataTool = tool({
               expression: args.datetime,
               description: args.description,
               payload: args.payload,
-              agent: args.agent,
+              agent: "opencode", // Hard-coded: OC plugin = OpenCode
               model: args.model,
               createdAt: new Date().toISOString(),
             };
@@ -286,7 +285,7 @@ export const macrodataTool = tool({
 
             return JSON.stringify({
               success: true,
-              message: `Scheduled one-shot reminder: ${args.id} at ${args.datetime}${args.agent ? ` via ${args.agent}` : ""}`,
+              message: `Scheduled one-shot reminder: ${args.id} at ${args.datetime}`,
             });
           } else {
             // Remove reminder
