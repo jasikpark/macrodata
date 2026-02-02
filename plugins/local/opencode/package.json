@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "bun build ./index.ts --outdir ./dist --target node && tsc --emitDeclarationOnly",
+    "build": "bun build ./index.ts --outdir ./dist --target node --external @xenova/transformers --external vectra && tsc --emitDeclarationOnly",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run build"
@@ -50,6 +50,7 @@
     ]
   },
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ]
 }

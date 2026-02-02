@@ -15,33 +15,6 @@ Guide new users through initial macrodata setup.
 
 ## Onboarding Flow
 
-### Phase 0: Prerequisites
-
-Check that Bun is installed (required for the MCP server):
-
-```bash
-command -v bun
-```
-
-If not found, offer to install it:
-
-**Ask:** "Macrodata needs Bun to run. Would you like me to install it?"
-
-If yes, run:
-```bash
-curl -fsSL https://bun.sh/install | bash
-```
-
-After installation, verify it worked:
-```bash
-# Source the updated PATH
-export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
-command -v bun && bun --version
-```
-
-If they decline, explain that macrodata won't work without Bun and ask if they'd like to install it manually later.
-
 ### Phase 1: Location
 
 Ask where to store macrodata files. Suggest accessible locations:
@@ -50,19 +23,17 @@ Ask where to store macrodata files. Suggest accessible locations:
 2. `~/Repos/macrodata` or `~/code/macrodata` (if they use a code folder)
 3. `~/.config/macrodata` (default, hidden)
 
-If they choose a non-default location, write it to `~/.config/opencode/macrodata.json`:
+If they choose a non-default location, write the config to `~/.config/opencode/macrodata.json`:
 
 ```json
 {
-  "root": "/path/to/chosen/location"
+  "root": "/chosen/path"
 }
 ```
 
-After writing the config, create the directory structure:
-- `<root>/`
+Then create the directory structure:
 - `<root>/state/`
 - `<root>/journal/`
-- `<root>/entities/`
 - `<root>/entities/people/`
 - `<root>/entities/projects/`
 - `<root>/topics/`
@@ -94,23 +65,24 @@ gh api user --jq '.login, .name, .blog' 2>/dev/null
 - Do you have a website or blog?
 - Any social profiles you'd like me to know about?
 
-**Research their online presence:**
-If they provide a website, socials, or GitHub, fetch and analyze them for:
-- Bio and self-description
-- What they write about (interests, expertise)
-- Tone and voice in their writing
-- Projects and work they highlight
-
-This gives context beyond what they explicitly state – understanding who they are publicly helps the agent communicate appropriately.
-
 **Communication style:**
-If they consent, analyze their Claude Code session history (`~/.claude/projects/`):
+If they consent, analyze their OpenCode session history (`~/.local/share/opencode/storage/`):
 
 ```bash
-# Extract human messages from session history
-find ~/.claude/projects -name "*.jsonl" -exec cat {} \; 2>/dev/null | \
-  jq -r 'select(.type == "human") | .message.content' 2>/dev/null | \
-  head -200
+# Extract human messages from OpenCode session history
+# Messages are stored in part/ directory, organized by message ID
+# User messages have role: "user" in the parent message metadata
+
+# Find recent user message parts
+for msg_dir in $(ls -t ~/.local/share/opencode/storage/message/ 2>/dev/null | head -20); do
+  # Get message metadata
+  cat ~/.local/share/opencode/storage/message/$msg_dir/*.json 2>/dev/null | \
+    jq -r 'select(.role == "user") | .id' | while read msg_id; do
+      # Get the text parts for this message
+      cat ~/.local/share/opencode/storage/part/$msg_id/*.json 2>/dev/null | \
+        jq -r 'select(.type == "text" and .synthetic != true) | .text' 2>/dev/null
+    done
+done | head -200
 ```
 
 Look for patterns:
@@ -123,12 +95,15 @@ Look for patterns:
 Analyze recent session history to understand what they're working on:
 
 ```bash
-# Get recent project directories from Claude Code history
-ls -lt ~/.claude/projects/ | head -10
+# Get recent project directories from OpenCode session storage
+ls -t ~/.local/share/opencode/storage/session/ 2>/dev/null | head -10 | while read proj_dir; do
+  cat ~/.local/share/opencode/storage/session/$proj_dir/*.json 2>/dev/null | \
+    jq -r '.directory, .title' 2>/dev/null
+done
 
-# Sample recent conversations for context
-find ~/.claude/projects -name "*.jsonl" -mtime -7 -exec cat {} \; 2>/dev/null | \
-  jq -r 'select(.type == "human") | .message.content' 2>/dev/null | \
+# Sample recent conversations for context (last 7 days)
+find ~/.local/share/opencode/storage/part -name "*.json" -mtime -7 -exec cat {} \; 2>/dev/null | \
+  jq -r 'select(.type == "text" and .synthetic != true) | .text' 2>/dev/null | \
   head -100
 ```
 
@@ -222,41 +197,7 @@ Set up working context:
 - [things in progress]
 ```
 
-### Phase 5: Permissions
-
-Ask if they'd like to pre-grant permissions for macrodata paths. This avoids permission prompts every session.
-
-**Ask:** "Would you like me to update your Claude Code settings to pre-grant permissions for macrodata? This means you won't be prompted each time macrodata reads or writes to its memory folder."
-
-If yes, update `~/.claude/settings.json` to add:
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "Read(~/.config/macrodata/**)",
-      "Edit(~/.config/macrodata/**)",
-      "Write(~/.config/macrodata/**)",
-      "Read(~/.claude/projects/**)",
-      "mcp__plugin_macrodata_macrodata__*"
-    ]
-  }
-}
-```
-
-**Important:** Replace `~/.config/macrodata` with their actual chosen root path. The paths should be:
-- The macrodata root folder (read/write/edit)
-- `~/.claude/projects/` (read only, for conversation history search)
-- All macrodata MCP tools (pattern: `mcp__plugin_macrodata_macrodata__*`)
-
-Merge with existing settings rather than overwriting:
-
-```bash
-# Read existing settings, merge permissions, write back
-jq -s '.[0] * .[1]' ~/.claude/settings.json <(echo '{"permissions":{"allow":["..."]}}') > ~/.claude/settings.json.tmp && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
-```
-
-### Phase 6: Finalize
+### Phase 5: Finalize
 
 1. Rebuild the memory index with `rebuild_memory_index`
 2. Log completion to journal
@@ -265,25 +206,7 @@ jq -s '.[0] * .[1]' ~/.claude/settings.json <(echo '{"permissions":{"allow":["..
 
 ## Session History Analysis
 
-If the user consents, analyze their Claude Code history for communication patterns:
-
-```bash
-# Count messages and get stats
-find ~/.claude/projects -name "*.jsonl" -exec cat {} \; 2>/dev/null | \
-  jq -r 'select(.type == "human") | .message.content' 2>/dev/null | \
-  awk '{print length}' | \
-  sort -n | \
-  awk '{sum+=$1; a[NR]=$1} END {print "Messages:", NR, "Median:", a[int(NR/2)], "Avg:", int(sum/NR)}'
-```
-
-**Useful patterns to extract:**
-- Message length distribution (short = direct communicator)
-- Greeting patterns (casual vs formal)
-- How they give corrections ("no" vs "actually" vs questions)
-- Technical depth (jargon usage)
-- Language patterns (spelling, idioms, formality)
-
-Summarize only actionable patterns for the human profile.
+If the user consents, analyze their OpenCode history for context:
 
 **Context to extract:**
 - Recent project directories they've been working in
@@ -313,7 +236,7 @@ First, where would you like me to store your memory files?
 
 **User:** My blog is example.com
 
-**Agent:** Got it. Would you like me to analyze your Claude Code session history to understand your communication style and what you've been working on? I'll look at things like how you communicate and recent projects. This stays completely local.
+**Agent:** Got it. Would you like me to analyze your OpenCode session history to understand your communication style and what you've been working on? I'll look at things like how you communicate and recent projects. This stays completely local.
 
 **User:** Sure
 

@@ -4,12 +4,72 @@
  * Reads state files and formats them for injection into conversations
  */
 
-import { existsSync, readFileSync, readdirSync } from "fs";
+import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 import { getStateRoot, getJournalDir, getSchedulesFile } from "../src/config.js";
 
 // Re-export for compatibility
 export { getStateRoot } from "../src/config.js";
+
+/**
+ * Initialize state directory with default structure
+ */
+export function initializeStateRoot(): void {
+  const stateRoot = getStateRoot();
+  
+  // Create directories
+  const dirs = [
+    stateRoot,
+    join(stateRoot, "state"),
+    join(stateRoot, "journal"),
+    join(stateRoot, "entities"),
+    join(stateRoot, "entities", "people"),
+    join(stateRoot, "entities", "projects"),
+    join(stateRoot, "topics"),
+  ];
+  
+  for (const dir of dirs) {
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+  }
+  
+  // Create default files if they don't exist
+  const identityPath = join(stateRoot, "identity.md");
+  if (!existsSync(identityPath)) {
+    writeFileSync(identityPath, `# Identity
+
+You are a coding assistant with persistent memory. Use your memory tools to:
+- Log important observations with \`log_journal\`
+- Search past context with \`search_memory\`
+- Save session summaries with \`save_conversation_summary\`
+`);
+  }
+  
+  const todayPath = join(stateRoot, "state", "today.md");
+  if (!existsSync(todayPath)) {
+    const today = new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    writeFileSync(todayPath, `# Today – ${today}
+
+## Priorities
+
+_Add your priorities here_
+
+## Notes
+
+_Session notes_
+`);
+  }
+  
+  const humanPath = join(stateRoot, "state", "human.md");
+  if (!existsSync(humanPath)) {
+    writeFileSync(humanPath, `# Human
+
+_Add information about yourself here_
+`);
+  }
+}
 
 function readFileOrEmpty(path: string): string {
   try {
@@ -96,16 +156,26 @@ export async function formatContextForPrompt(
 ): Promise<string | null> {
   const { forCompaction = false } = options;
   const stateRoot = getStateRoot();
-
-  // Check if configured
   const identityPath = join(stateRoot, "identity.md");
-  if (!existsSync(identityPath)) {
-    if (!forCompaction) {
-      return `[MACRODATA]
+  const isFirstRun = !existsSync(identityPath);
 
-Memory not configured. Set MACRODATA_ROOT environment variable or create ~/.config/macrodata/config.json with {"root": "/path/to/state"}`;
-    }
-    return null;
+  // First run - return minimal context with onboarding pointer
+  if (isFirstRun) {
+    if (forCompaction) return null;
+    
+    // Get the plugin's skill path for manual loading
+    // From dist/ -> opencode/ -> skills/
+    const skillPath = join(import.meta.dirname, "..", "skills", "onboarding", "SKILL.md");
+    
+    return `[MACRODATA]
+
+## Status: First Run
+
+Memory is not yet configured. Run onboarding to set up.
+
+**Onboarding skill:** \`${skillPath}\`
+
+Read the skill file above and follow the onboarding flow to help the user set up their memory.`;
   }
 
   const identity = readFileOrEmpty(identityPath);

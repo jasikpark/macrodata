@@ -10,7 +10,7 @@
 
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
 import type { Part } from "@opencode-ai/sdk";
-import { macrodataTool } from "./tools.js";
+import { memoryTools } from "./tools.js";
 import { formatContextForPrompt, getStateRoot } from "./context.js";
 import { logJournal } from "./journal.js";
 
@@ -110,10 +110,8 @@ export const MacrodataPlugin: Plugin = async (ctx: PluginInput) => {
       }
     },
 
-    // Provide the macrodata tool
-    tool: {
-      macrodata: macrodataTool,
-    },
+    // Provide memory tools
+    tool: memoryTools,
   };
 };
 
