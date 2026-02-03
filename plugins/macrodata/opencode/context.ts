@@ -8,6 +8,7 @@ import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, statSy
 
 import { join } from "path";
 import { getStateRoot, getJournalDir, getSchedulesFile } from "../src/config.js";
+import { detectUser } from "../src/detect-user.js";
 
 // Track lastmod times per session
 const sessionLastmod = new Map<string, Record<string, number>>();
@@ -203,13 +204,16 @@ export async function formatContextForPrompt(
   const identityPath = join(stateRoot, "state", "identity.md");
   const isFirstRun = !existsSync(identityPath);
 
-  // First run - return minimal context with onboarding pointer
+  // First run - return minimal context with onboarding pointer and detected user info
   if (isFirstRun) {
     if (forCompaction) return null;
     
     // Get the plugin's skill path for manual loading
     // Bun runs TS directly, so import.meta.dirname is the opencode/ folder
     const skillPath = join(import.meta.dirname, "skills", "onboarding", "SKILL.md");
+    
+    // Detect user info to avoid multiple permission prompts during onboarding
+    const userInfo = detectUser();
     
     return `[MACRODATA]
 
@@ -219,7 +223,15 @@ Memory is not yet configured. Run onboarding to set up.
 
 **Onboarding skill:** \`${skillPath}\`
 
-Read the skill file above and follow the onboarding flow to help the user set up their memory.`;
+Read the skill file above and follow the onboarding flow to help the user set up their memory.
+
+## Detected User Info
+
+\`\`\`json
+${JSON.stringify(userInfo, null, 2)}
+\`\`\`
+
+Use this pre-detected info during onboarding instead of running detection scripts.`;
   }
 
   const identity = readFileOrEmpty(identityPath);

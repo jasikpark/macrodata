@@ -1,9 +1,9 @@
 {
-  "name": "@macrodata/local",
+  "name": "@macrodata/opencode",
   "version": "0.1.0",
-  "description": "Local file-based memory for Claude Code",
+  "description": "Persistent local memory for AI coding agents - journal, semantic search, reminders, and context injection",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "opencode/index.ts",
   "scripts": {
     "start": "bun run src/index.ts",
     "daemon": "bun run bin/macrodata-daemon.ts",
@@ -12,8 +12,30 @@
     "lint:fix": "oxlint --fix",
     "format": "oxfmt"
   },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "memory",
+    "ai",
+    "coding-agent",
+    "local",
+    "journal",
+    "semantic-search"
+  ],
+  "author": "Matt Kane",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ascorbic/macrodata",
+    "directory": "plugins/macrodata"
+  },
+  "homepage": "https://github.com/ascorbic/macrodata#readme",
+  "bugs": {
+    "url": "https://github.com/ascorbic/macrodata/issues"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.1.0",
+    "@opencode-ai/plugin": "^1.0.162",
     "@xenova/transformers": "^2.17.2",
     "chokidar": "^4.0.3",
     "croner": "^9.0.0",
@@ -21,9 +43,23 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/bun": "latest",
     "bun-types": "^1.2.2",
     "oxfmt": "^0.27.0",
     "oxlint": "^1.0.0",
     "oxlint-tsgolint": "latest"
-  }
+  },
+  "opencode": {
+    "type": "plugin",
+    "hooks": [
+      "chat.message",
+      "experimental.session.compacting",
+      "tool.execute.before"
+    ]
+  },
+  "files": [
+    "opencode",
+    "src",
+    "bin"
+  ]
 }

@@ -144,12 +144,23 @@ inject_static_context() {
 
     # Check if this is first run (no identity file)
     if [ ! -f "$IDENTITY" ]; then
+        # Detect user info to avoid multiple permission prompts during onboarding
+        local USER_INFO=$("$SCRIPT_DIR/detect-user.sh" 2>/dev/null || echo '{}')
+        
         CONTEXT="<macrodata-local>
 ## First Run
 
 Macrodata local memory is not yet configured. Run \`/onboarding\` to set up.
 
 State directory: $STATE_ROOT
+
+## Detected User Info
+
+\`\`\`json
+$USER_INFO
+\`\`\`
+
+Use this pre-detected info during onboarding instead of running detection scripts.
 </macrodata-local>"
     else
         CONTEXT="<macrodata-local>

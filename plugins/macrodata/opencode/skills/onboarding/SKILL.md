@@ -16,19 +16,15 @@ Guide new users through initial macrodata setup.
 
 ## Onboarding Flow
 
-### Phase 1: Detect User Info
+### Phase 1: User Info
 
-Run the detection script once to gather all system info (single permission prompt):
-
-```bash
-./bin/detect-user.sh
-```
-
-This returns JSON with:
+User info has been pre-detected and is available in the context above as "Detected User Info". This JSON contains:
 - `username`, `fullName`, `timezone`
 - `git.name`, `git.email`
 - `github.login`, `github.name`, `github.blog`, `github.bio`
 - `codeDirs` - array of existing code directories
+
+Use this data throughout onboarding - no need to run detection scripts.
 
 ### Phase 2: Location
 
