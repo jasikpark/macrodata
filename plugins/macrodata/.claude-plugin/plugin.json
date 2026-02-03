@@ -1,7 +1,7 @@
 {
   "name": "macrodata",
-  "version": "0.1.0",
-  "description": "Local file-based memory for Claude Code. Zero infrastructure, fully offline, optional git tracking.",
+  "version": "0.0.0",
+  "description": "Stateful agent tools for Claude Code. Learns who you are, remembers what you're working on, schedules tasks, maintains itself.",
   "author": {
     "name": "Matt Kane",
     "url": "https://mk.gg"

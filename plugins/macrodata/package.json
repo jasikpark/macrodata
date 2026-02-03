@@ -1,7 +1,7 @@
 {
   "name": "@macrodata/opencode",
-  "version": "0.1.0",
-  "description": "Persistent local memory for AI coding agents - journal, semantic search, reminders, and context injection",
+  "version": "0.0.0",
+  "description": "Stateful agent tools for OpenCode. Learns who you are, remembers what you're working on, schedules tasks, maintains itself.",
   "type": "module",
   "main": "opencode/index.ts",
   "scripts": {
@@ -14,10 +14,11 @@
   },
   "keywords": [
     "opencode",
+    "claude-code",
     "plugin",
     "memory",
-    "ai",
-    "coding-agent",
+    "agent",
+    "autonomous",
     "local",
     "journal",
     "semantic-search"
