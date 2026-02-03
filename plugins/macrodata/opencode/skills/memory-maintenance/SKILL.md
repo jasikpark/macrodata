@@ -1,6 +1,6 @@
 ---
 name: memory-maintenance
-description: End of day memory maintenance. Review journals, update state files, prune stale info. Runs in background with no user interaction.
+description: End of day memory maintenance. Runs distillation, updates state files, prunes stale info. Runs in background with no user interaction.
 ---
 
 # Memory Maintenance
@@ -11,11 +11,24 @@ Scheduled maintenance to keep memory current and useful. Runs automatically at e
 
 ## Process
 
-### 1. Review Recent Activity
+### 1. Run Distillation
 
-Read the day's journal entries using the memory tools. Also check recent conversation summaries for context.
+First, run the `/distill` skill to extract facts from today's conversations.
 
-### 2. State File Updates
+This processes all OpenCode sessions, spawns sub-agents for extraction, and writes distilled actions to the journal.
+
+**Check if distill already ran today:**
+Use `get_recent_journal` and look for topic "distill-summary" from today.
+
+If not found, invoke `/distill`. If already ran, skip to step 2.
+
+### 2. Review Distilled Content
+
+Use `get_recent_journal` filtered to topic "distilled" to see what was extracted.
+
+Use these to inform state file updates.
+
+### 3. State File Updates
 
 Review each state file and update if needed:
 
@@ -25,28 +38,19 @@ Review each state file and update if needed:
 - Leave empty or minimal for morning prep to fill
 
 **workspace.md**
-- Update active projects list based on recent work
+- Update active projects list based on distilled actions
 - Add/remove open threads
 - Note any blocked items or waiting-on dependencies
 
 **human.md**
-- Any new preferences or patterns observed?
+- Any new preferences or patterns from distilled facts?
 - Communication style insights?
 - Only update if genuinely new information
-
-### 3. Topic Management
-
-Check `topics/` directory. For each active topic:
-- Is the information still current?
-- Should anything be added from today's work?
-- Any topics to archive or merge?
-
-Create new topic files if a subject came up repeatedly.
 
 ### 4. Entity Updates
 
 Review `entities/people/` and `entities/projects/`:
-- Any new information about people worked with?
+- Integrate any facts extracted by distillation
 - Project status changes?
 - New projects to create files for?
 
@@ -60,13 +64,26 @@ Look for outdated information:
 
 Remove or archive as appropriate.
 
-### 6. Journal Summary
+### 6. Index Maintenance
+
+Check if indexes need rebuilding:
+```
+manage_index(target="memory", action="stats")
+manage_index(target="conversations", action="stats")
+```
+
+If counts seem low or stale, trigger rebuild:
+```
+manage_index(target="memory", action="rebuild")
+manage_index(target="conversations", action="update")
+```
+
+### 7. Journal Summary
 
 Write a brief maintenance journal entry:
 
 ```
-topic: maintenance
-content: [what was updated, what was pruned, any observations]
+log_journal(topic="maintenance", content="[what was updated, what was pruned, any observations]")
 ```
 
 Note anything uncertain that should be confirmed with the user next session.
