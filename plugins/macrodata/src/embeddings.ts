@@ -35,7 +35,7 @@ async function getEmbeddingPipeline(): Promise<FeatureExtractionPipeline> {
 
   try {
     embeddingPipeline = await pipelineLoading;
-    console.error("[Embeddings] Model loaded successfully");
+    console.log("[Embeddings] Model loaded successfully");
     return embeddingPipeline;
   } finally {
     pipelineLoading = null;

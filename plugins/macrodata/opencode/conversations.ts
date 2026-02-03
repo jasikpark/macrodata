@@ -82,7 +82,7 @@ async function getConversationIndex(): Promise<LocalIndex> {
   convIndex = new LocalIndex(indexPath);
 
   if (!(await convIndex.isIndexCreated())) {
-    console.error("[Macrodata] Creating new conversation index...");
+    console.log("[Macrodata] Creating new conversation index...");
     await convIndex.createIndex();
   }
 
@@ -243,7 +243,7 @@ function* scanExchanges(): Generator<ConversationExchange> {
  * Rebuild conversation index
  */
 export async function rebuildConversationIndex(): Promise<{ exchangeCount: number }> {
-  console.error("[Macrodata] Rebuilding OpenCode conversation index...");
+  console.log("[Macrodata] Rebuilding OpenCode conversation index...");
   const startTime = Date.now();
 
   const exchanges: ConversationExchange[] = [];
@@ -251,7 +251,7 @@ export async function rebuildConversationIndex(): Promise<{ exchangeCount: numbe
     exchanges.push(exchange);
   }
 
-  console.error(`[Macrodata] Found ${exchanges.length} exchanges`);
+  console.log(`[Macrodata] Found ${exchanges.length} exchanges`);
 
   if (exchanges.length === 0) {
     return { exchangeCount: 0 };
@@ -259,7 +259,7 @@ export async function rebuildConversationIndex(): Promise<{ exchangeCount: numbe
 
   // Embed user prompts (what we search on)
   const texts = exchanges.map((e) => e.userPrompt);
-  console.error(`[Macrodata] Generating embeddings...`);
+  console.log(`[Macrodata] Generating embeddings...`);
   const vectors = await embedBatch(texts);
 
   const idx = await getConversationIndex();
@@ -282,7 +282,7 @@ export async function rebuildConversationIndex(): Promise<{ exchangeCount: numbe
   }
 
   const duration = Date.now() - startTime;
-  console.error(`[Macrodata] Conversation index rebuilt in ${duration}ms`);
+  console.log(`[Macrodata] Conversation index rebuilt in ${duration}ms`);
 
   return { exchangeCount: exchanges.length };
 }

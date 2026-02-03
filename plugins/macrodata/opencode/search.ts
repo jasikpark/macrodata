@@ -27,7 +27,7 @@ async function getEmbeddingPipeline(): Promise<FeatureExtractionPipeline> {
 
   try {
     embeddingPipeline = await pipelineLoading;
-    console.error("[Macrodata] Model loaded successfully");
+    console.log("[Macrodata] Model loaded successfully");
     return embeddingPipeline;
   } finally {
     pipelineLoading = null;
@@ -78,7 +78,7 @@ async function getMemoryIndex(): Promise<LocalIndex> {
   memoryIndex = new LocalIndex(indexPath);
 
   if (!(await memoryIndex.isIndexCreated())) {
-    console.error("[Macrodata] Creating new memory index...");
+    console.log("[Macrodata] Creating new memory index...");
     await memoryIndex.createIndex();
   }
 
@@ -146,7 +146,7 @@ export async function searchMemory(
  * Rebuild memory index from journal and entity files
  */
 export async function rebuildMemoryIndex(): Promise<{ itemCount: number }> {
-  console.error("[Macrodata] Rebuilding memory index...");
+  console.log("[Macrodata] Rebuilding memory index...");
   const startTime = Date.now();
   const stateRoot = getStateRoot();
 
@@ -264,7 +264,7 @@ export async function rebuildMemoryIndex(): Promise<{ itemCount: number }> {
   }
 
   // Generate embeddings
-  console.error(`[Macrodata] Generating embeddings for ${allItems.length} items...`);
+  console.log(`[Macrodata] Generating embeddings for ${allItems.length} items...`);
   const vectors = await embedBatch(allItems.map((i) => i.content));
 
   // Index all items
@@ -287,7 +287,7 @@ export async function rebuildMemoryIndex(): Promise<{ itemCount: number }> {
   }
 
   const duration = Date.now() - startTime;
-  console.error(`[Macrodata] Index rebuilt in ${duration}ms`);
+  console.log(`[Macrodata] Index rebuilt in ${duration}ms`);
 
   return { itemCount: allItems.length };
 }

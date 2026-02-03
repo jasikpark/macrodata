@@ -111,7 +111,7 @@ async function getConversationIndex(): Promise<LocalIndex> {
   convIndexPath = currentIndexPath;
 
   if (!(await convIndex.isIndexCreated())) {
-    console.error("[Conversations] Creating new conversation index...");
+    console.log("[Conversations] Creating new conversation index...");
     await convIndex.createIndex();
   }
 
@@ -338,7 +338,7 @@ function* scanConversationFiles(): Generator<{ filePath: string; projectPath: st
  * Rebuild the conversation index from scratch
  */
 export async function rebuildConversationIndex(): Promise<{ exchangeCount: number }> {
-  console.error("[Conversations] Starting full index rebuild...");
+  console.log("[Conversations] Starting full index rebuild...");
   const startTime = Date.now();
 
   const allExchanges: ConversationExchange[] = [];
@@ -353,7 +353,7 @@ export async function rebuildConversationIndex(): Promise<{ exchangeCount: numbe
     };
   }
 
-  console.error(`[Conversations] Found ${allExchanges.length} exchanges`);
+  console.log(`[Conversations] Found ${allExchanges.length} exchanges`);
 
   if (allExchanges.length === 0) {
     saveIndexState(newState);
@@ -365,7 +365,7 @@ export async function rebuildConversationIndex(): Promise<{ exchangeCount: numbe
     `${e.project}${e.branch ? ` (${e.branch})` : ""}: ${e.userPrompt}`
   );
 
-  console.error(`[Conversations] Generating embeddings...`);
+  console.log(`[Conversations] Generating embeddings...`);
   const vectors = await embedBatch(texts);
 
   const idx = await getConversationIndex();
@@ -393,7 +393,7 @@ export async function rebuildConversationIndex(): Promise<{ exchangeCount: numbe
   saveIndexState(newState);
 
   const duration = Date.now() - startTime;
-  console.error(`[Conversations] Full rebuild complete in ${duration}ms`);
+  console.log(`[Conversations] Full rebuild complete in ${duration}ms`);
 
   return { exchangeCount: allExchanges.length };
 }
@@ -402,7 +402,7 @@ export async function rebuildConversationIndex(): Promise<{ exchangeCount: numbe
  * Incrementally update the conversation index (only changed files)
  */
 export async function updateConversationIndex(): Promise<{ exchangeCount: number; filesUpdated: number; skipped: number }> {
-  console.error("[Conversations] Starting incremental update...");
+  console.log("[Conversations] Starting incremental update...");
   const startTime = Date.now();
 
   const state = loadIndexState();
@@ -410,7 +410,7 @@ export async function updateConversationIndex(): Promise<{ exchangeCount: number
 
   // Check if index exists - if not, do full rebuild
   if (!(await idx.isIndexCreated())) {
-    console.error("[Conversations] No existing index, doing full rebuild");
+    console.log("[Conversations] No existing index, doing full rebuild");
     const result = await rebuildConversationIndex();
     return { exchangeCount: result.exchangeCount, filesUpdated: 0, skipped: 0 };
   }
@@ -479,7 +479,7 @@ export async function updateConversationIndex(): Promise<{ exchangeCount: number
   saveIndexState(state);
 
   const duration = Date.now() - startTime;
-  console.error(`[Conversations] Incremental update complete in ${duration}ms (${filesUpdated} files updated, ${skipped} skipped)`);
+  console.log(`[Conversations] Incremental update complete in ${duration}ms (${filesUpdated} files updated, ${skipped} skipped)`);
 
   return { exchangeCount: totalExchanges, filesUpdated, skipped };
 }
@@ -516,7 +516,7 @@ export async function searchConversations(
   const stats = await idx.listItems();
   
   if (stats.length === 0) {
-    console.error("[Conversations] Index is empty");
+    console.log("[Conversations] Index is empty");
     return [];
   }
   

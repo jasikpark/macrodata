@@ -66,7 +66,7 @@ async function getIndex(): Promise<LocalIndex> {
 
   // Create if doesn't exist
   if (!(await index.isIndexCreated())) {
-    console.error("[Indexer] Creating new index...");
+    console.log("[Indexer] Creating new index...");
     await index.createIndex();
   }
 
@@ -139,7 +139,7 @@ export async function searchMemory(
   // Check if index has items
   const stats = await idx.listItems();
   if (stats.length === 0) {
-    console.error("[Indexer] Index is empty");
+    console.log("[Indexer] Index is empty");
     return [];
   }
 
@@ -267,29 +267,29 @@ function parseEntitiesForIndexing(subdir: "people" | "projects", type: MemoryIte
  * Rebuild the entire index from scratch
  */
 export async function rebuildIndex(): Promise<{ itemCount: number }> {
-  console.error("[Indexer] Starting full index rebuild...");
+  console.log("[Indexer] Starting full index rebuild...");
   const startTime = Date.now();
 
   const allItems: MemoryItem[] = [];
 
   // 1. Index journal entries
-  console.error("[Indexer] Parsing journal...");
+  console.log("[Indexer] Parsing journal...");
   allItems.push(...parseJournalForIndexing());
 
   // 2. Index people
-  console.error("[Indexer] Parsing people...");
+  console.log("[Indexer] Parsing people...");
   allItems.push(...parseEntitiesForIndexing("people", "person"));
 
   // 3. Index projects
-  console.error("[Indexer] Parsing projects...");
+  console.log("[Indexer] Parsing projects...");
   allItems.push(...parseEntitiesForIndexing("projects", "project"));
 
   // Index all items
-  console.error(`[Indexer] Indexing ${allItems.length} items...`);
+  console.log(`[Indexer] Indexing ${allItems.length} items...`);
   await indexItems(allItems);
 
   const duration = Date.now() - startTime;
-  console.error(`[Indexer] Index rebuild complete in ${duration}ms`);
+  console.log(`[Indexer] Index rebuild complete in ${duration}ms`);
 
   return { itemCount: allItems.length };
 }
@@ -377,7 +377,7 @@ export async function indexEntityFile(filePath: string): Promise<void> {
     }
 
     await indexItems(items);
-    console.error(`[Indexer] Indexed ${items.length} sections from ${basename(filePath)}`);
+    console.log(`[Indexer] Indexed ${items.length} sections from ${basename(filePath)}`);
   } catch (err) {
     console.error(`[Indexer] Failed to index ${filePath}: ${String(err)}`);
   }
