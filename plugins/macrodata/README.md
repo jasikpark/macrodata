@@ -55,7 +55,7 @@ Scheduled reflection that runs while you're away. Reviews recent activity, notic
 **~/.config/opencode/opencode.json:**
 ```json
 {
-  "plugins": ["@macrodata/opencode"]
+  "plugin": ["@macrodata/opencode"]
 }
 ```
 

@@ -64,7 +64,7 @@ The daemon is a simple cron runner that spawns Claude Code when reminders fire. 
 **~/.config/opencode/opencode.json:**
 ```json
 {
-  "plugins": ["@macrodata/opencode"]
+  "plugin": ["@macrodata/opencode"]
 }
 ```
 
