@@ -43,6 +43,12 @@ jobs:
         run: bun run check
         working-directory: plugins/macrodata
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: latest
+          registry-url: 'https://registry.npmjs.org'
+
       - name: Create Release Pull Request or Publish to npm
         id: changesets
         uses: changesets/action@v1
