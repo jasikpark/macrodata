@@ -53,8 +53,7 @@
     "type": "plugin",
     "hooks": [
       "chat.message",
-      "experimental.session.compacting",
-      "tool.execute.before"
+      "experimental.session.compacting"
     ]
   },
   "files": [

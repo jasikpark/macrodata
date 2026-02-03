@@ -15,7 +15,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { memoryTools } from "./tools.js";
 import { formatContextForPrompt, storeLastmod, checkFilesChanged } from "./context.js";
-import { logJournal } from "./journal.js";
+
 
 /**
  * Install plugin skills to ~/.config/opencode/skills/
@@ -106,44 +106,6 @@ export const MacrodataPlugin: Plugin = async (_ctx: PluginInput) => {
         }
       } catch (err) {
         console.error(`[Macrodata] Compaction hook error: ${String(err)}`);
-      }
-    },
-
-    // Auto-journal git commands and file changes
-    // Use tool.execute.before to capture args before execution
-    "tool.execute.before": async (input, output) => {
-      try {
-        const args = output.args as Record<string, unknown>;
-
-        // Log git commands
-        if (input.tool === "bash") {
-          const command = (args?.command as string) || "";
-
-          // Only log significant git commands
-          if (
-            /^git (commit|push|pull|merge|rebase|checkout -b|branch -[dD])/.test(
-              command
-            )
-          ) {
-            await logJournal("git", `Command: ${command}`);
-          }
-        }
-
-        // Log file changes (but not too verbosely)
-        if (input.tool === "write" || input.tool === "edit") {
-          const filePath = (args?.filePath as string) || (args?.file_path as string) || "";
-
-          // Skip temp files, node_modules, etc.
-          if (
-            filePath &&
-            !/node_modules|\.tmp|\.cache|__pycache__|\.git\//.test(filePath)
-          ) {
-            await logJournal("file-change", `${input.tool}: ${filePath}`);
-          }
-        }
-      } catch (err) {
-        // Don't let journaling errors break the flow
-        console.error(`[Macrodata] Auto-journal error: ${String(err)}`);
       }
     },
 
