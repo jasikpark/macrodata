@@ -1,21 +1,46 @@
 # Macrodata
 
-A Claude Code and OpenCode plugin that gives it the tools of a stateful agent, packaged so you can still use it for normal work.
+A Claude Code and OpenCode plugin that gives it the tools of a stateful agent, packaged so you can still use it for normal work. Work in Claude Code or OpenCode as you normally would and Macrodata quietly adds useful context and powerful memory and autonomy features.
 
-- **Layered memory** - identity, journal, semantic search across sessions
-- **Scheduling and autonomy** - background tasks, morning prep, maintenance
+- **Layered memory** - identity, journal, topics, semantic search across sessions
+- **Scheduling and autonomy** - recurring background tasks, reminders, morning prep, self-maintenance
+- **Memory distillation** - consolidates learnings into structured knowledge
 - **Dream time** - overnight reflection, pattern recognition, self-improvement
+- **Uses your existing tools** – no new APIs or third-party skills needed, but if you have them, it can use them.
 - **No security nightmares** - runs with your existing tools and security rules. No external APIs or third-party skills. Memory stays in local files.
 
-Local-first. Everything stored as markdown you can read and edit.
+Local-only. Everything stored as markdown and JSON you can read and edit.
 
 ## What It Does
 
-Remembers who you are, what you're working on, what happened yesterday. Schedules tasks to run while you sleep. Reflects on its own patterns and improves itself.
+Learns and remembers who you are, what you're working on, and how you like to work. Analyses your past conversations to build context. Puts working memory into every session so you never start from scratch.
 
-Works inside your normal coding workflow. No separate agent system to run, no new interface to learn. Open Claude Code, do your work, close it. The memory persists.
+### Working Memory
 
-Most memory plugins store and retrieve context. This one has agency - it runs tasks on a schedule, maintains itself, and evolves over time.
+Every session starts with context injection - your identity, current projects, daily focus, and recent activity. The agent knows who you are before you type anything.
+
+State files track what matters right now:
+- **identity.md** - how the agent should behave with you
+- **human.md** - who you are, your preferences, your projects
+- **today.md** - daily focus and priorities
+- **workspace.md** - current project context
+- **topics** - working knowledge the agent has built up
+
+### Journals
+
+Observations, decisions, and learnings get logged to a searchable journal. Semantic search finds relevant context across all your history - journal entries, entity files, and past conversations.
+
+### Conversation Analysis
+
+Indexes your past Claude Code and OpenCode sessions. When you're stuck on something similar to before, it finds and retrieves the relevant context from previous conversations.
+
+### Distillation
+
+Periodically consolidates scattered learnings into structured knowledge. Patterns noticed across conversations become permanent understanding in your state files.
+
+### Dream Time
+
+Scheduled reflection that runs while you're away. Reviews recent activity, notices patterns, updates state files, and prepares for tomorrow. Researches best practices. The agent maintains itself.
 
 ## Security
 
@@ -25,7 +50,7 @@ Macrodata runs inside Claude Code's existing permission model. It uses only the 
 
 The daemon is a simple cron runner that spawns Claude Code when reminders fire. All state is local markdown files. Nothing phones home.
 
-## Quick Start
+## Installation
 
 ### Claude Code
 
@@ -34,77 +59,16 @@ The daemon is a simple cron runner that spawns Claude Code when reminders fire. 
 /plugin install macrodata@macrodata
 ```
 
-First run guides you through setup.
-
 ### OpenCode
 
-```bash
-bun add opencode-macrodata
-```
-
-**opencode.json:**
+**~/.config/opencode/opencode.json:**
 ```json
 {
-  "plugin": ["opencode-macrodata"]
+  "plugins": ["@macrodata/opencode"]
 }
 ```
 
-## Features
-
-**Memory:**
-- Identity and preferences persist across sessions
-- Journal for observations, decisions, learnings
-- Semantic search across everything
-- Session summaries for context recovery
-
-**Scheduling:**
-- Cron-based recurring reminders
-- One-shot scheduled tasks
-- Background daemon
-
-**Autonomy:**
-- Morning prep to set daily focus
-- Memory maintenance to clean up and consolidate
-- Dream time for reflection and self-improvement
-
-## State Directory
-
-Human-readable markdown and JSONL:
-
-```
-~/.config/macrodata/
-├── identity.md           # Agent persona
-├── state/
-│   ├── human.md          # Your profile
-│   ├── today.md          # Daily focus
-│   └── workspace.md      # Current context
-├── entities/
-│   ├── people/           # One file per person
-│   └── projects/         # One file per project
-├── journal/              # JSONL, date-partitioned
-└── .schedules.json       # Active reminders
-```
-
-## Configuration
-
-State directory: `~/.claude/macrodata.json` (Claude Code) or `~/.config/opencode/macrodata.json` (OpenCode):
-
-```json
-{
-  "root": "/path/to/your/state"
-}
-```
-
-Or `MACRODATA_ROOT` env var. Default: `~/.config/macrodata`
-
-## Development
-
-```bash
-git clone https://github.com/ascorbic/macrodata
-cd macrodata/plugins/macrodata
-bun install
-bun run start
-```
+Launch the app and ask to set up Macrodata.
 
 ## License
 
