@@ -1,18 +1,20 @@
 # Macrodata
 
-Give Claude Code (or OpenCode) the powers of a stateful agent, packaged as a regular plugin you can use for normal work.
+Stateful agent capabilities for Claude Code and OpenCode, packaged as a regular plugin.
 
-- **Layered memory** - sure, plenty have done it
-- **Scheduling and autonomy** - a bit less common
-- **Dream time** - to think about the nature of memory and identity, and rewrite its own code
+- **Layered memory** - others have done this
+- **Scheduling and autonomy** - less common
+- **Dream time** - reflects on memory and identity, rewrites its own code
 
-All local, all yours. Everything stored as markdown files you can read and edit.
+Local-first. Everything stored as markdown you can read and edit.
 
 ## What It Does
 
-The agent remembers who you are, what you're working on, and what happened yesterday. It can schedule tasks to run while you sleep. It reflects on its own patterns and improves itself.
+Remembers who you are, what you're working on, what happened yesterday. Schedules tasks to run while you sleep. Reflects on its own patterns and improves itself.
 
-Basically: stateful agent capabilities, but you can still just ask it to fix a bug like normal.
+Works inside your normal coding workflow. No separate agent system to run, no new interface to learn. Open Claude Code, do your work, close it. The memory persists.
+
+Most memory plugins store and retrieve context. This one has agency - it runs tasks on a schedule, maintains itself, and evolves over time.
 
 ## Quick Start
 
@@ -23,7 +25,7 @@ Basically: stateful agent capabilities, but you can still just ask it to fix a b
 /plugin install macrodata@macrodata
 ```
 
-On first run, the agent guides you through setup - who you are, how you work, what you want it to remember.
+First run guides you through setup.
 
 ### OpenCode
 
@@ -41,7 +43,7 @@ bun add opencode-macrodata
 ## Features
 
 **Memory:**
-- Identity and preferences that persist across sessions
+- Identity and preferences persist across sessions
 - Journal for observations, decisions, learnings
 - Semantic search across everything
 - Session summaries for context recovery
@@ -49,10 +51,10 @@ bun add opencode-macrodata
 **Scheduling:**
 - Cron-based recurring reminders
 - One-shot scheduled tasks
-- Background daemon keeps things running
+- Background daemon
 
 **Autonomy:**
-- Morning prep to set the day's focus
+- Morning prep to set daily focus
 - Memory maintenance to clean up and consolidate
 - Dream time for reflection and self-improvement
 
@@ -76,7 +78,7 @@ Human-readable markdown and JSONL:
 
 ## Configuration
 
-Set your state directory in `~/.claude/macrodata.json` (Claude Code) or `~/.config/opencode/macrodata.json` (OpenCode):
+State directory: `~/.claude/macrodata.json` (Claude Code) or `~/.config/opencode/macrodata.json` (OpenCode):
 
 ```json
 {
@@ -84,7 +86,7 @@ Set your state directory in `~/.claude/macrodata.json` (Claude Code) or `~/.conf
 }
 ```
 
-Or use `MACRODATA_ROOT` env var. Default: `~/.config/macrodata`
+Or `MACRODATA_ROOT` env var. Default: `~/.config/macrodata`
 
 ## Development
 
