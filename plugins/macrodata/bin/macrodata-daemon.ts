@@ -305,6 +305,10 @@ class MacrodataLocalDaemon {
       if (!path.endsWith(".json")) return;
       log(`Reminder added: ${basename(path)}`);
       this.reloadSchedules();
+      try {
+        const schedule = JSON.parse(readFileSync(path, "utf-8")) as Schedule;
+        writePendingContext(`[macrodata] Schedule added: ${schedule.id} - ${schedule.description}`);
+      } catch {}
     });
 
     this.schedulesWatcher.on("error", (err) => {
@@ -315,12 +319,17 @@ class MacrodataLocalDaemon {
       if (!path.endsWith(".json")) return;
       log(`Reminder changed: ${basename(path)}`);
       this.reloadSchedules();
+      try {
+        const schedule = JSON.parse(readFileSync(path, "utf-8")) as Schedule;
+        writePendingContext(`[macrodata] Schedule updated: ${schedule.id} - ${schedule.description}`);
+      } catch {}
     });
 
     this.schedulesWatcher.on("unlink", (path) => {
       if (!path.endsWith(".json")) return;
-      log(`Reminder removed: ${basename(path)}`);
       const id = basename(path, ".json");
+      log(`Reminder removed: ${id}`);
+      writePendingContext(`[macrodata] Schedule removed: ${id}`);
       const job = this.cronJobs.get(id);
       if (job) {
         job.stop();
