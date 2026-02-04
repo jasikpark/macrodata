@@ -52,7 +52,7 @@ Use `log_journal(topic, content)` for observations that don't need their own fil
 **Topic** is a short category tag. Content is the observation.
 
 ### Search
-Use `search_memory` to find relevant context from entities and journal. Search before claiming you don't know something - it might be in your memory.
+Use `search_memory` to find relevant context from entities and journal. Search before claiming you don't know something - it might be in your memory. If you get stuck with a problem, search for similar past problems and how you solved them.
 
 ### Quick Reference
 | What you have | Where it goes |
