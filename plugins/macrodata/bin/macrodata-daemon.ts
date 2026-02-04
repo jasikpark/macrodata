@@ -16,7 +16,6 @@
 import { watch } from "chokidar";
 import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { join, basename } from "path";
-import { homedir } from "os";
 import { Cron } from "croner";
 import { spawn, execSync } from "child_process";
 import { indexEntityFile, preloadModel } from "../src/indexer.js";
@@ -37,14 +36,17 @@ async function findExecutable(name: string): Promise<string | null> {
 }
 
 // Daemon-specific path helpers
-const DAEMON_DIR = join(homedir(), ".config", "macrodata");
+// Use MACRODATA_ROOT for all daemon files (PID, log) to support testing with isolated directories
+function getDaemonDir() {
+  return getStateRoot();
+}
 
 function getPidFile() {
-  return join(DAEMON_DIR, ".daemon.pid");
+  return join(getDaemonDir(), ".daemon.pid");
 }
 
 function getLogFile() {
-  return join(DAEMON_DIR, ".daemon.log");
+  return join(getDaemonDir(), ".daemon.log");
 }
 
 function getPendingContext() {
@@ -158,7 +160,7 @@ function writePendingContext(message: string) {
 
 function ensureDirectories() {
   const entitiesDir = getEntitiesDir();
-  const dirs = [DAEMON_DIR, getStateRoot(), getIndexDir(), entitiesDir, getJournalDir(), getRemindersDir(), join(entitiesDir, "people"), join(entitiesDir, "projects")];
+  const dirs = [getDaemonDir(), getStateRoot(), getIndexDir(), entitiesDir, getJournalDir(), getRemindersDir(), join(entitiesDir, "people"), join(entitiesDir, "projects")];
   for (const dir of dirs) {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
@@ -175,7 +177,7 @@ async function updateAllConversationIndexes() {
       log(`Claude Code conversations: +${claude.filesUpdated} files (${claude.exchangeCount} total)`);
     }
   } catch (err) {
-    logError(`Claude Code conversation index failed: ${err}`);
+    logError(`Claude Code conversation index failed: ${String(err)}`);
   }
 
   // Update OpenCode conversations
@@ -185,7 +187,7 @@ async function updateAllConversationIndexes() {
       log(`OpenCode conversations: +${opencode.newCount} (${opencode.totalCount} total)`);
     }
   } catch (err) {
-    logError(`OpenCode conversation index failed: ${err}`);
+    logError(`OpenCode conversation index failed: ${String(err)}`);
   }
 }
 
