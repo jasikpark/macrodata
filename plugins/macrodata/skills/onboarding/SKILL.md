@@ -283,7 +283,7 @@ Use `AskUserQuestion` to offer optional scheduled reminders. These run in the ba
 
 3. **Dreamtime** (daily, 2am) - Deep nightly reflection. Self-improvement, research, pattern recognition. Runs the `/dreamtime` skill.
 
-For each selected reminder, use the `schedule` tool to create it:
+For each selected reminder, use the `schedule` tool to create it. **Important:** For deep thinking tasks (dreamtime, memory maintenance), specify a capable model using the `model` parameter. Choose a model appropriate for reflection and reasoning - the user's most capable available model is best for these tasks.
 
 ```
 Morning prep:
@@ -292,6 +292,7 @@ Morning prep:
 - expression: 0 9 * * *
 - description: Morning prep - update today.md
 - payload: Review today.md. What's the focus for today? Any carryover from yesterday? Check if any calendar, email, or task tools are available and use them to see what's planned. Keep it brief.
+- model: (optional - default is fine for quick tasks)
 
 Memory maintenance:
 - id: memory-maintenance
@@ -299,6 +300,7 @@ Memory maintenance:
 - expression: 0 18 * * *
 - description: End of day memory maintenance
 - payload: Run the memory-maintenance skill.
+- model: (use a capable model for reflection tasks)
 
 Dreamtime:
 - id: dreamtime
@@ -306,6 +308,7 @@ Dreamtime:
 - expression: 0 2 * * *
 - description: Nightly reflection and self-improvement
 - payload: Run the dreamtime skill.
+- model: (use the most capable available model for deep thinking)
 ```
 
 ### Phase 8: Finalize

@@ -138,6 +138,7 @@ function getSchedules(): Schedule[] {
 
 interface FormatOptions {
   forCompaction?: boolean;
+  client?: { config: { providers: () => Promise<{ data?: { providers?: Array<{ id: string; models?: Record<string, unknown> }> } }> } };
 }
 
 /**
@@ -146,7 +147,7 @@ interface FormatOptions {
 export async function formatContextForPrompt(
   options: FormatOptions = {}
 ): Promise<string | null> {
-  const { forCompaction = false } = options;
+  const { forCompaction = false, client } = options;
   const stateRoot = getStateRoot();
   const identityPath = join(stateRoot, "state", "identity.md");
   const isFirstRun = !existsSync(identityPath);
@@ -251,6 +252,55 @@ Use this pre-detected info during onboarding instead of running detection script
     sections.push(
       `<macrodata-files root="${stateRoot}">\n${filesFormatted}\n</macrodata-files>`
     );
+
+    // Fetch available models for scheduling tools
+    if (client) {
+      try {
+        const { data } = await client.config.providers();
+        if (data?.providers) {
+          // Collect all models with toolcall capability, excluding dated versions
+          type ModelInfo = { 
+            id: string; 
+            family?: string; 
+            release_date?: string;
+            capabilities?: { toolcall?: boolean };
+          };
+          const allModels: { fullId: string; family: string; releaseDate: string }[] = [];
+          
+          for (const provider of data.providers) {
+            if (provider.models) {
+              for (const [modelId, model] of Object.entries(provider.models)) {
+                const m = model as ModelInfo;
+                // Skip dated versions and models without toolcall
+                if (/-\d{8}$/.test(modelId) || !m.capabilities?.toolcall) continue;
+                
+                allModels.push({
+                  fullId: `${provider.id}/${modelId}`,
+                  family: m.family || `${provider.id}/${modelId}`,
+                  releaseDate: m.release_date || "1970-01-01",
+                });
+              }
+            }
+          }
+          
+          // Group by family and pick latest per family
+          const byFamily = new Map<string, typeof allModels[0]>();
+          for (const model of allModels) {
+            const existing = byFamily.get(model.family);
+            if (!existing || model.releaseDate > existing.releaseDate) {
+              byFamily.set(model.family, model);
+            }
+          }
+          
+          const models = Array.from(byFamily.values()).map(m => m.fullId).sort();
+          if (models.length > 0) {
+            sections.push(`<macrodata-models>\nAvailable models for scheduling: ${models.join(", ")}\n</macrodata-models>`);
+          }
+        }
+      } catch {
+        // Ignore - models just won't be in context
+      }
+    }
   }
 
   return `<macrodata>\n${sections.join("\n\n")}\n</macrodata>`;

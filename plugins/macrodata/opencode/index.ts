@@ -128,7 +128,7 @@ function installSkills(): void {
 // Track which sessions have had initial context injected
 const injectedSessions = new Set<string>();
 
-export const MacrodataPlugin: Plugin = async (_ctx: PluginInput) => {
+export const MacrodataPlugin: Plugin = async (ctx: PluginInput) => {
   // Initialize state directories
   initializeStateRoot();
 
@@ -165,7 +165,7 @@ export const MacrodataPlugin: Plugin = async (_ctx: PluginInput) => {
         injectedSessions.add(input.sessionID);
 
         try {
-          const memoryContext = await formatContextForPrompt();
+          const memoryContext = await formatContextForPrompt({ client: ctx.client });
 
           if (memoryContext) {
             const contextPart: Part = {

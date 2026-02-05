@@ -289,7 +289,7 @@ export const scheduleReminderTool = tool({
     cronExpression: tool.schema.string().describe("Cron expression (e.g., '0 9 * * *' for 9am daily)"),
     description: tool.schema.string().describe("What this reminder is for"),
     payload: tool.schema.string().describe("Message to process when reminder fires"),
-    model: tool.schema.string().optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-5' for deep thinking tasks)"),
+    model: tool.schema.string().optional().describe("Model to use for this reminder (see macrodata-models in context for available options)"),
   },
   async execute(args) {
     if (!args.id || !args.cronExpression || !args.description || !args.payload) {
@@ -311,7 +311,7 @@ export const scheduleReminderTool = tool({
 
     return JSON.stringify({
       success: true,
-      message: `Created recurring reminder: ${args.id} (${args.cronExpression})`,
+      message: `Created recurring reminder: ${args.id} (${args.cronExpression})${args.model ? ` with model ${args.model}` : ""}`,
     });
   },
 });
@@ -323,7 +323,7 @@ export const scheduleOnceTool = tool({
     datetime: tool.schema.string().describe("ISO 8601 datetime (e.g., '2026-01-06T10:00:00')"),
     description: tool.schema.string().describe("What this reminder is for"),
     payload: tool.schema.string().describe("Message to process when reminder fires"),
-    model: tool.schema.string().optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-5' for deep thinking tasks)"),
+    model: tool.schema.string().optional().describe("Model to use for this reminder (see macrodata-models in context for available options)"),
   },
   async execute(args) {
     if (!args.id || !args.datetime || !args.description || !args.payload) {
@@ -345,7 +345,7 @@ export const scheduleOnceTool = tool({
 
     return JSON.stringify({
       success: true,
-      message: `Scheduled one-shot reminder: ${args.id} at ${args.datetime}`,
+      message: `Scheduled one-shot reminder: ${args.id} at ${args.datetime}${args.model ? ` with model ${args.model}` : ""}`,
     });
   },
 });
