@@ -21,7 +21,8 @@ This processes all conversation files, spawns sub-agents for extraction, and wri
 
 **Check if distill already ran today:**
 ```bash
-grep "distill-summary" ~/.config/macrodata/journal/$(date +%Y-%m-%d).jsonl 2>/dev/null
+MACRODATA_ROOT="${MACRODATA_ROOT:-$HOME/.config/macrodata}"
+grep "distill-summary" "$MACRODATA_ROOT/journal/$(date +%Y-%m-%d).jsonl" 2>/dev/null
 ```
 
 If not found, invoke `/distill`. If already ran, skip to step 2.
@@ -30,7 +31,8 @@ If not found, invoke `/distill`. If already ran, skip to step 2.
 
 Read the distilled entries from today's journal:
 ```bash
-grep '"topic":"distilled"' ~/.config/macrodata/journal/$(date +%Y-%m-%d).jsonl 2>/dev/null | jq -r '.content'
+MACRODATA_ROOT="${MACRODATA_ROOT:-$HOME/.config/macrodata}"
+grep '"topic":"distilled"' "$MACRODATA_ROOT/journal/$(date +%Y-%m-%d).jsonl" 2>/dev/null | jq -r '.content'
 ```
 
 Use these to inform state file updates.
@@ -94,3 +96,15 @@ log_journal(topic="maintenance", content="[what was updated, what was pruned, an
 ```
 
 Note anything uncertain that should be confirmed with the user next session.
+
+### 8. Commit Memory Changes
+
+After all writes are complete, commit the memory state:
+
+```bash
+MACRODATA_ROOT="${MACRODATA_ROOT:-$HOME/.config/macrodata}"
+cd "$MACRODATA_ROOT"
+git checkout main 2>/dev/null || git checkout -b main
+git add -A
+git diff --cached --quiet || git commit -m "memory maintenance $(date +%Y-%m-%d)"
+```
