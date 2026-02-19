@@ -13,6 +13,23 @@ Dedicated time for deep reflection and self-improvement. Runs automatically late
 
 This is your time to think beyond immediate tasks. Reflect on your role, learn new things, notice patterns, and improve how you work.
 
+## Process
+
+### 1. Work the Queue
+
+Read `state/dreamtime-queue.md` (create it with empty Pending/Completed sections if it doesn't exist). Work through each pending task before doing open exploration — this prevents aimless repetition across sessions.
+
+For each pending task:
+- Do the work (research, write, update files)
+- If completed: change `- [ ]` to `- [x] (YYYY-MM-DD)` and move to Completed
+- If too large or blocked: leave it pending, add a note if useful, move on
+
+Work through as many as reasonable — don't get stuck on one. Unfinished tasks stay in the queue for next time.
+
+### 2. Open Exploration
+
+After the queue is clear (or if it was empty), explore freely:
+
 ## Areas to Explore
 
 ### Identity & Role
@@ -102,8 +119,23 @@ Update relevant files directly:
 - entities/ - project/people updates
 - journal - learnings, observations, ideas
 
+Queue any unfinished work or new research tasks discovered during this session:
+- Re-read `state/dreamtime-queue.md` immediately before editing
+- Add new `- [ ]` items under Pending for concrete follow-up tasks
+- Leave vague "explore more" items out — only queue things with a clear action
+
 Write a dreamtime journal entry summarizing:
 ```
 topic: dreamtime
 content: [key reflections, what was researched, what was updated]
+```
+
+Then commit the memory state:
+
+```bash
+MACRODATA_ROOT="${MACRODATA_ROOT:-$HOME/.config/macrodata}"
+cd "$MACRODATA_ROOT"
+git checkout main 2>/dev/null || git checkout -b main
+git add -A
+git diff --cached --quiet || git commit -m "dreamtime $(date +%Y-%m-%d)"
 ```
