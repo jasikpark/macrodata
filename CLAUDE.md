@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 macrodata/
 └── plugins/
-    └── local/                  # Local file-based memory plugin
+    └── macrodata/              # Local file-based memory plugin
         ├── .claude-plugin/     # Plugin metadata
         ├── bin/                # Daemon and hook scripts
         ├── skills/             # Plugin skills (e.g., onboarding)
@@ -33,7 +33,7 @@ Macrodata provides persistent memory for AI coding agents. File-based, fully off
 **Source** (`plugins/macrodata/`):
 - `src/index.ts` - MCP server with 11 tools (log_journal, search_memory, etc.)
 - `src/indexer.ts` - Vectra-based vector index for semantic search
-- `src/embeddings.ts` - Transformers.js embedding generation (BGE model)
+- `src/embeddings.ts` - Transformers.js embedding generation (Xenova/all-MiniLM-L6-v2)
 - `bin/macrodata-daemon.ts` - Background daemon for scheduled reminders
 
 **Storage** (default `~/.config/macrodata/`):
