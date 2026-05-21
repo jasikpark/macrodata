@@ -32,6 +32,15 @@
 						"command": "${CLAUDE_PLUGIN_ROOT}/bin/macrodata-hook.sh prompt-submit"
 					}
 				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/ambient-memory.ts",
+						"timeout": 10
+					}
+				]
 			}
 		],
 		"SessionEnd": [
