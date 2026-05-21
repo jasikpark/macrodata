@@ -67,7 +67,8 @@
 			"args": [
 				"run",
 				"${CLAUDE_PLUGIN_ROOT}/src/index.ts"
-			]
+			],
+			"alwaysLoad": true
 		}
 	}
 }
