@@ -34,6 +34,12 @@ export interface SearchResult {
   timestamp?: string;
   type: MemoryItemType;
   score: number;
+  // Cross-encoder score (sigmoid'd to [0, 1]). Present only when rerank was on.
+  // When set, `score` is replaced with this value so downstream sorting/floors
+  // operate on the reranker's verdict; `vectorScore` preserves the original
+  // bi-encoder cosine for inspection.
+  rerankScore?: number;
+  vectorScore?: number;
 }
 
 // Cached index instance with path tracking
@@ -131,9 +137,11 @@ export async function searchMemory(
     limit?: number;
     type?: MemoryItemType;
     since?: string;
+    rerank?: boolean;
+    candidateK?: number;
   } = {}
 ): Promise<SearchResult[]> {
-  const { limit = 5, type, since } = options;
+  const { limit = 5, type, since, rerank: doRerank = false, candidateK } = options;
   const idx = await getIndex();
 
   // Check if index has items
@@ -143,8 +151,13 @@ export async function searchMemory(
     return [];
   }
 
+  // With rerank on, fetch a wider slate so the cross-encoder has room to
+  // promote items the bi-encoder ranked modestly. Without rerank, keep the
+  // existing 2x oversampling that lets type/since filters still satisfy limit.
+  const fetchK = doRerank ? (candidateK ?? Math.max(20, limit * 4)) : limit * 2;
+
   const queryVector = await embed(query);
-  const results = await idx.queryItems(queryVector, limit * 2);
+  const results = await idx.queryItems(queryVector, fetchK);
 
   // Filter results if type or since specified
   let filtered = results;
@@ -157,7 +170,7 @@ export async function searchMemory(
     });
   }
 
-  return filtered.slice(0, limit).map((r) => {
+  const mapped: SearchResult[] = filtered.map((r) => {
     const meta = r.item.metadata as Record<string, unknown>;
     return {
       content: meta.content as string,
@@ -168,6 +181,22 @@ export async function searchMemory(
       score: r.score,
     };
   });
+
+  if (doRerank && mapped.length > 1) {
+    const { rerank } = await import("./rerank.js");
+    const ceScores = await rerank(query, mapped.map((m) => m.content));
+    return mapped
+      .map((m, i) => ({
+        ...m,
+        vectorScore: m.score,
+        rerankScore: ceScores[i],
+        score: ceScores[i],
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
+  return mapped.slice(0, limit);
 }
 
 /**

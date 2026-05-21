@@ -208,6 +208,101 @@ Loves systems programming and performance optimization.
     });
   });
 
+  describe("rerank", () => {
+    // These tests load a second model (Xenova/ms-marco-MiniLM-L-6-v2) on
+    // first invocation; raise the timeout accordingly. Once loaded, the
+    // singleton is reused across cases in this block.
+    const RERANK_TIMEOUT = 120000;
+
+    async function seedAdversarialIndex() {
+      // Four docs chosen so the bi-encoder favorite (high lexical overlap with
+      // "Linux kernel" and "language") and the cross-encoder favorite (the
+      // doc that actually answers the question) are likely to differ.
+      addJournalEntry(
+        ctx,
+        "noise-overlap",
+        "Linux is a popular open-source operating system kernel widely used in servers and embedded systems",
+      );
+      addJournalEntry(
+        ctx,
+        "answer",
+        "The Linux kernel is written primarily in C with some assembly language for low-level routines",
+      );
+      addJournalEntry(
+        ctx,
+        "unrelated-language",
+        "Programming languages like Python and Java are popular for web development",
+      );
+      addJournalEntry(
+        ctx,
+        "kernel-no-language",
+        "The kernel manages hardware resources and provides system call interfaces to user space",
+      );
+      await indexer!.rebuildIndex();
+    }
+
+    test(
+      "populates rerankScore and vectorScore and sorts by rerankScore",
+      async () => {
+        await seedAdversarialIndex();
+
+        const reranked = await indexer!.searchMemory(
+          "What language is the Linux kernel written in?",
+          { limit: 3, rerank: true },
+        );
+
+        expect(reranked.length).toBeGreaterThan(0);
+
+        for (const r of reranked) {
+          expect(r.rerankScore).toBeDefined();
+          expect(r.vectorScore).toBeDefined();
+          expect(r.rerankScore).toBeGreaterThanOrEqual(0);
+          expect(r.rerankScore).toBeLessThanOrEqual(1);
+          expect(r.score).toBe(r.rerankScore!);
+        }
+
+        for (let i = 1; i < reranked.length; i++) {
+          expect(reranked[i - 1].score).toBeGreaterThanOrEqual(reranked[i].score);
+        }
+      },
+      RERANK_TIMEOUT,
+    );
+
+    test(
+      "omits rerankScore/vectorScore when rerank is off",
+      async () => {
+        await seedAdversarialIndex();
+
+        const vectorOnly = await indexer!.searchMemory(
+          "What language is the Linux kernel written in?",
+          { limit: 3 },
+        );
+
+        expect(vectorOnly.length).toBeGreaterThan(0);
+        for (const r of vectorOnly) {
+          expect(r.rerankScore).toBeUndefined();
+          expect(r.vectorScore).toBeUndefined();
+        }
+      },
+      RERANK_TIMEOUT,
+    );
+
+    test(
+      "ranks the answer-bearing doc first after rerank",
+      async () => {
+        await seedAdversarialIndex();
+
+        const reranked = await indexer!.searchMemory(
+          "What language is the Linux kernel written in?",
+          { limit: 3, rerank: true },
+        );
+
+        expect(reranked[0].content).toContain("written primarily in C");
+      },
+      RERANK_TIMEOUT,
+    );
+  });
+
   describe("indexEntityFile", () => {
     test("indexes a single entity file", async () => {
       const filePath = join(ctx.entitiesDir, "people", "charlie.md");
