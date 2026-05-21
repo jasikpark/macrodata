@@ -45,6 +45,9 @@
     "vectra": "^0.9.0",
     "zod": "^3.24.1"
   },
+  "trustedDependencies": [
+    "sharp"
+  ],
   "devDependencies": {
     "@types/bun": "latest",
     "bun-types": "^1.2.2",
