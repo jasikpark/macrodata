@@ -52,7 +52,11 @@ Use `log_journal(topic, content)` for observations that don't need their own fil
 **Topic** is a short category tag. Content is the observation.
 
 ### Search
-Use `search_memory` to find relevant context from entities and journal. Search before claiming you don't know something - it might be in your memory. If you get stuck with a problem, search for similar past problems and how you solved them.
+If you think relevant context might exist in memory, search before starting — not only after you get stuck. When a task touches a project, person, or topic that sounds familiar, check. Entity files listed in `macrodata-files` are not loaded automatically; read the ones that are relevant.
+
+Be judicious: the state files cover most everyday context. Search when it would meaningfully change your approach, not as a reflex. Pulling in content you don't need wastes context.
+
+Use `search_memory` to find relevant context from entities and journal. Search before claiming you don't know something - it might be in your memory. If you get stuck with a problem, search for similar past problems and how you solved them. Use `search_conversations` to find how similar problems were solved in past sessions.
 
 ### Quick Reference
 | What you have | Where it goes |
