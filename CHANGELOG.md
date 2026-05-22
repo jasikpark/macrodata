@@ -8,6 +8,16 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-05-22
+
+### Added
+
+- New `/remember` skill at `plugins/macrodata/skills/remember/SKILL.md`. Thin trigger that maps "save the conversation" / `/remember` to `save_conversation_summary`. Intentionally minimal — no prescription of what the summary looks like; the tool's schema and session context handle the rest.
+
+### Changed
+
+- Plugin version bumped from `0.2.2` to `0.2.3` in `marketplace.json`, `plugin.json`, and `package.json` so the marketplace picks up the new skill on `/plugin upgrade`.
+
 ## [0.2.2] — 2026-05-22
 
 ### Added
@@ -33,7 +43,8 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 - Cross-encoder reranking layer over the bi-encoder search, with `MACRODATA_AMBIENT_RERANK=1` toggle and `MACRODATA_AMBIENT_DUAL=1` to surface a vector-only eval block alongside the reranked one. `MACRODATA_AMBIENT_CANDIDATE_K=40` widens the slate handed to the cross-encoder so title-less section chunks have a better shot at landing in it.
 
-[Unreleased]: https://github.com/jasikpark/macrodata/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/jasikpark/macrodata/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/jasikpark/macrodata/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/jasikpark/macrodata/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jasikpark/macrodata/releases/tag/v0.2.1
 
