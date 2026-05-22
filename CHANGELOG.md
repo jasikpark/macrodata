@@ -33,5 +33,7 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 - Cross-encoder reranking layer over the bi-encoder search, with `MACRODATA_AMBIENT_RERANK=1` toggle and `MACRODATA_AMBIENT_DUAL=1` to surface a vector-only eval block alongside the reranked one. `MACRODATA_AMBIENT_CANDIDATE_K=40` widens the slate handed to the cross-encoder so title-less section chunks have a better shot at landing in it.
 
-<!-- Compare links omitted until version tags exist. Tag a release with e.g. `jj git push --change @ --remote origin` after creating a tag, or `git tag v0.2.2 <sha> && git push origin v0.2.2` if working through git. -->
+[Unreleased]: https://github.com/jasikpark/macrodata/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/jasikpark/macrodata/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/jasikpark/macrodata/releases/tag/v0.2.1
 
