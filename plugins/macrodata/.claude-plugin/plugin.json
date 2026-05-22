@@ -41,6 +41,15 @@
 						"timeout": 10
 					}
 				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/ambient-memory-qmd.ts",
+						"timeout": 35
+					}
+				]
 			}
 		],
 		"SessionEnd": [
