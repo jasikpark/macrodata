@@ -1,5 +1,20 @@
 #!/usr/bin/env bun
 /**
+ * DEPRECATED 2026-05-22 — DELETE ME.
+ *
+ * Unregistered in plugin.json on 2026-05-22 after ~3h of burn-in showed
+ * qmd reranker reliably confident on entity-named prompts (qmd.md @ 0.93)
+ * but confidently wrong on social/short prompts ("nah" → INDEX.md @ 0.88),
+ * with 6–28s latency variance. Replaced by `bin/suggest-memory-tools.sh`,
+ * which nudges the model to call qmd's `query` MCP tool intentionally.
+ *
+ * Kept in-tree (rather than git rm'd immediately) so the parallel-A/B
+ * scaffolding isn't lost — useful reference if we revisit qmd-as-hook later.
+ * If you find this and the deprecation is older than a couple months, delete
+ * this file + the bi-encoder sibling.
+ *
+ * Original docstring follows.
+ *
  * Ambient memory hook (qmd sibling).
  *
  * Runs in parallel with ambient-memory.ts. Calls the @tobilu/qmd JS API

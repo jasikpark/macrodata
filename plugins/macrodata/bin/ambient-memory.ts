@@ -1,5 +1,19 @@
 #!/usr/bin/env bun
 /**
+ * DEPRECATED 2026-05-22 — DELETE ME.
+ *
+ * Unregistered in plugin.json on 2026-05-22 after ~3h of burn-in showed
+ * operationally-useful surfacings on <10% of turns at 2–3s/prompt cost.
+ * Replaced by `bin/suggest-memory-tools.sh`, which nudges the model to call
+ * search_memory / qmd MCPs intentionally instead.
+ *
+ * Kept in-tree (rather than git rm'd immediately) so the cross-encoder rerank
+ * + dual-mode eval + candidateK=40 work isn't lost — useful reference if we
+ * revisit retrieval-on-prompt later. If you find this and the deprecation is
+ * older than a couple months, delete the file + the qmd sibling.
+ *
+ * Original docstring follows.
+ *
  * Ambient associative memory hook (spike).
  *
  * Wired to UserPromptSubmit in ~/.claude/settings.json. Reads Claude Code's
