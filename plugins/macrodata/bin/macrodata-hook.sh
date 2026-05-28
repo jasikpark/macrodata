@@ -110,21 +110,11 @@ check_files_changed() {
 
 get_recent_journal() {
     local count="${1:-5}"
-    
-    if [ ! -d "$JOURNAL_DIR" ]; then
-        return
-    fi
-    
-    # Get most recent journal files and extract entries
-    local entries=""
-    for file in $(ls -t "$JOURNAL_DIR"/*.jsonl 2>/dev/null | head -3); do
-        if [ -f "$file" ]; then
-            # Get last N entries from each file, format as "- [topic] content"
-            entries="$entries$(tail -n "$count" "$file" 2>/dev/null | jq -r '"\n- [\(.topic)] \(.content | split("\n")[0])"' 2>/dev/null)"
-        fi
-    done
-    
-    echo "$entries" | head -n "$count"
+    [ -d "$JOURNAL_DIR" ] || return
+
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    MACRODATA_ROOT="$STATE_ROOT" bun run "$script_dir/get-recent-journal.ts" "$count" 2>/dev/null
 }
 
 list_state_files() {

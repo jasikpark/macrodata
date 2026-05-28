@@ -43,17 +43,7 @@ import {
   getRemindersDir,
 } from "./config.js";
 import { unlinkSync } from "fs";
-
-// Types
-interface JournalEntry {
-  timestamp: string;
-  topic: string;
-  content: string;
-  metadata?: {
-    source?: string;
-    intent?: string;
-  };
-}
+import { getRecentJournalEntries, type JournalEntry } from "./journal.js";
 
 interface Schedule {
   id: string;
@@ -137,37 +127,6 @@ function deleteScheduleFile(id: string) {
 function getTodayJournalPath(): string {
   const today = new Date().toISOString().split("T")[0];
   return join(getJournalDir(), `${today}.jsonl`);
-}
-
-function getRecentJournalEntries(count: number): JournalEntry[] {
-  const entries: JournalEntry[] = [];
-  const journalDir = getJournalDir();
-
-  // Get all journal files, sorted by name (date) descending
-  if (!existsSync(journalDir)) return entries;
-
-  const files = readdirSync(journalDir)
-    .filter((f: string) => f.endsWith(".jsonl"))
-    .sort()
-    .reverse();
-
-  for (const file of files) {
-    if (entries.length >= count) break;
-
-    const content = readFileSync(join(journalDir, file), "utf-8");
-    const lines = content.trim().split("\n").filter(Boolean);
-
-    for (const line of lines.reverse()) {
-      if (entries.length >= count) break;
-      try {
-        entries.push(JSON.parse(line));
-      } catch {
-        // Skip malformed lines
-      }
-    }
-  }
-
-  return entries;
 }
 
 // Create MCP server

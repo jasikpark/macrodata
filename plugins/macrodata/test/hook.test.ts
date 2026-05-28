@@ -98,6 +98,77 @@ describe("hook script", () => {
       expect(output).toContain("test-topic");
     });
 
+    describe("journal slot contract", () => {
+      function extractJournalSection(output: string): string {
+        const match = output.match(/<macrodata-journal>([\s\S]*?)<\/macrodata-journal>/);
+        return match ? match[1] : "";
+      }
+
+      function bulletLines(section: string): string[] {
+        return section.split("\n").filter((l) => l.startsWith("- "));
+      }
+
+      test("renders exactly 5 bullet lines when journal has more than 5 entries", () => {
+        const today = new Date("2026-05-27T10:00:00Z");
+        for (let i = 1; i <= 7; i++) {
+          addJournalEntry(ctx, "today", `entry ${i}`, today);
+        }
+
+        const section = extractJournalSection(runHook(ctx, "session-start"));
+        expect(bulletLines(section)).toHaveLength(5);
+      });
+
+      test("does not produce blank lines between bullet entries", () => {
+        const today = new Date("2026-05-27T10:00:00Z");
+        for (let i = 1; i <= 5; i++) {
+          addJournalEntry(ctx, "test", `entry ${i}`, today);
+        }
+
+        const section = extractJournalSection(runHook(ctx, "session-start")).trim();
+        expect(section).not.toMatch(/\n\s*\n/);
+      });
+
+      test("does not mash entries from different files onto the same line", () => {
+        const today = new Date("2026-05-27T10:00:00Z");
+        const yesterday = new Date("2026-05-26T10:00:00Z");
+        for (let i = 1; i <= 3; i++) {
+          addJournalEntry(ctx, "today", `today-${i}`, today);
+        }
+        for (let i = 1; i <= 3; i++) {
+          addJournalEntry(ctx, "yesterday", `yesterday-${i}`, yesterday);
+        }
+
+        const section = extractJournalSection(runHook(ctx, "session-start"));
+        for (const line of bulletLines(section)) {
+          const bulletCount = (line.match(/- \[/g) || []).length;
+          expect(bulletCount).toBe(1);
+        }
+      });
+
+      test("shows entries newest-first across files", () => {
+        addJournalEntry(ctx, "oldest", "I came first", new Date("2026-05-25T10:00:00Z"));
+        addJournalEntry(ctx, "middle", "I came second", new Date("2026-05-26T10:00:00Z"));
+        addJournalEntry(ctx, "newest", "I came last", new Date("2026-05-27T10:00:00Z"));
+
+        const lines = bulletLines(extractJournalSection(runHook(ctx, "session-start")));
+        expect(lines[0]).toContain("newest");
+        expect(lines[lines.length - 1]).toContain("oldest");
+      });
+
+      test("each entry starts with a YYYY-MM-DD HH:MM timestamp", () => {
+        const today = new Date("2026-05-27T10:00:00Z");
+        for (let i = 1; i <= 3; i++) {
+          addJournalEntry(ctx, "test", `entry ${i}`, today);
+        }
+
+        const lines = bulletLines(extractJournalSection(runHook(ctx, "session-start")));
+        expect(lines.length).toBeGreaterThan(0);
+        for (const line of lines) {
+          expect(line).toMatch(/^- \[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] \[[^\]]+\] /);
+        }
+      });
+    });
+
     test("includes schedules section", () => {
       addReminder(ctx, "test-schedule", {
         type: "cron",
