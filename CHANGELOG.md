@@ -8,6 +8,18 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 ## [Unreleased]
 
+### Added
+
+- Dedicated `SessionStart` hook `plugins/macrodata/bin/inject-usage.sh` that injects `USAGE.md` in full. Registered as a second (no-matcher) `SessionStart` entry in `plugin.json`, so the ~4.7K guide lands in its own ~10,000-char hook-output envelope (anthropics/claude-code#44086 caps each hook output string independently; multiple SessionStart hooks run in parallel) instead of competing for budget inside the main state blob. No-matcher means it fires on `startup`/`resume`/`clear`/`compact` — and re-firing on `compact` is what keeps the guide present after compaction.
+
+### Changed
+
+- `plugins/macrodata/bin/macrodata-hook.sh` no longer emits `<macrodata-usage>` from its monolithic `inject_static_context` heredoc (the `get_usage` helper is removed); USAGE.md now comes solely from the dedicated hook above, so it is never double-injected.
+
+### Misc
+
+- `.gitignore`: ignore the local `.gest/` task store.
+
 ## [0.2.3] — 2026-05-22
 
 ### Added
