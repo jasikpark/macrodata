@@ -117,34 +117,6 @@ get_recent_journal() {
     MACRODATA_ROOT="$STATE_ROOT" bun run "$script_dir/get-recent-journal.ts" "$count" 2>/dev/null
 }
 
-list_state_files() {
-    local files=""
-
-    # State files
-    if [ -d "$STATE_ROOT/state" ]; then
-        for f in "$STATE_ROOT/state"/*.md; do
-            [ -f "$f" ] && files="$files\n- state/$(basename "$f")"
-        done
-    fi
-
-    # Entity files (scan all subdirs dynamically)
-    if [ -d "$STATE_ROOT/entities" ]; then
-        for subdir in "$STATE_ROOT/entities"/*/; do
-            [ -d "$subdir" ] || continue
-            local subdir_name=$(basename "$subdir")
-            for f in "$subdir"*.md; do
-                [ -f "$f" ] && files="$files\n- entities/$subdir_name/$(basename "$f")"
-            done
-        done
-    fi
-
-    if [ -z "$files" ]; then
-        echo "_No files yet_"
-    else
-        echo -e "$files"
-    fi
-}
-
 get_schedules() {
     local reminders_dir="$STATE_ROOT/reminders"
 
@@ -213,10 +185,6 @@ $(get_recent_journal 5)
 <macrodata-schedules>
 $(get_schedules)
 </macrodata-schedules>
-
-<macrodata-files root=\"$STATE_ROOT\">
-$(list_state_files)
-</macrodata-files>
 </macrodata>"
     fi
 
