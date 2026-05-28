@@ -154,6 +154,19 @@ describe("hook script", () => {
         expect(lines[0]).toContain("newest");
         expect(lines[lines.length - 1]).toContain("oldest");
       });
+
+      test("each entry starts with a YYYY-MM-DD HH:MM timestamp", () => {
+        const today = new Date("2026-05-27T10:00:00Z");
+        for (let i = 1; i <= 3; i++) {
+          addJournalEntry(ctx, "test", `entry ${i}`, today);
+        }
+
+        const lines = bulletLines(extractJournalSection(runHook(ctx, "session-start")));
+        expect(lines.length).toBeGreaterThan(0);
+        for (const line of lines) {
+          expect(line).toMatch(/^- \[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] \[[^\]]+\] /);
+        }
+      });
     });
 
     test("includes schedules section", () => {
