@@ -22,6 +22,14 @@
 						"command": "${CLAUDE_PLUGIN_ROOT}/bin/macrodata-hook.sh session-start"
 					}
 				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "${CLAUDE_PLUGIN_ROOT}/bin/inject-usage.sh"
+					}
+				]
 			}
 		],
 		"UserPromptSubmit": [

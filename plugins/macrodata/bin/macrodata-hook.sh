@@ -145,13 +145,6 @@ list_state_files() {
     fi
 }
 
-get_usage() {
-    local usage_file="$SCRIPT_DIR/../USAGE.md"
-    if [ -f "$usage_file" ]; then
-        cat "$usage_file"
-    fi
-}
-
 get_schedules() {
     local reminders_dir="$STATE_ROOT/reminders"
 
@@ -220,10 +213,6 @@ $(get_recent_journal 5)
 <macrodata-schedules>
 $(get_schedules)
 </macrodata-schedules>
-
-<macrodata-usage>
-$(get_usage)
-</macrodata-usage>
 
 <macrodata-files root=\"$STATE_ROOT\">
 $(list_state_files)
