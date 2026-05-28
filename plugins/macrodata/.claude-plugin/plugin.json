@@ -30,6 +30,14 @@
 						"command": "${CLAUDE_PLUGIN_ROOT}/bin/inject-usage.sh"
 					}
 				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "${CLAUDE_PLUGIN_ROOT}/bin/inject-files.sh"
+					}
+				]
 			}
 		],
 		"UserPromptSubmit": [

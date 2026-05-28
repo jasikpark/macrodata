@@ -40,6 +40,19 @@ Create `entities/{type}/{name}.md` files for persistent knowledge that deserves 
 
 **Create new categories freely** - just create the directory.
 
+**Give every entity a `description:` frontmatter.** Start each entity file with a YAML frontmatter block carrying a one-line `description:` — what this file *is*, not its current status (so it doesn't go stale):
+
+```markdown
+---
+description: REST API service — auth, billing, and webhooks
+---
+
+# billing-api
+...
+```
+
+That description is what shows up next to the file in the SessionStart files manifest (`- entities/projects/billing-api.md — REST API service — auth, billing, and webhooks`) — it's how you know what each entity holds without opening it. Files missing a description render as a bare path and get tallied in a footer nudge (`_N entities have no description…_`); that nudge is your cue to add one. State files (`state/*.md`) are exempt — they're always loaded in full, so they don't need a description.
+
 ### Journal
 Use `log_journal(topic, content)` for observations that don't need their own file. The journal is append-only and time-stamped, so it's great for logging transient thoughts, decisions, and learnings that you want to remember but don't need to maintain. Don't use it for things that you expect to update later - those belong in state or entity files. Use `search_memory` to find entries later - they won't appear in context unless you search for them.
 
