@@ -8,6 +8,20 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 ## [Unreleased]
 
+### Added
+
+- Budget-aware SessionStart composer at `plugins/macrodata/bin/compose-context.ts`. Each section (identity, today, human, workspace, journal, schedules, usage, files) gets a fixed UTF-16 `.length` budget under the 10,000-char hook-output cliff (anthropics/claude-code#44086 — exceeding it silently truncates to a 2,000-char preview). Three section shapes:
+  - **Forcing-function** (identity/today/human/workspace): head-keep + a final `<macrodata-truncation-warning>` block. The in-band marker carries a visible `…`, the size delta, and a per-section pointer to where the full content lives (`… [shown first 1500 of 78896 chars (head-keep); full content: state/today.md]`), and the cut snaps back to the last line boundary so it never slices mid-word. Both marker and warning are framed as **display-only** truncation (the file on disk is intact) and steer the agent to distill/summarize, offload detail into an entity with a `[[wikilink]]`, or relocate append-only content to the journal — explicitly **never delete** substantive content to fit.
+  - **Progressive-disclosure** (journal/schedules): per-entry snippet (180-char cap on journal first-lines) + footer pointer at full-content tools (`get_recent_journal`, `search_memory`, `list_reminders`).
+  - **Static** (usage/files): bundled doc + file index; head-keep when oversize.
+  - Production impact on a heavily-bloated state: SessionStart output drops from ~128,000 chars to ~8,300 chars, restoring full inline visibility.
+- Input-hardening on the composer (from an adversarial review): per-entry `zod` validation in the journal loader so one malformed JSONL record can no longer throw and collapse the whole section to `_Journal unavailable_`; per-loader `try/catch` (plus a guarded `statSync` in `loadFiles`) so an unreadable file or a broken symlink in `entities/` degrades to `_section unavailable_` instead of crashing the composer and injecting an empty context; and entity-escaping of literal `</macrodata*` / `<macrodata*` tag-openers in section bodies so file content (e.g. docs about this very format) can't close a wrapper early or forge a sibling block.
+- Snapshot tests at `plugins/macrodata/test/compose-context.test.ts` covering first-run, under-budget, single-section bloat, all-sections bloat, head-keep prefix preservation, UTF-16 `.length` budget semantics (surrogate-pair emoji vs BMP CJK), progressive-disclosure shape for journal and schedules (inline snapshots), and the input-hardening cases above — including a `fast-check` property test asserting arbitrary state-file content stays under the 10K cliff with exactly one intact section closer.
+
+### Changed
+
+- `plugins/macrodata/bin/macrodata-hook.sh` `inject_static_context()` collapses from a 56-line heredoc to a 10-line delegation to `compose-context.ts`.
+
 ## [0.2.3] — 2026-05-22
 
 ### Added

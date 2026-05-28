@@ -1,0 +1,110 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`compose-context under budget minimal state fits with no truncation and no warning 1`] = `
+"<macrodata>
+<macrodata-identity>
+# Test Identity
+
+A test agent for integration testing.
+
+## Patterns
+
+- Be concise
+- Test thoroughly
+</macrodata-identity>
+
+<macrodata-today>
+# Today
+
+## Now
+
+Running integration tests.
+</macrodata-today>
+
+<macrodata-human>
+# Human
+
+Test user for integration testing.
+</macrodata-human>
+
+<macrodata-workspace>
+# Workspace
+
+## Active
+
+- Integration testing
+</macrodata-workspace>
+
+<macrodata-journal>
+- [2026-05-28 07:00] [test] hello world
+_More: \`get_recent_journal\` (chronological), \`search_memory\` (semantic)._
+</macrodata-journal>
+
+<macrodata-schedules>
+- test reminder (cron: 0 9 * * *)
+_More: \`list_reminders\` for full payloads._
+</macrodata-schedules>
+
+<macrodata-usage>
+
+</macrodata-usage>
+
+<macrodata-files root="<CTX_ROOT>">
+- state/human.md
+- state/identity.md
+- state/today.md
+- state/workspace.md
+</macrodata-files>
+</macrodata>"
+`;
+
+exports[`compose-context over budget — head-keep truncation all 4 state files bloated stays under the 10K cliff 1`] = `
+"<macrodata>
+<macrodata-identity truncated="20000→1300">
+<1219 X's>
+…
+[shown first 1300 of 20000 chars (head-keep); full content: state/identity.md]
+</macrodata-identity>
+
+<macrodata-today truncated="20000→1500">
+<1422 X's>
+…
+[shown first 1500 of 20000 chars (head-keep); full content: state/today.md]
+</macrodata-today>
+
+<macrodata-human truncated="20000→600">
+<523 X's>
+…
+[shown first 600 of 20000 chars (head-keep); full content: state/human.md]
+</macrodata-human>
+
+<macrodata-workspace truncated="20000→1500">
+<1418 X's>
+…
+[shown first 1500 of 20000 chars (head-keep); full content: state/workspace.md]
+</macrodata-workspace>
+
+<macrodata-journal>
+_No recent journal entries_
+</macrodata-journal>
+
+<macrodata-schedules>
+_No active schedules_
+</macrodata-schedules>
+
+<macrodata-usage>
+
+</macrodata-usage>
+
+<macrodata-files root="<CTX_ROOT>">
+- state/human.md
+- state/identity.md
+- state/today.md
+- state/workspace.md
+</macrodata-files>
+
+<macrodata-truncation-warning count="4">
+4 section(s) were truncated for display only — the underlying files on disk are intact (each marker's "full content:" pointer says where). To shrink a section so more of it fits: DISTILL or SUMMARIZE it; move detailed content into an entity file and leave a [[wikilink]] pointer in its place; or relocate append-only / log-style content into the JSONL journal (built for unbounded growth). Do NOT delete substantive content to fit — condense it, link it out to an entity, or move it.
+</macrodata-truncation-warning>
+</macrodata>"
+`;

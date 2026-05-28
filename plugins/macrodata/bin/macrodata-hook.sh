@@ -175,68 +175,17 @@ get_schedules() {
 }
 
 inject_static_context() {
-    # For local plugin, we inject everything needed for a normal session
+    # Composition is delegated to compose-context.ts, which applies a per-section
+    # UTF-16 .length budget under the 10K hook-output cap (head-keep truncation
+    # plus a visible warning when any section overflows). See compose-context.ts
+    # for the budget table and rationale.
     local CONTEXT_FILE="$STATE_ROOT/.claude-context.md"
+    local CONTEXT
+    CONTEXT=$(MACRODATA_ROOT="$STATE_ROOT" bun run "$SCRIPT_DIR/compose-context.ts" "$STATE_ROOT")
 
-    # Build context content
-    local CONTEXT=""
-
-    # Check if this is first run (no identity file)
-    if [ ! -f "$IDENTITY" ]; then
-        # Detect user info to avoid multiple permission prompts during onboarding
-        local USER_INFO=$("$SCRIPT_DIR/detect-user.sh" 2>/dev/null || echo '{}')
-        
-        CONTEXT="<macrodata>
-<macrodata-first-run state-root=\"$STATE_ROOT\">
-Macrodata local memory is not yet configured. Run \`/onboarding\` to set up.
-</macrodata-first-run>
-
-<macrodata-detected-user>
-$USER_INFO
-</macrodata-detected-user>
-</macrodata>"
-    else
-        CONTEXT="<macrodata>
-<macrodata-identity>
-$(cat "$IDENTITY" 2>/dev/null || echo "_Not configured_")
-</macrodata-identity>
-
-<macrodata-today>
-$(cat "$TODAY" 2>/dev/null || echo "_Empty_")
-</macrodata-today>
-
-<macrodata-human>
-$(cat "$HUMAN" 2>/dev/null || echo "_Empty_")
-</macrodata-human>
-
-<macrodata-workspace>
-$(cat "$WORKSPACE" 2>/dev/null || echo "_Empty_")
-</macrodata-workspace>
-
-<macrodata-journal>
-$(get_recent_journal 5)
-</macrodata-journal>
-
-<macrodata-schedules>
-$(get_schedules)
-</macrodata-schedules>
-
-<macrodata-usage>
-$(get_usage)
-</macrodata-usage>
-
-<macrodata-files root=\"$STATE_ROOT\">
-$(list_state_files)
-</macrodata-files>
-</macrodata>"
-    fi
-
-    # Write to file for global CLAUDE.md reference
     mkdir -p "$STATE_ROOT"
-    echo "$CONTEXT" > "$CONTEXT_FILE"
-
-    # Also output to stdout for session context
-    echo "$CONTEXT"
+    printf '%s\n' "$CONTEXT" > "$CONTEXT_FILE"
+    printf '%s\n' "$CONTEXT"
 }
 
 case "$1" in
