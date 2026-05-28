@@ -50,10 +50,16 @@ describe("compose-files", () => {
       expect(body(compose(ctx))).toMatchInlineSnapshot(`"_No files yet_"`);
     });
 
-    test("state files render as bare pointers and are exempt from the description footer", () => {
+    test("state files render as bare pointers and are exempt — even with a description: frontmatter", () => {
       // State files are always injected in full by the composer, so the manifest
-      // lists them plainly and never nudges for a description.
+      // lists them plainly and never nudges for a description. They MAY carry a
+      // description frontmatter (for the inline view) — give identity.md one and
+      // confirm the manifest still shows the four bare paths, no footer.
       setupMinimalState(ctx);
+      writeFileSync(
+        join(ctx.stateDir, "identity.md"),
+        "---\ndescription: persona and values\n---\n\n# Identity\n",
+      );
       expect(body(compose(ctx))).toMatchInlineSnapshot(`
 "- state/human.md
 - state/identity.md

@@ -84,7 +84,7 @@ log_journal(topic="distill-summary", content="Processed N conversations. Extract
 - Group facts by topic
 - For each topic, read existing entity file (if any)
 - Integrate new facts, removing duplicates
-- Write updated file
+- Write updated file — ensure it has a `description:` frontmatter (a one-line summary of what the entity *is*); add one if missing, preserve it if present
 
 ### 4. Example Sub-Agent Output
 

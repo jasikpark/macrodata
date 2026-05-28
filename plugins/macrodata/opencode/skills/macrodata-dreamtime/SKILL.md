@@ -98,8 +98,8 @@ Update relevant files directly:
 - identity.md - role/values refinements
 - human.md - new understanding
 - workspace.md - open threads
-- topics/ - new or updated topics
-- entities/ - project/people updates
+- topics/ - new or updated topics (give each entity a `description:` frontmatter)
+- entities/ - project/people updates (add or preserve a `description:` frontmatter — a one-line summary of what the file is)
 - journal - learnings, observations, ideas
 
 Write a dreamtime journal entry summarizing:

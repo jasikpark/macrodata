@@ -142,6 +142,10 @@ find ~/.claude/projects -name "*.jsonl" -mtime -7 -exec cat {} \; 2>/dev/null | 
 Write findings to `state/human.md`:
 
 ```markdown
+---
+description: The user's profile — who they are, preferences, communication style, work context. Update as you learn.
+---
+
 # Human Profile
 
 ## Basics
@@ -182,6 +186,10 @@ Help define who the agent should be:
 Write to `state/identity.md`:
 
 ```markdown
+---
+description: Your persona, values, and operating patterns — what makes you *you*. Update during reflection.
+---
+
 # [Agent Name] Identity
 
 ## Persona
@@ -201,11 +209,15 @@ Write to `state/identity.md`:
 Set up working context:
 
 1. Ask what they're currently working on
-2. Create initial project files in `entities/projects/`
+2. Create initial project files in `entities/projects/` — each with a `description:` frontmatter (see below)
 3. Write `state/today.md` with current context
 4. Write `state/workspace.md` with active projects
 
 ```markdown
+---
+description: Current focus, priorities, and carryover from prior sessions. Update at session start or when focus shifts.
+---
+
 # Today
 
 ## Now
@@ -216,6 +228,10 @@ Set up working context:
 ```
 
 ```markdown
+---
+description: Scratchpad for current project context — active projects, open threads, recent decisions and blockers.
+---
+
 # Workspace
 
 ## Active Projects
@@ -223,6 +239,19 @@ Set up working context:
 
 ## Open Threads
 - [things in progress]
+```
+
+Every entity file (anything under `entities/`) starts with a YAML frontmatter `description:` — a one-line summary of *what the file is* (not its current status, so it won't go stale). The description is surfaced in the SessionStart files manifest (`- entities/projects/billing-api.md — REST API service…`), so you can tell what each entity holds without opening it; entities missing one get tallied in a nudge. State files (`state/*.md`) are exempt — they're always loaded in full.
+
+```markdown
+---
+description: REST API service — auth, billing, and webhooks
+---
+
+# billing-api
+
+## Status
+[current state]
 ```
 
 ### Phase 6: Permissions
