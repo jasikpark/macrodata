@@ -8,6 +8,8 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-05-28
+
 ### Added
 
 - Dedicated `SessionStart` hook `plugins/macrodata/bin/inject-usage.sh` that injects `USAGE.md` in full. Registered as a second (no-matcher) `SessionStart` entry in `plugin.json`, so the ~4.7K guide lands in its own ~10,000-char hook-output envelope (anthropics/claude-code#44086 caps each hook output string independently; multiple SessionStart hooks run in parallel) instead of competing for budget inside the main state blob. No-matcher means it fires on `startup`/`resume`/`clear`/`compact` — and re-firing on `compact` is what keeps the guide present after compaction.
@@ -15,6 +17,7 @@ Entries land on `main` as part of the change that introduces them. The next vers
 ### Changed
 
 - `plugins/macrodata/bin/macrodata-hook.sh` no longer emits `<macrodata-usage>` from its monolithic `inject_static_context` heredoc (the `get_usage` helper is removed); USAGE.md now comes solely from the dedicated hook above, so it is never double-injected.
+- Plugin version bumped from `0.2.3` to `0.2.4` in `marketplace.json`, `plugin.json`, and `package.json` so the marketplace picks up the new hook on `/plugin upgrade`.
 
 ### Misc
 
@@ -55,7 +58,8 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 - Cross-encoder reranking layer over the bi-encoder search, with `MACRODATA_AMBIENT_RERANK=1` toggle and `MACRODATA_AMBIENT_DUAL=1` to surface a vector-only eval block alongside the reranked one. `MACRODATA_AMBIENT_CANDIDATE_K=40` widens the slate handed to the cross-encoder so title-less section chunks have a better shot at landing in it.
 
-[Unreleased]: https://github.com/jasikpark/macrodata/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/jasikpark/macrodata/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/jasikpark/macrodata/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/jasikpark/macrodata/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/jasikpark/macrodata/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jasikpark/macrodata/releases/tag/v0.2.1
