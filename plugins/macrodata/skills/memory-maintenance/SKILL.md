@@ -57,7 +57,8 @@ Review each state file and update if needed:
 Review `entities/people/` and `entities/projects/`:
 - Integrate any facts extracted by distillation
 - Project status changes?
-- New projects to create files for?
+- New projects to create files for? Give each a `description:` frontmatter (one-line summary of what it *is*)
+- Backfill `description:` frontmatter on any entity files still missing one (the files manifest nudges for these)
 
 ### 5. Prune Stale Info
 
