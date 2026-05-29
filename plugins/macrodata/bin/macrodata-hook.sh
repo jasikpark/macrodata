@@ -3,15 +3,22 @@
 # Macrodata Local Hook Script
 #
 # Usage:
-#   macrodata-hook.sh session-start    - Launch daemon if not running, inject context
-#   macrodata-hook.sh prompt-submit    - Check daemon, inject pending context
+#   macrodata-hook.sh session-start  - Launch daemon, signal reload, emit the
+#                                       first-run onboarding nudge if unconfigured
+#   macrodata-hook.sh prompt-submit  - Ensure daemon is up, inject any pending
+#                                       daemon-written context
 #
+# NOTE: session-start no longer composes the memory context here. Each state
+# file is injected by its own compose-state-file.ts hook, journal+schedules by
+# compose-lists.ts, USAGE by inject-usage.sh, and the files manifest by
+# inject-files.sh — each in its own ~10K hook-output envelope (anthropics/
+# claude-code#44086). This script only manages the daemon lifecycle and the
+# first-run nudge.
 
-# Get the directory where this script lives
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DAEMON="$SCRIPT_DIR/macrodata-daemon.ts"
 
-# State directory (configurable via MACRODATA_ROOT, config file, or defaults to ~/.config/macrodata)
+# State root (MACRODATA_ROOT > config.json > default)
 DEFAULT_ROOT="$HOME/.config/macrodata"
 CONFIG_FILE="$DEFAULT_ROOT/config.json"
 if [ -n "$MACRODATA_ROOT" ]; then
@@ -23,18 +30,10 @@ else
     STATE_ROOT="$DEFAULT_ROOT"
 fi
 
-# Output locations (PID file now follows STATE_ROOT for testing isolation)
 PIDFILE="$STATE_ROOT/.daemon.pid"
 PENDING_CONTEXT="$STATE_ROOT/.pending-context"
 LOGFILE="$STATE_ROOT/.daemon.log"
-JOURNAL_DIR="$STATE_ROOT/journal"
-LASTMOD_FILE="$STATE_ROOT/.context-lastmod.json"
-
-# State files
 IDENTITY="$STATE_ROOT/state/identity.md"
-TODAY="$STATE_ROOT/state/today.md"
-HUMAN="$STATE_ROOT/state/human.md"
-WORKSPACE="$STATE_ROOT/state/workspace.md"
 
 is_daemon_running() {
     if [ -f "$PIDFILE" ]; then
@@ -52,13 +51,11 @@ start_daemon() {
     fi
 
     local BUN="bun"
-    # Ensure state directory exists
     mkdir -p "$STATE_ROOT"
-    # Start daemon in background, redirect output to log
-    # Note: daemon writes its own PID file, we don't write it here
+    # Daemon writes its own PID file; we don't write it here.
     MACRODATA_ROOT="$STATE_ROOT" nohup "$BUN" run "$DAEMON" >> "$LOGFILE" 2>&1 &
 
-    # Wait briefly for daemon to write PID file (up to 2 seconds)
+    # Wait briefly for the daemon to write its PID file (up to 2 seconds).
     local attempts=0
     while [ $attempts -lt 20 ]; do
         sleep 0.1
@@ -85,73 +82,24 @@ inject_pending_context() {
     fi
 }
 
-store_lastmod() {
-    jq -n \
-        --arg id "$(stat -f %m "$IDENTITY" 2>/dev/null || echo 0)" \
-        --arg today "$(stat -f %m "$TODAY" 2>/dev/null || echo 0)" \
-        --arg human "$(stat -f %m "$HUMAN" 2>/dev/null || echo 0)" \
-        --arg ws "$(stat -f %m "$WORKSPACE" 2>/dev/null || echo 0)" \
-        '{identity:$id, today:$today, human:$human, workspace:$ws}' > "$LASTMOD_FILE"
-}
+inject_first_run() {
+    # Once identity.md exists, normal state is delivered by the per-file
+    # compose-state-file.ts hooks — nothing to emit here.
+    [ -f "$IDENTITY" ] && return
 
-check_files_changed() {
-    [ ! -f "$LASTMOD_FILE" ] && return 0
+    # Detect user info up front to avoid repeated permission prompts during onboarding.
+    local USER_INFO
+    USER_INFO=$("$SCRIPT_DIR/detect-user.sh" 2>/dev/null || echo '{}')
 
-    local stored
-    stored=$(cat "$LASTMOD_FILE")
+    # Neutralize macrodata tag-openers in the detected-user JSON: a hostile
+    # git/GECOS name (e.g. user.name containing "</macrodata-detected-user>")
+    # would otherwise close the wrapper early or forge a sibling block. The
+    # deeper fix (proper JSON escaping at the detect-user.sh source) is tracked
+    # as a follow-up.
+    USER_INFO="${USER_INFO//<\/macrodata/&lt;/macrodata}"
+    USER_INFO="${USER_INFO//<macrodata/&lt;macrodata}"
 
-    [ "$(stat -f %m "$IDENTITY" 2>/dev/null || echo 0)" != "$(echo "$stored" | jq -r '.identity')" ] && return 0
-    [ "$(stat -f %m "$TODAY" 2>/dev/null || echo 0)" != "$(echo "$stored" | jq -r '.today')" ] && return 0
-    [ "$(stat -f %m "$HUMAN" 2>/dev/null || echo 0)" != "$(echo "$stored" | jq -r '.human')" ] && return 0
-    [ "$(stat -f %m "$WORKSPACE" 2>/dev/null || echo 0)" != "$(echo "$stored" | jq -r '.workspace')" ] && return 0
-
-    return 1
-}
-
-get_recent_journal() {
-    local count="${1:-5}"
-    [ -d "$JOURNAL_DIR" ] || return
-
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    MACRODATA_ROOT="$STATE_ROOT" bun run "$script_dir/get-recent-journal.ts" "$count" 2>/dev/null
-}
-
-get_schedules() {
-    local reminders_dir="$STATE_ROOT/reminders"
-
-    if [ ! -d "$reminders_dir" ]; then
-        echo "_No active schedules_"
-        return
-    fi
-
-    local schedules=""
-    for f in "$reminders_dir"/*.json; do
-        [ -f "$f" ] || continue
-        local line=$(jq -r '"- \(.description) (\(.type): \(.expression))"' "$f" 2>/dev/null)
-        [ -n "$line" ] && schedules="$schedules$line\n"
-    done
-
-    if [ -z "$schedules" ]; then
-        echo "_No active schedules_"
-    else
-        echo -e "$schedules"
-    fi
-}
-
-inject_static_context() {
-    # For local plugin, we inject everything needed for a normal session
-    local CONTEXT_FILE="$STATE_ROOT/.claude-context.md"
-
-    # Build context content
-    local CONTEXT=""
-
-    # Check if this is first run (no identity file)
-    if [ ! -f "$IDENTITY" ]; then
-        # Detect user info to avoid multiple permission prompts during onboarding
-        local USER_INFO=$("$SCRIPT_DIR/detect-user.sh" 2>/dev/null || echo '{}')
-        
-        CONTEXT="<macrodata>
+    echo "<macrodata>
 <macrodata-first-run state-root=\"$STATE_ROOT\">
 Macrodata local memory is not yet configured. Run \`/onboarding\` to set up.
 </macrodata-first-run>
@@ -160,59 +108,17 @@ Macrodata local memory is not yet configured. Run \`/onboarding\` to set up.
 $USER_INFO
 </macrodata-detected-user>
 </macrodata>"
-    else
-        CONTEXT="<macrodata>
-<macrodata-identity>
-$(cat "$IDENTITY" 2>/dev/null || echo "_Not configured_")
-</macrodata-identity>
-
-<macrodata-today>
-$(cat "$TODAY" 2>/dev/null || echo "_Empty_")
-</macrodata-today>
-
-<macrodata-human>
-$(cat "$HUMAN" 2>/dev/null || echo "_Empty_")
-</macrodata-human>
-
-<macrodata-workspace>
-$(cat "$WORKSPACE" 2>/dev/null || echo "_Empty_")
-</macrodata-workspace>
-
-<macrodata-journal>
-$(get_recent_journal 5)
-</macrodata-journal>
-
-<macrodata-schedules>
-$(get_schedules)
-</macrodata-schedules>
-</macrodata>"
-    fi
-
-    # Write to file for global CLAUDE.md reference
-    mkdir -p "$STATE_ROOT"
-    echo "$CONTEXT" > "$CONTEXT_FILE"
-
-    # Also output to stdout for session context
-    echo "$CONTEXT"
 }
 
 case "$1" in
     session-start)
         start_daemon
         signal_daemon_reload
-        inject_static_context
-        store_lastmod
+        inject_first_run
         ;;
     prompt-submit)
-        # Restart daemon if dead
         start_daemon
-        # Inject any pending context
         inject_pending_context
-        # Re-inject static context if state files changed
-        if check_files_changed; then
-            inject_static_context
-            store_lastmod
-        fi
         ;;
     *)
         echo "Usage: $0 {session-start|prompt-submit}" >&2

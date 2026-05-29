@@ -8,6 +8,22 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-05-29
+
+### Changed
+
+- **SessionStart state is now sharded into per-file hooks.** Each state file is injected by its own hook so it gets its own ~10,000-char hook-output envelope (anthropics/claude-code#44086 caps each hook output string independently and runs SessionStart hooks in parallel), instead of all sections fighting inside one envelope and cliff-truncating to a 2K preview.
+  - New `plugins/macrodata/bin/compose-state-file.ts` (reusable): `bun compose-state-file.ts today.md` → reads `state/<file>`, head-keeps to that file's cap (**chars _and_ lines, whichever first**), neutralizes `</macrodata*` tag-openers, wraps in `<macrodata-<tag>>`, and emits a display-only truncation marker (pointing at the intact file + nudging distill / `[[wikilink]]`-out / journal-relocate, never delete) when clipped. Per-file caps live in a `BUDGETS` table; default **9,000 chars / 150 lines** (start-high, tune-down — the char cap binds at launch, the line cap starts dormant as a concision lever). Registered 4× in `plugin.json` (identity/today/human/workspace).
+  - New `plugins/macrodata/bin/compose-lists.ts`: journal + schedules in one hook, carrying the progressive-disclosure bounding (per-entry `zod` validation, first-line cap, footer pointers), a touch more generous (7 entries / 500-char first-lines — set from real data: journal first-lines average ~377 chars, so the prior 220 truncated ~64% of entries mid-sentence).
+  - `plugins/macrodata/bin/macrodata-hook.sh` `session-start` no longer composes context — it now only manages the daemon (`start_daemon`/`signal_daemon_reload`) and emits the first-run `/onboarding` nudge when unconfigured. `inject_static_context`, the bash journal/schedules helpers, and the `prompt-submit` `check_files_changed` re-injection are removed (mid-session state changes are the daemon `.pending-context` channel's job).
+- Tests: `compose-state-file.test.ts` and `compose-lists.test.ts` (inline snapshots + `fast-check` property tests — caps/whichever-first, neutralization, missing-file, malformed-entry skip, bounding); `hook.test.ts` rewritten to the new contract (session-start emits nothing when configured; first-run nudge; no prompt-submit re-injection); and `sessionstart-integration.test.ts` — a full-output snapshot that builds a complete mock store and runs every SessionStart hook in `plugin.json` registration order (also fails if a hook is removed/reordered/renamed or starts emitting unexpected content).
+- Injection hardening (from an adversarial review): all schedule fields (`type`/`expression`, not just `description`) are tag-neutralized so a hostile reminder `expression` can't forge a sibling block; the first-run `<macrodata-detected-user>` JSON is tag-neutralized so a hostile git/GECOS name can't break the wrapper; surrogate-pair-split slices drop a trailing lone high surrogate (no `U+FFFD` mojibake) in both composers; and `compose-state-file.ts` hard-bounds its final output so a degenerate sub-marker-length cap can't exceed the budget.
+
+### Notes
+
+- Supersedes the closed PR #2 (single budget-aware composer): a per-file head-keep hook is simpler than a multi-section allocator and gives each state file independent tuning. The dynamic-state cliff (was ~48K → 2K preview) is resolved by sharding; caps are pragmatic soft-ish defaults to tune empirically, not derived constants.
+- Plugin version bumped from `0.2.5` to `0.2.6` in `marketplace.json`, `plugin.json`, and `package.json` so the marketplace picks up the sharded SessionStart hooks on `/plugin upgrade`.
+
 ## [0.2.5] — 2026-05-28
 
 ### Added
@@ -73,7 +89,8 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 - Cross-encoder reranking layer over the bi-encoder search, with `MACRODATA_AMBIENT_RERANK=1` toggle and `MACRODATA_AMBIENT_DUAL=1` to surface a vector-only eval block alongside the reranked one. `MACRODATA_AMBIENT_CANDIDATE_K=40` widens the slate handed to the cross-encoder so title-less section chunks have a better shot at landing in it.
 
-[Unreleased]: https://github.com/jasikpark/macrodata/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/jasikpark/macrodata/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/jasikpark/macrodata/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/jasikpark/macrodata/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jasikpark/macrodata/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/jasikpark/macrodata/compare/v0.2.2...v0.2.3
