@@ -1,6 +1,6 @@
 {
 	"name": "macrodata",
-	"version": "0.2.5",
+	"version": "0.2.6",
 	"description": "Stateful agent tools for Claude Code. Learns who you are, remembers what you're working on, schedules tasks, maintains itself.",
 	"author": {
 		"name": "Matt Kane",
@@ -20,6 +20,46 @@
 					{
 						"type": "command",
 						"command": "${CLAUDE_PLUGIN_ROOT}/bin/macrodata-hook.sh session-start"
+					}
+				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts identity.md"
+					}
+				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts today.md"
+					}
+				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts human.md"
+					}
+				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts workspace.md"
+					}
+				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-lists.ts"
 					}
 				]
 			},
