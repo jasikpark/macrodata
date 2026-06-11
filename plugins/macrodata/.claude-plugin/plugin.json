@@ -119,7 +119,7 @@
 					},
 					{
 						"type": "prompt",
-						"prompt": "Context is about to be compacted. Before this happens, save what's important.\n\nUse save_conversation_summary to capture:\n- What was accomplished in this session\n- Key decisions made\n- Any open threads that need follow-up\n- Patterns learned about the user\n\nBe concise but thorough. This summary will help recover context in future sessions.\n\nContext being compacted:\n$ARGUMENTS",
+						"prompt": "Context is about to be compacted. Before this happens, save what's important.\n\nUse save_conversation_summary to capture:\n- What was accomplished in this session\n- Key decisions made\n- Any open threads that need follow-up\n- Patterns learned about the user\n\nBe concise but thorough. This summary will help recover context in future sessions.\n\nAdditionally, if the Agent tool is available to you, run Part 2 (the background reflection worker) of the macrodata remember skill: spawn it with run_in_background true and model \"sonnet\" on this session's transcript, per plugins/macrodata/skills/remember/SKILL.md. If the Agent tool or the transcript path is unavailable, skip Part 2 silently — the summary above is the priority.\n\nContext being compacted:\n$ARGUMENTS",
 						"timeout": 60
 					}
 				]
