@@ -117,10 +117,15 @@ ${message}`;
 
       return true;
     } else if (agent === "claude") {
-      // claude --print "message" or claude -p "message"
+      // claude --print "message" [--model <model>]
       const args = ["--print", fullMessage];
-      
-      log(`Triggering Claude Code: claude --print "..."`);
+      if (options.model) {
+        // Schedules store opencode-style ids ("anthropic/claude-opus-4-7");
+        // claude expects the bare id or alias ("claude-opus-4-7", "sonnet").
+        args.push("--model", options.model.replace(/^anthropic\//, ""));
+      }
+
+      log(`Triggering Claude Code: claude --print "..."${options.model ? ` --model ${options.model.replace(/^anthropic\//, "")}` : ""}`);
       
       const proc = spawn("claude", args, {
         stdio: ["ignore", "pipe", "pipe"],
