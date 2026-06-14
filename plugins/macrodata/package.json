@@ -24,16 +24,19 @@
     "journal",
     "semantic-search"
   ],
-  "author": "Matt Kane",
+  "author": "Caleb Jasik <calebjasik@jasik.xyz> (https://jasik.xyz)",
+  "contributors": [
+    "Matt Kane (https://mk.gg)"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ascorbic/macrodata.git",
+    "url": "git+https://github.com/jasikpark/macrodata.git",
     "directory": "plugins/macrodata"
   },
-  "homepage": "https://github.com/ascorbic/macrodata#readme",
+  "homepage": "https://github.com/jasikpark/macrodata#readme",
   "bugs": {
-    "url": "https://github.com/ascorbic/macrodata/issues"
+    "url": "https://github.com/jasikpark/macrodata/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.1.0",

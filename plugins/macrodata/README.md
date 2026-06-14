@@ -1,7 +1,7 @@
 # Macrodata
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ascorbic/macrodata/main/logo.webp" alt="Macrodata" width="400">
+  <img src="https://raw.githubusercontent.com/jasikpark/macrodata/main/logo.webp" alt="Macrodata" width="400">
 </p>
 
 Give Claude Code and OpenCode persistent, self-maintaining memory and autonomous scheduling.
@@ -65,7 +65,7 @@ The daemon is a simple cron runner that spawns Claude Code when reminders fire. 
 ### Claude Code
 
 ```bash
-/plugin marketplace add ascorbic/macrodata
+/plugin marketplace add jasikpark/macrodata
 /plugin install macrodata@macrodata
 ```
 
