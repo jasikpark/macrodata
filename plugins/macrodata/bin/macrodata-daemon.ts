@@ -14,26 +14,14 @@
  */
 
 import { watch } from "chokidar";
-import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, renameSync, statSync } from "fs";
 import { join, basename } from "path";
 import { Cron } from "croner";
-import { spawn, execSync } from "child_process";
 import { indexEntityFile, preloadModel } from "../src/indexer.js";
 import { getStateRoot, getEntitiesDir, getJournalDir, getIndexDir, getRemindersDir } from "../src/config.js";
+import { formatReminder, reminderFileName } from "../src/reminders.js";
 import { updateConversationIndex as updateOpenCodeConversations } from "../opencode/conversations.js";
 import { updateConversationIndex as updateClaudeCodeConversations } from "../src/conversations.js";
-
-/**
- * Find an executable in PATH
- */
-async function findExecutable(name: string): Promise<string | null> {
-  try {
-    const result = execSync(`which ${name}`, { encoding: "utf-8" }).trim();
-    return result || null;
-  } catch {
-    return null;
-  }
-}
 
 // Daemon-specific path helpers
 // Use MACRODATA_ROOT for all daemon files (PID, log) to support testing with isolated directories
@@ -53,6 +41,14 @@ function getPendingContext() {
   return join(getStateRoot(), ".pending-context");
 }
 
+// Dedicated channel for fired scheduled tasks, separate from the generic
+// .pending-context state/entity stream. One file per schedule (keyed by id,
+// last-fire-wins) which an active session claims exactly-once by atomic rename
+// (see drain in macrodata-hook.sh). Replaces spawning a metered `claude -p`.
+function getPendingRemindersDir() {
+  return join(getStateRoot(), ".pending-reminders");
+}
+
 interface Schedule {
   id: string;
   type: "cron" | "once";
@@ -62,85 +58,6 @@ interface Schedule {
   agent?: "opencode" | "claude"; // Which agent to trigger
   model?: string; // Optional model override (e.g., "anthropic/claude-opus-4-6")
   createdAt: string;
-}
-
-/**
- * Trigger an agent with a message
- */
-async function triggerAgent(
-  agent: "opencode" | "claude" | undefined,
-  message: string,
-  options: { model?: string; description?: string } = {}
-): Promise<boolean> {
-  if (!agent) {
-    log("No agent specified in schedule, skipping trigger");
-    return false;
-  }
-
-  const timestamp = new Date().toLocaleString();
-  const fullMessage = `[Scheduled reminder: ${options.description || "reminder"}]
-Current time: ${timestamp}
-
-IMPORTANT: Use the macrodata_* tools (e.g., macrodata_log_journal, macrodata_search_memory) for memory operations. You are running in a non-interactive scheduled context.
-
-${message}`;
-
-  try {
-    if (agent === "opencode") {
-      // opencode run "message" --model provider/model
-      const args = ["run", fullMessage];
-      if (options.model) {
-        args.push("--model", options.model);
-      }
-      
-      // Find opencode in PATH or use npx as fallback
-      const opencodePath = await findExecutable("opencode") || "npx";
-      const finalArgs = opencodePath === "npx" ? ["opencode", ...args] : args;
-      
-      log(`Triggering OpenCode: ${opencodePath} ${finalArgs.join(" ").substring(0, 50)}...`);
-      
-      const proc = spawn(opencodePath, finalArgs, {
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: true,
-        env: { ...process.env, PATH: process.env.PATH },
-      });
-
-      proc.unref();
-
-      // Log output for debugging
-      proc.stdout?.on("data", (data) => {
-        log(`[opencode stdout] ${data.toString().trim()}`);
-      });
-      proc.stderr?.on("data", (data) => {
-        log(`[opencode stderr] ${data.toString().trim()}`);
-      });
-
-      return true;
-    } else if (agent === "claude") {
-      // claude --print "message" [--model <model>]
-      const args = ["--print", fullMessage];
-      if (options.model) {
-        // Schedules store opencode-style ids ("anthropic/claude-opus-4-7");
-        // claude expects the bare id or alias ("claude-opus-4-7", "sonnet").
-        args.push("--model", options.model.replace(/^anthropic\//, ""));
-      }
-
-      log(`Triggering Claude Code: claude --print "..."${options.model ? ` --model ${options.model.replace(/^anthropic\//, "")}` : ""}`);
-      
-      const proc = spawn("claude", args, {
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: true,
-      });
-
-      proc.unref();
-
-      return true;
-    }
-  } catch (err) {
-    logError(`Failed to trigger ${agent}: ${String(err)}`);
-  }
-
-  return false;
 }
 
 function log(message: string) {
@@ -163,9 +80,56 @@ function writePendingContext(message: string) {
   }
 }
 
+// Orphaned-claim TTL: a session that crashes between the drain's `mv` and `rm`
+// leaves a `*.claimed.*` file the drain skips forever; a daemon crash mid-write
+// can leave a `.tmp`. Both are swept once they're clearly stale. Real reminders
+// are NOT swept on a timer — they're keyed by schedule id (one per schedule)
+// and each firing overwrites the prior, so they self-bound and stay current.
+const REMINDER_ORPHAN_TTL_MS = 5 * 60 * 1000;
+
+// Queue length of one per schedule: the claim file is keyed by schedule id, so
+// a new firing overwrites any prior unclaimed reminder for that schedule
+// (last-fire-wins — "run maintenance 5×" coalesces to once, latest context).
+// The dir therefore never grows past the number of distinct schedules.
+// Write-then-rename so a draining session never reads a half-written notice;
+// the hook claims the file with a single atomic rename (exactly-once across
+// sessions). reminderFileName/formatReminder sanitize the untrusted id, model,
+// description, and payload (see src/reminders.ts).
+function writeReminderClaim(schedule: Schedule) {
+  try {
+    const dir = getPendingRemindersDir();
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const name = reminderFileName(schedule.id);
+    const tmp = join(dir, `.${name}.tmp`);
+    const content = formatReminder(schedule, new Date().toLocaleString());
+    writeFileSync(tmp, content + "\n");
+    renameSync(tmp, join(dir, name));
+  } catch (err) {
+    logError(`Failed to write reminder for ${schedule.id}: ${String(err)}`);
+  }
+}
+
+// Sweep stale orphans (claimed-but-not-removed, or half-written tmp). Real
+// reminder files are left alone. Cheap; runs after each firing.
+function gcReminderOrphans() {
+  const dir = getPendingRemindersDir();
+  if (!existsSync(dir)) return;
+  const now = Date.now();
+  for (const name of readdirSync(dir)) {
+    const isOrphan = name.includes(".claimed.") || (name.startsWith(".") && name.endsWith(".tmp"));
+    if (!isOrphan) continue;
+    const path = join(dir, name);
+    try {
+      if (now - statSync(path).mtimeMs > REMINDER_ORPHAN_TTL_MS) unlinkSync(path);
+    } catch (err) {
+      logError(`Failed to GC orphan reminder ${name}: ${String(err)}`);
+    }
+  }
+}
+
 function ensureDirectories() {
   const entitiesDir = getEntitiesDir();
-  const dirs = [getDaemonDir(), getStateRoot(), getIndexDir(), entitiesDir, getJournalDir(), getRemindersDir(), join(entitiesDir, "people"), join(entitiesDir, "projects")];
+  const dirs = [getDaemonDir(), getStateRoot(), getIndexDir(), entitiesDir, getJournalDir(), getRemindersDir(), getPendingRemindersDir(), join(entitiesDir, "people"), join(entitiesDir, "projects")];
   for (const dir of dirs) {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
@@ -432,22 +396,15 @@ class MacrodataLocalDaemon {
     }
   }
 
-  private async fireSchedule(schedule: Schedule) {
+  private fireSchedule(schedule: Schedule) {
     log(`Firing schedule: ${schedule.id} - ${schedule.description}`);
 
-    // Trigger the agent specified in the schedule
-    const triggered = await triggerAgent(schedule.agent, schedule.payload, {
-      model: schedule.model,
-      description: schedule.description,
-    });
-
-    if (triggered) {
-      log(`Successfully triggered ${schedule.agent} for: ${schedule.id}`);
-    } else if (schedule.agent) {
-      log(`Failed to trigger ${schedule.agent} for: ${schedule.id}`);
-    } else {
-      log(`No agent specified for: ${schedule.id} (pending context written)`);
-    }
+    // No more metered `claude -p` spawns. A firing just queues a claim-file
+    // (one per schedule, last-fire-wins); the next active session claims it
+    // and runs the task as a background subagent.
+    writeReminderClaim(schedule);
+    gcReminderOrphans();
+    log(`Queued reminder for: ${schedule.id} (.pending-reminders)`);
   }
 
   addSchedule(schedule: Schedule) {
