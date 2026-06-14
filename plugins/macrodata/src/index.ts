@@ -327,11 +327,16 @@ server.tool(
   "Create a reminder. Use type 'cron' for recurring (expression is cron syntax) or 'once' for one-shot (expression is ISO datetime).",
   {
     type: z.enum(["cron", "once"]).describe("'cron' for recurring, 'once' for one-shot"),
-    id: z.string().describe("Unique identifier for this reminder"),
+    // id becomes a filename and an XML attribute when the reminder fires, so
+    // constrain it to a safe charset (no path separators, quotes, or glob
+    // metacharacters). The daemon re-sanitizes on read for defense in depth.
+    id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "id must be 1-64 chars of [A-Za-z0-9_-]").describe("Unique identifier for this reminder"),
     expression: z.string().describe("Cron expression (e.g., '0 9 * * *') or ISO datetime (e.g., '2026-01-31T10:00:00')"),
     description: z.string().describe("What this reminder is for"),
     payload: z.string().describe("Message to process when reminder fires"),
-    model: z.string().optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-6' for deep thinking tasks)"),
+    // No quotes/spaces/angle brackets — keeps it safe inside the reminder's
+    // model="..." attribute; the daemon maps it to a known Agent-tool alias.
+    model: z.string().regex(/^[A-Za-z0-9/_.-]+$/, "model has invalid characters").optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-6' for deep thinking tasks)"),
   },
   async ({ type, id, expression, description, payload, model }) => {
     const schedule: Schedule = {

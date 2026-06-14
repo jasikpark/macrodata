@@ -32,6 +32,7 @@ fi
 
 PIDFILE="$STATE_ROOT/.daemon.pid"
 PENDING_CONTEXT="$STATE_ROOT/.pending-context"
+PENDING_REMINDERS_DIR="$STATE_ROOT/.pending-reminders"
 LOGFILE="$STATE_ROOT/.daemon.log"
 IDENTITY="$STATE_ROOT/state/identity.md"
 
@@ -82,6 +83,34 @@ inject_pending_context() {
     fi
 }
 
+# Drain fired scheduled tasks. The daemon writes one file per firing into
+# .pending-reminders/. We claim each by renaming it before reading: rename(2)
+# can move a given source only once, so when several sessions drain at the
+# same moment exactly one wins each file and the losers' mv fails silently —
+# no scheduled run gets grabbed twice. The claimed name carries the session
+# id so the daemon log / a curious human can see who took it.
+inject_reminders() {
+    [ -d "$PENDING_REMINDERS_DIR" ] || return
+    # session_id is external input (harness stdin JSON) and lands in a filename
+    # below, so strip it to a safe charset before use.
+    local session_id
+    session_id=$(printf '%s' "${1:-}" | tr -cd 'A-Za-z0-9_-')
+    [ -n "$session_id" ] || session_id="unknown"
+    local f base claimed
+    for f in "$PENDING_REMINDERS_DIR"/*; do
+        [ -e "$f" ] || continue            # no matches: glob stays literal
+        base=$(basename "$f")
+        case "$base" in
+            .*|*.claimed.*) continue ;;    # tmp writes and already-claimed leftovers
+        esac
+        claimed="$f.claimed.$session_id.$$"
+        if mv "$f" "$claimed" 2>/dev/null; then
+            cat "$claimed"
+            rm -f "$claimed"
+        fi
+    done
+}
+
 inject_first_run() {
     # Once identity.md exists, normal state is delivered by the per-file
     # compose-state-file.ts hooks — nothing to emit here.
@@ -118,7 +147,14 @@ case "$1" in
         ;;
     prompt-submit)
         start_daemon
+        # session_id rides in on the hook's stdin JSON (absent when run by
+        # hand). Read stdin once — it can only be consumed once.
+        SESSION_ID=""
+        if [ ! -t 0 ]; then
+            SESSION_ID=$(jq -r '.session_id // empty' 2>/dev/null)
+        fi
         inject_pending_context
+        inject_reminders "$SESSION_ID"
         ;;
     *)
         echo "Usage: $0 {session-start|prompt-submit}" >&2
