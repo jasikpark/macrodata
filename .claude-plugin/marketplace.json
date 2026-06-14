@@ -1,8 +1,8 @@
 {
 	"name": "macrodata",
 	"owner": {
-		"name": "Matt Kane",
-		"url": "https://mk.gg"
+		"name": "Caleb Jasik",
+		"url": "https://jasik.xyz"
 	},
 	"metadata": {
 		"description": "Stateful agent tools. Learns who you are, remembers what you're working on, schedules tasks, maintains itself."
