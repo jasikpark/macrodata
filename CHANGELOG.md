@@ -8,6 +8,47 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-06-15
+
+### Changed
+
+- Reattributed the fork to jasikpark (#11): author/owner and repository/homepage/bugs URLs now point at `jasikpark/macrodata`, the README install command and logo target the fork, and a `LICENSE` file was added (none existed) carrying both copyright lines — Matt Kane (original) and Caleb Jasik — plus a fork note. Matt Kane is preserved as a `package.json` contributor; the upstream `Thanks @ascorbic` changelog history is untouched.
+
+### Fixed
+
+- **A stale daemon kept running old code after a plugin upgrade (#12).** The PID file is version-agnostic (keyed to the state root), but the daemon runs from a version-specific cache path — so after an upgrade `start_daemon` saw the old daemon's live PID and skipped restarting it, and crons kept firing on the previous version's code. `start_daemon` now pins the live PID once and classifies it by its `ps` argv against its own versioned `$DAEMON`: same version → leave it; a different `/plugins/cache/` version → SIGTERM (escalating to SIGKILL if ignored), clear the pidfile, respawn from the new path; a daemon running from outside the cache (a hand-started dev checkout) → left alone. `signal_daemon_reload` gained the same argv guard so a recycled PID can't be SIGHUP'd. Hook-only; the MCP server is session-scoped and still needs a session reload after upgrade.
+
+### Notes
+
+- Bundles two changes that landed on `main` after `v0.3.0` without their own bump (#11 attribution, #13 daemon fix), and brings this changelog current (the `0.2.7` and `0.3.0` entries below were backfilled in the same release).
+- The daemon-restart fix takes effect from the release that ships it, so it fully applies one upgrade later — the daemon running at upgrade time predates the fix.
+- Hardened across a 3-round adversarial review (5 → 3 → 0 findings; SIGKILL escalation, pinned-PID TOCTOU close, reload guard, wedge test).
+- Plugin version bumped `0.3.0` → `0.3.1` in `marketplace.json`, `plugin.json`, and `package.json`.
+
+## [0.3.0] — 2026-06-14
+
+### Changed
+
+- **Scheduled tasks now inject reminders into the active session instead of spawning a metered `claude --print` (#10).** A cron fire previously launched a headless `claude --print` per run — measured at ~$811/mo at API rates, ~4× the credit pool. Now a firing writes one claim-file per schedule (keyed by id, last-fire-wins) into `.pending-reminders/`; a dedicated `inject_reminders` prompt-submit hook drains it, claiming each file by atomic rename so concurrent sessions can't double-grab a run, and the reminder asks the session to run the task as a background subagent with the schedule's model pinned. The now-dead `triggerAgent` spawn path was removed.
+  - New `src/reminders.ts` (pure, property-tested) sanitizes the untrusted schedule `id` (path-traversal-safe filename), `payload`/`description` (can't break the `<macrodata-scheduled-task>` frame), and `model` (mapped to an alias allowlist so an injected schedule can't re-pin an expensive model). Zod constraints added at the `schedule` MCP-tool boundary.
+- Tests: `reminders-sanitize.test.ts` (`fast-check` property fuzzing of every sanitizer) plus concurrent-claim and hostile-input cases in `hook.test.ts`.
+
+### Notes
+
+- Tradeoff: subagents draw from the active session's window rather than time-shifting load to off-hours as `claude --print` did — accepted for this first burn-killing version.
+- Hardened across a 2-round adversarial review (2 critical + 1 major fixed: path traversal, verbatim/newline injection, model re-pin).
+- Plugin version bumped `0.2.7` → `0.3.0`.
+
+## [0.2.7] — 2026-06-11
+
+### Fixed
+
+- **The schedule model override was ignored on `claude --print` fires (#8).** The `claude` branch of `triggerAgent` never forwarded `options.model` (only the opencode branch did), so every cron inherited the user's default model — e.g. a `sync-prs` schedule pinned to haiku had been running on opus/fable. Now `--model` is passed when the schedule has one, stripping the opencode-style `anthropic/` prefix (schedules store `anthropic/claude-sonnet-4-6`; `claude` expects the bare id/alias).
+
+### Notes
+
+- Plugin version bumped `0.2.6` → `0.2.7`.
+
 ## [0.2.6] — 2026-05-29
 
 ### Changed
@@ -89,7 +130,10 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 - Cross-encoder reranking layer over the bi-encoder search, with `MACRODATA_AMBIENT_RERANK=1` toggle and `MACRODATA_AMBIENT_DUAL=1` to surface a vector-only eval block alongside the reranked one. `MACRODATA_AMBIENT_CANDIDATE_K=40` widens the slate handed to the cross-encoder so title-less section chunks have a better shot at landing in it.
 
-[Unreleased]: https://github.com/jasikpark/macrodata/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/jasikpark/macrodata/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/jasikpark/macrodata/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/jasikpark/macrodata/compare/v0.2.7...v0.3.0
+[0.2.7]: https://github.com/jasikpark/macrodata/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/jasikpark/macrodata/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/jasikpark/macrodata/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jasikpark/macrodata/compare/v0.2.3...v0.2.4
