@@ -21,7 +21,7 @@ Entries land on `main` as part of the change that introduces them. The next vers
 ### Notes
 
 - Bundles two changes that landed on `main` after `v0.3.0` without their own bump (#11 attribution, #13 daemon fix), and brings this changelog current (the `0.2.7` and `0.3.0` entries below were backfilled in the same release).
-- The daemon-restart fix takes effect from the release that ships it, so it fully applies one upgrade later — the daemon running at upgrade time predates the fix.
+- The daemon-restart fix is hook-delivered, so it applies immediately on the upgrade that ships it: Claude Code runs the freshly-installed version's hook, which restarts a still-running older-version daemon on the next session-start/prompt-submit. (Verified on the `0.3.0` → `0.3.1` upgrade — the running `0.3.0` daemon was auto-replaced, no manual kill.)
 - Hardened across a 3-round adversarial review (5 → 3 → 0 findings; SIGKILL escalation, pinned-PID TOCTOU close, reload guard, wedge test).
 - Plugin version bumped `0.3.0` → `0.3.1` in `marketplace.json`, `plugin.json`, and `package.json`.
 
