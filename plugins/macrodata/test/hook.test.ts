@@ -229,4 +229,118 @@ describe("hook script", () => {
       expect(remindersLeft()).toEqual([]); // claimed + removed, no orphan
     });
   });
+
+  describe("daemon version lifecycle (GH #12)", () => {
+    // Spawn a fake long-lived process whose argv looks like a daemon at
+    // `fakeCmd`, and point the PID file at it — simulates a daemon already
+    // running from a particular version/path. `exec -a` sets argv[0] so
+    // `ps -o command=` reports it. (Uses prompt-submit, not session-start, to
+    // avoid the SIGHUP reload — which would kill the fake `sleep` for the
+    // wrong reason.)
+    function spawnFakeDaemon(fakeCmd: string): number {
+      const child = spawn("bash", ["-c", `exec -a "${fakeCmd}" sleep 30`], {
+        detached: true,
+        stdio: "ignore",
+      });
+      child.unref();
+      writeFileSync(join(ctx.root, ".daemon.pid"), String(child.pid));
+      return child.pid as number;
+    }
+
+    // A stale daemon that IGNORES SIGTERM — only SIGKILL stops it. exec replaces
+    // the outer shell (same PID) with a bash that traps TERM, so `kill` is a
+    // no-op and the hook must escalate to `kill -9`.
+    function spawnWedgedDaemon(fakeCmd: string): number {
+      const child = spawn(
+        "bash",
+        ["-c", `exec -a "${fakeCmd}" bash -c 'trap "" TERM; while :; do sleep 1; done'`],
+        { detached: true, stdio: "ignore" }
+      );
+      child.unref();
+      writeFileSync(join(ctx.root, ".daemon.pid"), String(child.pid));
+      return child.pid as number;
+    }
+
+    function alive(pid: number): boolean {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    async function waitGone(pid: number, ms = 6000): Promise<boolean> {
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline) {
+        if (!alive(pid)) return true;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return !alive(pid);
+    }
+
+    function argvOf(pid: number): string {
+      try {
+        return execSync(`ps -p ${pid} -o command=`, { encoding: "utf-8" });
+      } catch {
+        return "";
+      }
+    }
+
+    function currentDaemonPid(): number | null {
+      const f = join(ctx.root, ".daemon.pid");
+      if (!existsSync(f)) return null;
+      const pid = Number(readFileSync(f, "utf-8").trim());
+      return Number.isFinite(pid) ? pid : null;
+    }
+
+    const STALE_CACHE_CMD =
+      "bun run /Users/x/.claude/plugins/cache/macrodata/macrodata/0.0.1/bin/macrodata-daemon.ts";
+
+    test("stops a stale plugin-cache daemon and respawns the current version", async () => {
+      const stale = spawnFakeDaemon(STALE_CACHE_CMD);
+      expect(argvOf(stale)).toContain("/plugins/cache/"); // the argv spoof actually took on this platform
+
+      runHook(ctx, "prompt-submit");
+
+      expect(await waitGone(stale)).toBe(true); // stale killed
+      const fresh = currentDaemonPid();
+      expect(fresh).not.toBeNull();
+      expect(fresh).not.toBe(stale); // a DIFFERENT daemon now owns the pidfile
+      expect(alive(fresh as number)).toBe(true); // ...and it's actually running
+      const cmd = argvOf(fresh as number);
+      expect(cmd).toContain("macrodata-daemon.ts");
+      expect(cmd).not.toContain("/plugins/cache/"); // ...the current (non-stale) version
+    });
+
+    test("force-kills a stale daemon that ignores SIGTERM, then respawns (#2)", async () => {
+      const wedge = spawnWedgedDaemon(STALE_CACHE_CMD);
+      expect(argvOf(wedge)).toContain("/plugins/cache/");
+
+      runHook(ctx, "prompt-submit");
+
+      expect(await waitGone(wedge)).toBe(true); // SIGKILL escalation stopped it
+      const fresh = currentDaemonPid();
+      expect(fresh).not.toBe(wedge);
+      expect(alive(fresh as number)).toBe(true); // respawned despite the wedge
+    });
+
+    test("leaves a hand-run dev daemon (outside the cache) alone", () => {
+      const dev = spawnFakeDaemon(
+        "bun run /home/dev/checkout/plugins/macrodata/bin/macrodata-daemon.ts"
+      );
+      expect(argvOf(dev)).toContain("/home/dev/checkout/"); // spoof took
+
+      runHook(ctx, "prompt-submit");
+
+      expect(alive(dev)).toBe(true); // not killed
+      // ...and no competing daemon spawned — PID file still points at the dev one.
+      expect(readFileSync(join(ctx.root, ".daemon.pid"), "utf-8").trim()).toBe(String(dev));
+      try {
+        process.kill(dev);
+      } catch {
+        /* afterEach also targets the pidfile pid */
+      }
+    });
+  });
 });
