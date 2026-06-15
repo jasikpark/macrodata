@@ -46,9 +46,72 @@ is_daemon_running() {
     return 1
 }
 
+# The PID recorded in the pidfile (nonzero exit if none / empty).
+read_daemon_pid() {
+    [ -f "$PIDFILE" ] || return 1
+    local pid; pid=$(cat "$PIDFILE")
+    [ -n "$pid" ] || return 1
+    printf '%s' "$pid"
+}
+
+# argv of a SPECIFIC pid (empty + nonzero if it isn't alive). The PID file is
+# version-agnostic (keyed to the state root), but $DAEMON is version-specific
+# (its cache path contains the version), so the argv tells us which version is
+# running. Callers pin the PID once via read_daemon_pid and pass it here, so the
+# argv we classify and the PID we later signal/kill are the SAME process — never
+# two reads of a mutable pidfile.
+daemon_argv() {
+    local pid=$1
+    { [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; } || return 1
+    ps -p "$pid" -o command= 2>/dev/null
+}
+
 start_daemon() {
-    if is_daemon_running; then
-        return 0
+    # Pin the PID once, then classify AND act on that same process — re-reading
+    # the pidfile between the argv check and the kill could target a different
+    # (recycled / just-respawned) process.
+    local pid="" cmd=""
+    pid=$(read_daemon_pid) || pid=""
+    if [ -n "$pid" ]; then
+        cmd=$(daemon_argv "$pid") || cmd=""
+    fi
+    if [ -n "$cmd" ]; then
+        case "$cmd" in
+            *"$DAEMON"*)
+                # Current version already running — nothing to do.
+                return 0
+                ;;
+            */plugins/cache/*macrodata-daemon.ts*)
+                # A plugin-cache daemon from a DIFFERENT version: stale after an
+                # upgrade (it keeps running the old cached code). Stop it so we
+                # respawn from the new version path. (GH #12.)
+                kill "$pid" 2>/dev/null
+                local n=0
+                while [ $n -lt 20 ] && kill -0 "$pid" 2>/dev/null; do
+                    sleep 0.1; n=$((n + 1))
+                done
+                # Escalate if it ignored SIGTERM. Without this we'd fall through
+                # and spawn a fresh daemon that immediately self-exits ("already
+                # running", since the stale PID is still live) — silently leaving
+                # the OLD code running, i.e. regressing GH #12.
+                if kill -0 "$pid" 2>/dev/null; then
+                    kill -9 "$pid" 2>/dev/null
+                    n=0
+                    while [ $n -lt 20 ] && kill -0 "$pid" 2>/dev/null; do
+                        sleep 0.1; n=$((n + 1))
+                    done
+                fi
+                # SIGKILL skips the daemon's own pidfile cleanup, so clear it
+                # here — the fresh daemon must never read a stale entry.
+                rm -f "$PIDFILE"
+                ;;
+            *)
+                # Daemon running from outside the plugin cache (a hand-started
+                # dev checkout). Assume it's intentional — leave it, don't spawn
+                # a competitor. Restart it yourself if you're iterating on it.
+                return 0
+                ;;
+        esac
     fi
 
     local BUN="bun"
@@ -65,15 +128,22 @@ start_daemon() {
         fi
         attempts=$((attempts + 1))
     done
+    # Didn't report a PID in time — a cold `bun` start can exceed 2s. Leave a
+    # breadcrumb instead of failing silently.
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] start_daemon: daemon did not report a PID within 2s" >> "$LOGFILE"
 }
 
 signal_daemon_reload() {
-    if [ -f "$PIDFILE" ]; then
-        local pid=$(cat "$PIDFILE")
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -HUP "$pid" 2>/dev/null
-        fi
-    fi
+    # Guard against PID reuse: a stale pidfile can name a recycled PID now owned
+    # by an unrelated process, and many programs treat SIGHUP as "terminate".
+    # Pin the PID once and HUP that exact validated process — only if its argv
+    # says it's a macrodata daemon.
+    local pid cmd
+    pid=$(read_daemon_pid) || return 0
+    cmd=$(daemon_argv "$pid") || return 0
+    case "$cmd" in
+        *macrodata-daemon.ts*) kill -HUP "$pid" 2>/dev/null ;;
+    esac
 }
 
 inject_pending_context() {
