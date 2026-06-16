@@ -309,7 +309,7 @@ server.tool(
   "Manage search indexes. Target 'memory' for journal/entities, 'conversations' for past Claude Code sessions.",
   {
     target: z.enum(["memory", "conversations"]).describe("Which index to manage"),
-    action: z.enum(["rebuild", "update", "stats"]).describe("'rebuild' to reindex from scratch, 'update' for incremental (conversations only), 'stats' to get counts"),
+    action: z.enum(["rebuild", "update", "stats"]).describe("'rebuild' re-scans all sources and upserts (does NOT purge records for deleted/renamed files — delete the index dir first for a truly clean rebuild), 'update' for incremental (conversations only), 'stats' to get counts"),
   },
   async ({ target, action }) => {
     try {
