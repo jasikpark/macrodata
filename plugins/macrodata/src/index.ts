@@ -44,6 +44,7 @@ import {
 } from "./config.js";
 import { unlinkSync } from "fs";
 import { getRecentJournalEntries, type JournalEntry } from "./journal.js";
+import { cronTooFrequent } from "./reminders.js";
 
 /**
  * Filterable search types: "journal" plus the live entities/<subdir> folder
@@ -377,6 +378,20 @@ server.tool(
     delivery: z.enum(["session", "headless"]).optional().describe("How the fired job runs. 'session' (default): queue a reminder drained into your next active session as a background subagent. 'headless': spawn a detached `claude --print` on the tick — runs unattended on schedule, but no-ops if the machine is asleep, and executes autonomously without surfacing in your session (reserve for trusted background jobs)."),
   },
   async ({ type, id, expression, description, payload, model, delivery }) => {
+    // Reject sub-2-minute cron cadences: macrodata has no use for them, and a
+    // hot cron on headless delivery is an unbounded spawn-rate hazard (no
+    // coalescing). The daemon enforces the same bound for hand-edited JSON.
+    if (type === "cron" && cronTooFrequent(expression)) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Rejected: "${expression}" fires more often than every 2 minutes. macrodata cron schedules must be at least 2 minutes apart.`,
+          },
+        ],
+      };
+    }
+
     const schedule: Schedule = {
       id,
       type,

@@ -20,7 +20,7 @@ import { join, basename } from "path";
 import { Cron } from "croner";
 import { indexEntityFile, preloadModel } from "../src/indexer.js";
 import { getStateRoot, getEntitiesDir, getJournalDir, getIndexDir, getRemindersDir } from "../src/config.js";
-import { formatReminder, reminderFileName, buildHeadlessArgs, resolveModel } from "../src/reminders.js";
+import { formatReminder, reminderFileName, buildHeadlessArgs, resolveModel, cronTooFrequent } from "../src/reminders.js";
 import { updateConversationIndex as updateOpenCodeConversations } from "../opencode/conversations.js";
 import { updateConversationIndex as updateClaudeCodeConversations } from "../src/conversations.js";
 
@@ -407,6 +407,13 @@ class MacrodataLocalDaemon {
   }
 
   private startCronJob(schedule: Schedule) {
+    // Enforce the ≥2-minute floor for hand-edited / pre-existing JSON that
+    // never went through the schedule tool's validation. A hot headless cron
+    // would otherwise spawn unbounded (no coalescing).
+    if (cronTooFrequent(schedule.expression)) {
+      logError(`Refusing too-frequent cron ${schedule.id} (${schedule.expression}): must be at least 2 minutes apart`);
+      return;
+    }
     try {
       const job = new Cron(schedule.expression, () => {
         void this.fireSchedule(schedule);

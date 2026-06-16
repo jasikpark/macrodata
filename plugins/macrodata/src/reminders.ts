@@ -11,6 +11,8 @@
  * validation or be hand-edited.
  */
 
+import { Cron } from "croner";
+
 export const DEFAULT_MODEL = "haiku";
 
 // Aliases the Agent tool accepts. An unknown/garbage model can't be pinned —
@@ -26,6 +28,32 @@ export function resolveModel(model?: string): string {
   // Full ids like "claude-opus-4-7" → their alias.
   const m = bare.match(/\b(opus|sonnet|haiku|fable)\b/);
   return m ? m[1] : DEFAULT_MODEL;
+}
+
+/** Minimum allowed gap between cron firings. macrodata has no sub-2-minute use
+ *  case, and a hot cron on headless delivery is an unbounded spawn-rate hazard
+ *  (no coalescing). */
+export const MIN_CRON_INTERVAL_MS = 2 * 60 * 1000;
+
+/**
+ * True if a cron expression fires more often than every 2 minutes. Sampled via
+ * croner's next runs (deterministic given `ref`), so it catches second-level
+ * (6-field) crons, every-minute and step cadences, and lists — not just a
+ * literal star. Unparseable expressions return false (croner surfaces those
+ * elsewhere). Only meaningful for cron type; a once-style ISO datetime yields
+ * fewer than 2 runs and is never flagged.
+ */
+export function cronTooFrequent(expression: string, ref: Date = new Date()): boolean {
+  let runs: Date[];
+  try {
+    runs = new Cron(expression).nextRuns(5, ref);
+  } catch {
+    return false;
+  }
+  for (let i = 1; i < runs.length; i++) {
+    if (runs[i].getTime() - runs[i - 1].getTime() < MIN_CRON_INTERVAL_MS) return true;
+  }
+  return false;
 }
 
 /**

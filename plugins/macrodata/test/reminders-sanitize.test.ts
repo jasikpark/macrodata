@@ -17,6 +17,7 @@ import {
   resolveModel,
   formatReminder,
   buildHeadlessArgs,
+  cronTooFrequent,
   DEFAULT_MODEL,
 } from "../src/reminders";
 
@@ -158,6 +159,29 @@ describe("buildHeadlessArgs (headless delivery)", () => {
         expect(allowed.has(args[modelIdx + 1])).toBe(true);
       })
     );
+  });
+});
+
+describe("cronTooFrequent (≥2-minute floor)", () => {
+  const ref = new Date("2026-06-16T12:00:00Z");
+
+  test("rejects sub-2-minute cadences", () => {
+    expect(cronTooFrequent("* * * * * *", ref)).toBe(true); // every second (6-field)
+    expect(cronTooFrequent("* * * * *", ref)).toBe(true); // every minute
+    expect(cronTooFrequent("*/1 * * * *", ref)).toBe(true); // every minute
+  });
+
+  test("allows 2-minute and slower", () => {
+    expect(cronTooFrequent("*/2 * * * *", ref)).toBe(false); // exactly 2m — boundary is allowed
+    expect(cronTooFrequent("*/5 * * * *", ref)).toBe(false);
+    expect(cronTooFrequent("0 * * * *", ref)).toBe(false); // hourly
+    expect(cronTooFrequent("0 9 * * *", ref)).toBe(false); // daily
+    expect(cronTooFrequent("30 12 * * 1-5", ref)).toBe(false); // a real macrodata schedule
+  });
+
+  test("unparseable / empty expression is not flagged (surfaced elsewhere)", () => {
+    expect(cronTooFrequent("not a cron", ref)).toBe(false);
+    expect(cronTooFrequent("", ref)).toBe(false);
   });
 });
 
