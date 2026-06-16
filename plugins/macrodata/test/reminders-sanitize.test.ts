@@ -169,6 +169,9 @@ describe("cronTooFrequent (≥2-minute floor)", () => {
     expect(cronTooFrequent("* * * * * *", ref)).toBe(true); // every second (6-field)
     expect(cronTooFrequent("* * * * *", ref)).toBe(true); // every minute
     expect(cronTooFrequent("*/1 * * * *", ref)).toBe(true); // every minute
+    // sparse-early, tight-late: :50→:51 is a 60s gap recurring hourly, past a
+    // fixed 5-run sample window (VDD iter-3 regression).
+    expect(cronTooFrequent("0,10,20,30,40,50,51 * * * *", ref)).toBe(true);
   });
 
   test("allows 2-minute and slower", () => {

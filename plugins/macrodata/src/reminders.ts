@@ -36,24 +36,33 @@ export function resolveModel(model?: string): string {
 export const MIN_CRON_INTERVAL_MS = 2 * 60 * 1000;
 
 /**
- * True if a cron expression fires more often than every 2 minutes. Sampled via
- * croner's next runs (deterministic given `ref`), so it catches second-level
- * (6-field) crons, every-minute and step cadences, and lists — not just a
- * literal star. Unparseable expressions return false (croner surfaces those
- * elsewhere). Only meaningful for cron type; a once-style ISO datetime yields
- * fewer than 2 runs and is never flagged.
+ * True if a cron expression fires more often than every 2 minutes. Walks the
+ * firings across a full week (bounded) rather than a fixed small sample, so a
+ * tight pair that only recurs hourly or daily is still caught — a 5-run window
+ * misses a sparse-early, tight-late layout like `0,10,20,30,40,50,51 * * * *`.
+ * A sub-2m gap returns early; a clean cadence walks to the horizon and returns
+ * false. Unparseable expressions return false (croner surfaces those
+ * elsewhere). Only meaningful for cron type; a once-style ISO datetime yields a
+ * single run and is never flagged.
  */
 export function cronTooFrequent(expression: string, ref: Date = new Date()): boolean {
-  let runs: Date[];
+  const HORIZON_MS = 7 * 24 * 60 * 60 * 1000; // a week covers daily/weekly periods
+  const MAX_SAMPLES = 2000; // bound the walk for near-floor cadences
   try {
-    runs = new Cron(expression).nextRuns(5, ref);
+    const cron = new Cron(expression);
+    const deadline = ref.getTime() + HORIZON_MS;
+    let prev: Date | null = null;
+    for (let i = 0; i < MAX_SAMPLES; i++) {
+      const next = cron.nextRun(prev ?? ref);
+      if (!next || next.getTime() > deadline) break;
+      // Skip the ref→first gap (ref isn't a firing); compare firing-to-firing.
+      if (prev && next.getTime() - prev.getTime() < MIN_CRON_INTERVAL_MS) return true;
+      prev = next;
+    }
+    return false;
   } catch {
     return false;
   }
-  for (let i = 1; i < runs.length; i++) {
-    if (runs[i].getTime() - runs[i - 1].getTime() < MIN_CRON_INTERVAL_MS) return true;
-  }
-  return false;
 }
 
 /**
