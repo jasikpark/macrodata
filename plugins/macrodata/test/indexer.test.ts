@@ -180,6 +180,22 @@ Loves systems programming and performance optimization.
       }
     });
 
+    test("indexes categories beyond people/projects (topics)", async () => {
+      addEntityFile(
+        ctx,
+        "topics",
+        "raft",
+        "# Raft\n\n## Summary\n\nRaft is a consensus algorithm for managing a replicated log."
+      );
+      await indexer!.rebuildIndex();
+      const results = await indexer!.searchMemory("consensus algorithm replicated log", {
+        limit: 5,
+      });
+      // The whole point of the fix: a non-people/projects category is indexed,
+      // and its type is the verbatim folder name.
+      expect(results.some((r) => r.type === "topics")).toBe(true);
+    });
+
     test("filters by since date", async () => {
       const oldDate = new Date("2024-01-01");
       const newDate = new Date("2025-06-01");

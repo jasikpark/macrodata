@@ -304,6 +304,14 @@ export async function rebuildIndex(): Promise<{ itemCount: number }> {
   console.log("[Indexer] Starting full index rebuild...");
   const startTime = Date.now();
 
+  // Rebuild is upsert-only: it deliberately does NOT delete+recreate the index.
+  // The daemon and MCP server are separate processes sharing one lock-free
+  // Vectra index; an rm-then-repopulate window would let a concurrent daemon
+  // reindex read a half-deleted index (ENOENT) or clobber the rebuilt one.
+  // Trade-off: records for deleted files/sections, or renamed types, are not
+  // purged here — the one-time person->people rename needs a manual
+  // `rm -rf <root>/.index` before rebuild. A safe cross-process clean rebuild
+  // (temp-dir atomic swap + daemon coordination) is a tracked follow-up.
   const allItems: MemoryItem[] = [];
 
   // 1. Index journal entries
@@ -316,7 +324,9 @@ export async function rebuildIndex(): Promise<{ itemCount: number }> {
   const entitiesDir = getEntitiesDir();
   if (existsSync(entitiesDir)) {
     for (const dirent of readdirSync(entitiesDir, { withFileTypes: true })) {
-      if (!dirent.isDirectory()) continue;
+      // Skip non-dirs and dot-dirs (.obsidian, .git, .trash) so tooling
+      // artifacts don't become bogus entity types.
+      if (!dirent.isDirectory() || dirent.name.startsWith(".")) continue;
       console.log(`[Indexer] Parsing ${dirent.name}...`);
       allItems.push(...parseEntitiesForIndexing(dirent.name, dirent.name));
     }
@@ -375,6 +385,10 @@ export async function indexEntityFile(filePath: string): Promise<void> {
     return;
   }
   const subdir = match[1];
+  // Skip files under a dot-dir at any depth (.obsidian, .trash, .git) — tooling
+  // artifacts, not entities. Check every dir segment, not just the first.
+  const afterEntities = filePath.slice(filePath.indexOf("/entities/") + "/entities/".length);
+  if (afterEntities.split("/").slice(0, -1).some((seg) => seg.startsWith("."))) return;
   const type: MemoryItemType = subdir;
 
   try {

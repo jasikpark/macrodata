@@ -47,22 +47,22 @@ import { getRecentJournalEntries, type JournalEntry } from "./journal.js";
 
 /**
  * Filterable search types: "journal" plus the live entities/<subdir> folder
- * names. The filesystem is the single source of truth, so the search filter
- * cannot drift from what the indexer actually stores. Computed at startup; a
- * category added mid-session still indexes and stays reachable via "all".
+ * names (dot-dirs excluded, matching the indexer). The filesystem is the
+ * single source of truth, so the filter cannot drift from what the indexer
+ * stores. Recomputed per search_memory call, so a category added mid-session
+ * is filterable immediately — no server restart needed.
  */
 function entitySubdirs(): string[] {
   try {
     const dir = getEntitiesDir();
     if (!existsSync(dir)) return [];
     return readdirSync(dir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
+      .filter((d) => d.isDirectory() && !d.name.startsWith("."))
       .map((d) => d.name);
   } catch {
     return [];
   }
 }
-const SEARCH_TYPES = ["all", "journal", ...entitySubdirs()] as [string, ...string[]];
 
 interface Schedule {
   id: string;
@@ -232,15 +232,32 @@ server.tool(
   "Semantic search across journal entries and entity files. Returns ranked results.",
   {
     query: z.string().describe("Natural language search query"),
-    type: z.enum(SEARCH_TYPES).default("all").describe("Filter by content type: 'all', 'journal', or an entity folder name (people, projects, topics, …)"),
+    type: z.string().optional().describe("Filter by content type: 'journal' or an entity folder name (people, projects, topics, …). Omit or 'all' for everything."),
     since: z.string().optional().describe("Only include items after this ISO date"),
     limit: z.number().default(5).describe("Maximum results to return"),
   },
   async ({ query, type, since, limit }) => {
     try {
+      // Validate against the live folder set rather than a load-time enum, so
+      // a category created mid-session is filterable without a restart. Only
+      // touch the filesystem when an actual filter is supplied.
+      if (type && type !== "all") {
+        const validTypes = ["journal", ...entitySubdirs()];
+        if (!validTypes.includes(type)) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Unknown type "${type}". Valid: all, ${validTypes.join(", ")}.`,
+              },
+            ],
+          };
+        }
+      }
+
       const results = await doSearchMemory(query, {
         limit,
-        type: type === "all" ? undefined : (type as MemoryItemType),
+        type: !type || type === "all" ? undefined : (type as MemoryItemType),
         since,
       });
 

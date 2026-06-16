@@ -170,12 +170,13 @@ export function addJournalEntry(
  */
 export function addEntityFile(
   ctx: TestContext,
-  type: "people" | "projects",
+  type: string,
   name: string,
   content: string
 ) {
-  const filePath = join(ctx.entitiesDir, type, `${name}.md`);
-  writeFileSync(filePath, content);
+  const dir = join(ctx.entitiesDir, type);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${name}.md`), content);
 }
 
 /**
