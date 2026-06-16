@@ -11,6 +11,8 @@
  * validation or be hand-edited.
  */
 
+import { Cron } from "croner";
+
 export const DEFAULT_MODEL = "haiku";
 
 // Aliases the Agent tool accepts. An unknown/garbage model can't be pinned —
@@ -26,6 +28,41 @@ export function resolveModel(model?: string): string {
   // Full ids like "claude-opus-4-7" → their alias.
   const m = bare.match(/\b(opus|sonnet|haiku|fable)\b/);
   return m ? m[1] : DEFAULT_MODEL;
+}
+
+/** Minimum allowed gap between cron firings. macrodata has no sub-2-minute use
+ *  case, and a hot cron on headless delivery is an unbounded spawn-rate hazard
+ *  (no coalescing). */
+export const MIN_CRON_INTERVAL_MS = 2 * 60 * 1000;
+
+/**
+ * True if a cron expression fires more often than every 2 minutes. Walks the
+ * firings across a full week (bounded) rather than a fixed small sample, so a
+ * tight pair that only recurs hourly or daily is still caught — a 5-run window
+ * misses a sparse-early, tight-late layout like `0,10,20,30,40,50,51 * * * *`.
+ * A sub-2m gap returns early; a clean cadence walks to the horizon and returns
+ * false. Unparseable expressions return false (croner surfaces those
+ * elsewhere). Only meaningful for cron type; a once-style ISO datetime yields a
+ * single run and is never flagged.
+ */
+export function cronTooFrequent(expression: string, ref: Date = new Date()): boolean {
+  const HORIZON_MS = 7 * 24 * 60 * 60 * 1000; // a week covers daily/weekly periods
+  const MAX_SAMPLES = 2000; // bound the walk for near-floor cadences
+  try {
+    const cron = new Cron(expression);
+    const deadline = ref.getTime() + HORIZON_MS;
+    let prev: Date | null = null;
+    for (let i = 0; i < MAX_SAMPLES; i++) {
+      const next = cron.nextRun(prev ?? ref);
+      if (!next || next.getTime() > deadline) break;
+      // Skip the ref→first gap (ref isn't a firing); compare firing-to-firing.
+      if (prev && next.getTime() - prev.getTime() < MIN_CRON_INTERVAL_MS) return true;
+      prev = next;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -98,4 +135,19 @@ Start a background subagent (Agent tool, run_in_background, model pinned to "${m
 Subagent prompt:
 ${payload}
 </macrodata-scheduled-task>`;
+}
+
+/**
+ * Argv for the "headless" delivery path:
+ *   claude --print --model <alias> -- <payload>
+ * Flags go first and the payload is the final positional behind a `--`
+ * end-of-options sentinel, so a payload that happens to start with "-" is still
+ * the prompt, never parsed as a claude flag. (claude is Commander-based and the
+ * prompt is positional — `Usage: claude [options] [command] [prompt]`, verified
+ * against CLI 2.1.x, which honors `--`.) The model is clamped to a safe alias by
+ * resolveModel. spawn uses an arg array (never a shell), so no shell-escaping is
+ * needed.
+ */
+export function buildHeadlessArgs(s: ReminderInput): string[] {
+  return ["--print", "--model", resolveModel(s.model), "--", s.payload];
 }

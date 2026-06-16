@@ -44,6 +44,7 @@ import {
 } from "./config.js";
 import { unlinkSync } from "fs";
 import { getRecentJournalEntries, type JournalEntry } from "./journal.js";
+import { cronTooFrequent } from "./reminders.js";
 
 /**
  * Filterable search types: "journal" plus the live entities/<subdir> folder
@@ -72,6 +73,7 @@ interface Schedule {
   payload: string;
   agent?: "opencode" | "claude"; // Which agent CLI to trigger
   model?: string; // Optional model override (e.g., "anthropic/claude-opus-4-6")
+  delivery?: "session" | "headless"; // How a fired job runs (default: session)
   createdAt: string;
 }
 
@@ -372,9 +374,24 @@ server.tool(
     payload: z.string().describe("Message to process when reminder fires"),
     // No quotes/spaces/angle brackets — keeps it safe inside the reminder's
     // model="..." attribute; the daemon maps it to a known Agent-tool alias.
-    model: z.string().regex(/^[A-Za-z0-9/_.-]+$/, "model has invalid characters").optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-6' for deep thinking tasks)"),
+    model: z.string().regex(/^[A-Za-z0-9/_.-]{1,64}$/, "model must be 1-64 chars of [A-Za-z0-9/_.-]").optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-6' for deep thinking tasks). Omitting it — or passing an unrecognized value — defaults to haiku."),
+    delivery: z.enum(["session", "headless"]).optional().describe("How the fired job runs. 'session' (default): queue a reminder drained into your next active session as a background subagent. 'headless': spawn a detached `claude --print` on the tick — runs unattended on schedule, but no-ops if the machine is asleep, and executes autonomously without surfacing in your session (reserve for trusted background jobs)."),
   },
-  async ({ type, id, expression, description, payload, model }) => {
+  async ({ type, id, expression, description, payload, model, delivery }) => {
+    // Reject sub-2-minute cron cadences: macrodata has no use for them, and a
+    // hot cron on headless delivery is an unbounded spawn-rate hazard (no
+    // coalescing). The daemon enforces the same bound for hand-edited JSON.
+    if (type === "cron" && cronTooFrequent(expression)) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Rejected: "${expression}" fires more often than every 2 minutes. macrodata cron schedules must be at least 2 minutes apart.`,
+          },
+        ],
+      };
+    }
+
     const schedule: Schedule = {
       id,
       type,
@@ -383,6 +400,7 @@ server.tool(
       payload,
       agent: "claude",
       model,
+      delivery,
       createdAt: new Date().toISOString(),
     };
 

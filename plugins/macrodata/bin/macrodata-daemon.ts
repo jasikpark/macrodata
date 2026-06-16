@@ -14,12 +14,13 @@
  */
 
 import { watch } from "chokidar";
+import { spawn } from "child_process";
 import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, renameSync, statSync } from "fs";
 import { join, basename } from "path";
 import { Cron } from "croner";
 import { indexEntityFile, preloadModel } from "../src/indexer.js";
 import { getStateRoot, getEntitiesDir, getJournalDir, getIndexDir, getRemindersDir } from "../src/config.js";
-import { formatReminder, reminderFileName } from "../src/reminders.js";
+import { formatReminder, reminderFileName, buildHeadlessArgs, resolveModel, cronTooFrequent } from "../src/reminders.js";
 import { updateConversationIndex as updateOpenCodeConversations } from "../opencode/conversations.js";
 import { updateConversationIndex as updateClaudeCodeConversations } from "../src/conversations.js";
 
@@ -57,6 +58,10 @@ interface Schedule {
   payload: string;
   agent?: "opencode" | "claude"; // Which agent to trigger
   model?: string; // Optional model override (e.g., "anthropic/claude-opus-4-6")
+  // How a fired job is delivered. "session" (default): queue a claim-file the
+  // next active session drains as a background subagent. "headless": spawn a
+  // detached `claude --print` on the tick — runs unattended, no-ops on sleep.
+  delivery?: "session" | "headless";
   createdAt: string;
 }
 
@@ -124,6 +129,39 @@ function gcReminderOrphans() {
     } catch (err) {
       logError(`Failed to GC orphan reminder ${name}: ${String(err)}`);
     }
+  }
+}
+
+// delivery: "headless" — spawn a detached `claude --print` on the tick, the
+// pre-0.3.0 behavior (claude-only; the old opencode branch was dropped). Runs
+// unattended on schedule without a live session — the pre-0.3.0 behavior that
+// ran dreamtime reliably for months. (A host genuinely asleep at fire time
+// would miss that tick, but in practice that's been rare.) Each fire spawns
+// with NO last-fire-wins coalescing (unlike the session claim-file), so keep
+// headless to jobs that finish well within their cadence — a sub-runtime
+// cadence (e.g. */5 on a slow task) could overlap itself. The model is clamped
+// to a safe alias by buildHeadlessArgs → resolveModel. Fire-and-forget: detached
+// + unref so the daemon never waits on it.
+function spawnHeadless(schedule: Schedule) {
+  try {
+    const proc = spawn("claude", buildHeadlessArgs(schedule), {
+      cwd: getStateRoot(),
+      stdio: "ignore",
+      detached: true,
+    });
+    proc.on("error", (err) => logError(`Headless spawn failed for ${schedule.id}: ${String(err)}`));
+    // Fail loudly: a nonzero exit is an ERROR, not a same-level "exited" line, so
+    // a failed run doesn't read like a successful one. No silent fallback —
+    // surface it and move on.
+    proc.on("exit", (code) =>
+      code === 0
+        ? log(`Headless ${schedule.id} completed`)
+        : logError(`Headless ${schedule.id} exited with code ${code}`)
+    );
+    proc.unref();
+    log(`Spawned headless claude --print for ${schedule.id} (model ${resolveModel(schedule.model)})`);
+  } catch (err) {
+    logError(`Failed to spawn headless for ${schedule.id}: ${String(err)}`);
   }
 }
 
@@ -370,6 +408,13 @@ class MacrodataLocalDaemon {
   }
 
   private startCronJob(schedule: Schedule) {
+    // Enforce the ≥2-minute floor for hand-edited / pre-existing JSON that
+    // never went through the schedule tool's validation. A hot headless cron
+    // would otherwise spawn unbounded (no coalescing).
+    if (cronTooFrequent(schedule.expression)) {
+      logError(`Refusing too-frequent cron ${schedule.id} (${schedule.expression}): must be at least 2 minutes apart`);
+      return;
+    }
     try {
       const job = new Cron(schedule.expression, () => {
         void this.fireSchedule(schedule);
@@ -399,9 +444,14 @@ class MacrodataLocalDaemon {
   private fireSchedule(schedule: Schedule) {
     log(`Firing schedule: ${schedule.id} - ${schedule.description}`);
 
-    // No more metered `claude -p` spawns. A firing just queues a claim-file
-    // (one per schedule, last-fire-wins); the next active session claims it
-    // and runs the task as a background subagent.
+    if (schedule.delivery === "headless") {
+      // Run on the tick, unattended (re-added pre-0.3.0 path).
+      spawnHeadless(schedule);
+      return;
+    }
+
+    // Default "session": queue a claim-file (one per schedule, last-fire-wins);
+    // the next active session claims it and runs the task as a background subagent.
     writeReminderClaim(schedule);
     gcReminderOrphans();
     log(`Queued reminder for: ${schedule.id} (.pending-reminders)`);

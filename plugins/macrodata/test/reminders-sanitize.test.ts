@@ -16,6 +16,8 @@ import {
   neutralizeTags,
   resolveModel,
   formatReminder,
+  buildHeadlessArgs,
+  cronTooFrequent,
   DEFAULT_MODEL,
 } from "../src/reminders";
 
@@ -97,6 +99,92 @@ describe("resolveModel", () => {
         expect(allowed.has(resolveModel(m))).toBe(true);
       })
     );
+  });
+});
+
+describe("buildHeadlessArgs (headless delivery)", () => {
+  test("flags first, payload last behind a `--` end-of-options sentinel", () => {
+    expect(buildHeadlessArgs({ id: "x", description: "d", payload: "Run /dreamtime" })).toEqual([
+      "--print",
+      "--model",
+      DEFAULT_MODEL,
+      "--",
+      "Run /dreamtime",
+    ]);
+  });
+
+  test("clamps the model to a safe alias — no expensive-model re-arming, no raw passthrough", () => {
+    expect(
+      buildHeadlessArgs({ id: "x", description: "d", payload: "p", model: "anthropic/claude-opus-4-8" })
+    ).toEqual(["--print", "--model", "opus", "--", "p"]);
+    // injection chars / unknown ids never reach argv raw — resolveModel clamps them
+    expect(
+      buildHeadlessArgs({ id: "x", description: "d", payload: "p", model: 'opus" --dangerously-skip x' })
+    ).toEqual(["--print", "--model", "opus", "--", "p"]);
+    expect(buildHeadlessArgs({ id: "x", description: "d", payload: "p", model: "gpt-4" })).toEqual([
+      "--print",
+      "--model",
+      DEFAULT_MODEL,
+      "--",
+      "p",
+    ]);
+  });
+
+  test("a flag-looking payload stays the prompt (the `--` guard, F1)", () => {
+    const args = buildHeadlessArgs({ id: "x", description: "d", payload: "--dangerously-skip-permissions" });
+    // payload is the final positional, behind `--` — never in option position
+    expect(args[args.length - 2]).toBe("--");
+    expect(args[args.length - 1]).toBe("--dangerously-skip-permissions");
+    // and it appears exactly once, only as the trailing positional
+    expect(args.filter((a) => a === "--dangerously-skip-permissions")).toHaveLength(1);
+  });
+
+  test("payload is a single argv element — never shell-split or interpreted", () => {
+    const args = buildHeadlessArgs({ id: "x", description: "d", payload: "a; rm -rf / && echo $HOME" });
+    expect(args[args.length - 1]).toBe("a; rm -rf / && echo $HOME");
+  });
+
+  test("property: payload is always the final element behind `--`; model is always a known alias before it", () => {
+    const allowed = new Set(["opus", "sonnet", "haiku", "fable"]);
+    fc.assert(
+      fc.property(fc.string(), fc.option(fc.string(), { nil: undefined }), (payload, model) => {
+        const args = buildHeadlessArgs({ id: "x", description: "d", payload, model });
+        expect(args[0]).toBe("--print");
+        expect(args[args.length - 1]).toBe(payload); // payload is the trailing positional
+        expect(args[args.length - 2]).toBe("--"); // behind the sentinel
+        const sentinel = args.length - 2;
+        const modelIdx = args.indexOf("--model");
+        expect(modelIdx).toBeGreaterThanOrEqual(0);
+        expect(modelIdx).toBeLessThan(sentinel); // all flags precede the sentinel
+        expect(allowed.has(args[modelIdx + 1])).toBe(true);
+      })
+    );
+  });
+});
+
+describe("cronTooFrequent (≥2-minute floor)", () => {
+  const ref = new Date("2026-06-16T12:00:00Z");
+
+  test("rejects sub-2-minute cadences", () => {
+    expect(cronTooFrequent("* * * * * *", ref)).toBe(true); // every second (6-field)
+    expect(cronTooFrequent("* * * * *", ref)).toBe(true); // every minute
+    expect(cronTooFrequent("*/1 * * * *", ref)).toBe(true); // every minute
+    // sparse-early, tight-late: :50→:51 is a 60s gap recurring hourly, past a
+    // fixed 5-run sample window (VDD iter-3 regression).
+    expect(cronTooFrequent("0,10,20,30,40,50,51 * * * *", ref)).toBe(true);
+  });
+
+  test("allows 2-minute and slower", () => {
+    expect(cronTooFrequent("*/2 * * * *", ref)).toBe(false); // exactly 2m — boundary is allowed
+    expect(cronTooFrequent("*/5 * * * *", ref)).toBe(false);
+    expect(cronTooFrequent("0 * * * *", ref)).toBe(false); // hourly
+    expect(cronTooFrequent("0 9 * * *", ref)).toBe(false); // daily
+    expect(cronTooFrequent("30 12 * * 1-5", ref)).toBe(false); // a real macrodata schedule
+  });
+
+  test("unparseable / empty expression is not flagged (surfaced elsewhere)", () => {
+    expect(cronTooFrequent("not a cron", ref)).toBe(false);
+    expect(cronTooFrequent("", ref)).toBe(false);
   });
 });
 
