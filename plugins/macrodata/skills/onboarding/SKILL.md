@@ -85,7 +85,7 @@ Then create the directory structure:
 - `<root>/entities/`
 - `<root>/entities/people/`
 - `<root>/entities/projects/`
-- `<root>/topics/`
+- `<root>/entities/topics/`
 
 ### Phase 3: Human Profile
 

@@ -45,6 +45,25 @@ import {
 import { unlinkSync } from "fs";
 import { getRecentJournalEntries, type JournalEntry } from "./journal.js";
 
+/**
+ * Filterable search types: "journal" plus the live entities/<subdir> folder
+ * names. The filesystem is the single source of truth, so the search filter
+ * cannot drift from what the indexer actually stores. Computed at startup; a
+ * category added mid-session still indexes and stays reachable via "all".
+ */
+function entitySubdirs(): string[] {
+  try {
+    const dir = getEntitiesDir();
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
+}
+const SEARCH_TYPES = ["all", "journal", ...entitySubdirs()] as [string, ...string[]];
+
 interface Schedule {
   id: string;
   type: "cron" | "once";
@@ -213,7 +232,7 @@ server.tool(
   "Semantic search across journal entries and entity files. Returns ranked results.",
   {
     query: z.string().describe("Natural language search query"),
-    type: z.enum(["journal", "person", "project", "all"]).default("all").describe("Filter by content type"),
+    type: z.enum(SEARCH_TYPES).default("all").describe("Filter by content type: 'all', 'journal', or an entity folder name (people, projects, topics, …)"),
     since: z.string().optional().describe("Only include items after this ISO date"),
     limit: z.number().default(5).describe("Maximum results to return"),
   },

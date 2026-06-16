@@ -150,7 +150,7 @@ Loves systems programming and performance optimization.
         limit: 5,
       });
       expect(results.length).toBeGreaterThan(0);
-      expect(results[0].type).toBe("person");
+      expect(results[0].type).toBe("people");
     });
   });
 
@@ -167,7 +167,7 @@ Loves systems programming and performance optimization.
       });
 
       const projectOnly = await indexer!.searchMemory("authentication", {
-        type: "project",
+        type: "projects",
         limit: 5,
       });
 
@@ -176,7 +176,7 @@ Loves systems programming and performance optimization.
         expect(result.type).toBe("journal");
       }
       for (const result of projectOnly) {
-        expect(result.type).toBe("project");
+        expect(result.type).toBe("projects");
       }
     });
 
