@@ -134,9 +134,9 @@ function gcReminderOrphans() {
 
 // delivery: "headless" — spawn a detached `claude --print` on the tick, the
 // pre-0.3.0 behavior (claude-only; the old opencode branch was dropped). Runs
-// unattended on schedule without a live session, but NO-OPS if the machine is
-// asleep at the fire time (a sleeping host can't run the spawned process; the
-// tick is skipped, not deferred). Each fire spawns
+// unattended on schedule without a live session — the pre-0.3.0 behavior that
+// ran dreamtime reliably for months. (A host genuinely asleep at fire time
+// would miss that tick, but in practice that's been rare.) Each fire spawns
 // with NO last-fire-wins coalescing (unlike the session claim-file), so keep
 // headless to jobs that finish well within their cadence — a sub-runtime
 // cadence (e.g. */5 on a slow task) could overlap itself. The model is clamped
