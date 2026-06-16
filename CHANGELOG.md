@@ -8,6 +8,16 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-16
+
+### Added
+
+- **Per-schedule `delivery` mode (`session` | `headless`)** (#18). `session` (default) queues a reminder drained into your next interactive session as a background subagent — the unchanged 0.3.0 behavior. `headless` spawns a detached `claude --print` on the cron tick, running the job unattended on schedule (the pre-0.3.0 path, claude-only). The headless model is clamped to a safe alias, and the payload is passed behind a `--` end-of-options sentinel so it can't be parsed as a CLI flag.
+
+### Changed
+
+- **Cron schedules must fire at least 2 minutes apart.** The `schedule` tool rejects sub-2-minute cadences, and the daemon refuses to start one from hand-edited JSON — bounding the headless spawn rate. macrodata has no sub-2-minute use case; any pre-existing sub-2m schedule will be refused with a logged error.
+
 ## [0.4.0] — 2026-06-15
 
 ### Added
