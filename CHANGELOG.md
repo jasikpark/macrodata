@@ -8,6 +8,26 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-15
+
+### Added
+
+- **`context-doctor` skill** — on-demand diagnosis and repair of memory degradation: state-file bloat against the display cap, stale or overlapping entity descriptions, redundancy, and index-coverage gaps. Distinct from the scheduled `memory-maintenance` skill. (#16)
+
+### Fixed
+
+- **All entity categories are now indexed for `search_memory`, not just `people` and `projects`.** The indexer hardcoded those two types, so `topics/`, `agents/`, and `learnings/` were silently absent from semantic search — roughly half the entity store. The `entities/` folder list is now the single source of truth: `rebuildIndex` and `indexEntityFile` derive the item type from the folder name, and the `search_memory` `type` filter is built from the live folders, so new categories index automatically. (#15)
+
+### Changed
+
+- **Search-filter values changed:** `search_memory`'s `type` filter now uses the entity folder name verbatim — `people`/`projects` (previously `person`/`project`), plus any other category folder. **After upgrading, run `rm -rf <root>/.index` then `manage_index` rebuild once** to backfill previously-unindexed entities and drop the old singular-typed records. (#15)
+- `manage_index` rebuild is documented as upsert-only — it re-scans and updates but does not purge records for deleted or renamed files. (#15)
+- Onboarding now scaffolds `entities/topics/` instead of a stray top-level `topics/`; removed the unused `getTopicsDir()` helper. (#15)
+
+### Removed
+
+- Unused upstream changesets release machinery (`.changeset/`, `release.yml`, `scripts/version.ts`, and the `@changesets/*` root devDeps). Releases are manual; the process is documented in `CLAUDE.md`.
+
 ## [0.3.1] — 2026-06-15
 
 ### Changed
