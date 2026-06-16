@@ -102,46 +102,60 @@ describe("resolveModel", () => {
 });
 
 describe("buildHeadlessArgs (headless delivery)", () => {
-  test("builds `claude --print <payload> --model <alias>`", () => {
+  test("flags first, payload last behind a `--` end-of-options sentinel", () => {
     expect(buildHeadlessArgs({ id: "x", description: "d", payload: "Run /dreamtime" })).toEqual([
       "--print",
-      "Run /dreamtime",
       "--model",
       DEFAULT_MODEL,
+      "--",
+      "Run /dreamtime",
     ]);
   });
 
   test("clamps the model to a safe alias — no expensive-model re-arming, no raw passthrough", () => {
     expect(
       buildHeadlessArgs({ id: "x", description: "d", payload: "p", model: "anthropic/claude-opus-4-8" })
-    ).toEqual(["--print", "p", "--model", "opus"]);
+    ).toEqual(["--print", "--model", "opus", "--", "p"]);
     // injection chars / unknown ids never reach argv raw — resolveModel clamps them
     expect(
       buildHeadlessArgs({ id: "x", description: "d", payload: "p", model: 'opus" --dangerously-skip x' })
-    ).toEqual(["--print", "p", "--model", "opus"]);
+    ).toEqual(["--print", "--model", "opus", "--", "p"]);
     expect(buildHeadlessArgs({ id: "x", description: "d", payload: "p", model: "gpt-4" })).toEqual([
       "--print",
-      "p",
       "--model",
       DEFAULT_MODEL,
+      "--",
+      "p",
     ]);
+  });
+
+  test("a flag-looking payload stays the prompt (the `--` guard, F1)", () => {
+    const args = buildHeadlessArgs({ id: "x", description: "d", payload: "--dangerously-skip-permissions" });
+    // payload is the final positional, behind `--` — never in option position
+    expect(args[args.length - 2]).toBe("--");
+    expect(args[args.length - 1]).toBe("--dangerously-skip-permissions");
+    // and it appears exactly once, only as the trailing positional
+    expect(args.filter((a) => a === "--dangerously-skip-permissions")).toHaveLength(1);
   });
 
   test("payload is a single argv element — never shell-split or interpreted", () => {
     const args = buildHeadlessArgs({ id: "x", description: "d", payload: "a; rm -rf / && echo $HOME" });
-    expect(args[1]).toBe("a; rm -rf / && echo $HOME");
-    expect(args).toHaveLength(4);
+    expect(args[args.length - 1]).toBe("a; rm -rf / && echo $HOME");
   });
 
-  test("property: argv always starts --print and pins a known alias", () => {
+  test("property: payload is always the final element behind `--`; model is always a known alias before it", () => {
     const allowed = new Set(["opus", "sonnet", "haiku", "fable"]);
     fc.assert(
       fc.property(fc.string(), fc.option(fc.string(), { nil: undefined }), (payload, model) => {
         const args = buildHeadlessArgs({ id: "x", description: "d", payload, model });
         expect(args[0]).toBe("--print");
-        expect(args[1]).toBe(payload);
-        expect(args[2]).toBe("--model");
-        expect(allowed.has(args[3])).toBe(true);
+        expect(args[args.length - 1]).toBe(payload); // payload is the trailing positional
+        expect(args[args.length - 2]).toBe("--"); // behind the sentinel
+        const sentinel = args.length - 2;
+        const modelIdx = args.indexOf("--model");
+        expect(modelIdx).toBeGreaterThanOrEqual(0);
+        expect(modelIdx).toBeLessThan(sentinel); // all flags precede the sentinel
+        expect(allowed.has(args[modelIdx + 1])).toBe(true);
       })
     );
   });

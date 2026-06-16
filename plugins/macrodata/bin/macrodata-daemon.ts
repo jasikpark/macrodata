@@ -136,9 +136,11 @@ function gcReminderOrphans() {
 // pre-0.3.0 behavior (claude-only; the old opencode branch was dropped). Runs
 // unattended on schedule without a live session, but NO-OPS if the machine is
 // asleep (entities/topics/macrodata-cron-sleep-behavior.md). Each fire spawns
-// (no last-fire-wins coalescing, unlike the session claim-file). The model is
-// clamped to a safe alias by buildHeadlessArgs → resolveModel. Fire-and-forget:
-// detached + unref so the daemon never waits on it.
+// with NO last-fire-wins coalescing (unlike the session claim-file), so keep
+// headless to jobs that finish well within their cadence — a sub-runtime
+// cadence (e.g. */5 on a slow task) could overlap itself. The model is clamped
+// to a safe alias by buildHeadlessArgs → resolveModel. Fire-and-forget: detached
+// + unref so the daemon never waits on it.
 function spawnHeadless(schedule: Schedule) {
   try {
     const proc = spawn("claude", buildHeadlessArgs(schedule), {
@@ -147,7 +149,14 @@ function spawnHeadless(schedule: Schedule) {
       detached: true,
     });
     proc.on("error", (err) => logError(`Headless spawn failed for ${schedule.id}: ${String(err)}`));
-    proc.on("exit", (code) => log(`Headless ${schedule.id} exited with code ${code}`));
+    // Fail loudly: a nonzero exit is an ERROR, not a same-level "exited" line, so
+    // a failed run doesn't read like a successful one. No silent fallback —
+    // surface it and move on.
+    proc.on("exit", (code) =>
+      code === 0
+        ? log(`Headless ${schedule.id} completed`)
+        : logError(`Headless ${schedule.id} exited with code ${code}`)
+    );
     proc.unref();
     log(`Spawned headless claude --print for ${schedule.id} (model ${resolveModel(schedule.model)})`);
   } catch (err) {

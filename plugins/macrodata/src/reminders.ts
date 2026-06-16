@@ -101,17 +101,16 @@ ${payload}
 }
 
 /**
- * Argv for the "headless" delivery path: `claude --print <payload> --model <alias>`.
- * The model is run through resolveModel — the SAME safe-alias clamp the session
- * path uses — so an injected or hand-edited schedule cannot spawn an expensive
- * model headlessly (the cost regression resolveModel exists to prevent). The
- * payload is passed as a single argv element (spawn with an arg array, never a
- * shell), so no escaping/tag-neutralization is needed here.
- *
- * NOTE: a headless run executes the payload autonomously, with no human in the
- * loop — strictly higher trust than session delivery, which surfaces the task in
- * the live session first. Reserve "headless" for trusted background jobs.
+ * Argv for the "headless" delivery path:
+ *   claude --print --model <alias> -- <payload>
+ * Flags go first and the payload is the final positional behind a `--`
+ * end-of-options sentinel, so a payload that happens to start with "-" is still
+ * the prompt, never parsed as a claude flag. (claude is Commander-based and the
+ * prompt is positional — `Usage: claude [options] [command] [prompt]`, verified
+ * against CLI 2.1.x, which honors `--`.) The model is clamped to a safe alias by
+ * resolveModel. spawn uses an arg array (never a shell), so no shell-escaping is
+ * needed.
  */
 export function buildHeadlessArgs(s: ReminderInput): string[] {
-  return ["--print", s.payload, "--model", resolveModel(s.model)];
+  return ["--print", "--model", resolveModel(s.model), "--", s.payload];
 }
