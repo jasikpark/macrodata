@@ -16,7 +16,7 @@ Entries land on `main` as part of the change that introduces them. The next vers
 
 ### Changed
 
-- **Cron schedules must fire at least 2 minutes apart.** The `schedule` tool rejects sub-2-minute cadences, and the daemon refuses to start one from hand-edited JSON — bounding the headless spawn rate. macrodata has no sub-2-minute use case; any pre-existing sub-2m schedule will be refused with a logged error.
+- **Cron schedules must fire at least 2 minutes apart.** Sub-2-minute cadences are rejected — both when a schedule is created (the `schedule` tool) and when the daemon loads it at startup — bounding the headless spawn rate. macrodata has no sub-2-minute use case; an existing sub-2m schedule is refused with a logged error. (Normal-cadence schedules are unaffected, including hand-edited ones — only the cadence is checked, not how the schedule got there.)
 
 ## [0.4.0] — 2026-06-15
 
