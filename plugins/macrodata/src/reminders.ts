@@ -99,3 +99,19 @@ Subagent prompt:
 ${payload}
 </macrodata-scheduled-task>`;
 }
+
+/**
+ * Argv for the "headless" delivery path: `claude --print <payload> --model <alias>`.
+ * The model is run through resolveModel — the SAME safe-alias clamp the session
+ * path uses — so an injected or hand-edited schedule cannot spawn an expensive
+ * model headlessly (the cost regression resolveModel exists to prevent). The
+ * payload is passed as a single argv element (spawn with an arg array, never a
+ * shell), so no escaping/tag-neutralization is needed here.
+ *
+ * NOTE: a headless run executes the payload autonomously, with no human in the
+ * loop — strictly higher trust than session delivery, which surfaces the task in
+ * the live session first. Reserve "headless" for trusted background jobs.
+ */
+export function buildHeadlessArgs(s: ReminderInput): string[] {
+  return ["--print", s.payload, "--model", resolveModel(s.model)];
+}

@@ -72,6 +72,7 @@ interface Schedule {
   payload: string;
   agent?: "opencode" | "claude"; // Which agent CLI to trigger
   model?: string; // Optional model override (e.g., "anthropic/claude-opus-4-6")
+  delivery?: "session" | "headless"; // How a fired job runs (default: session)
   createdAt: string;
 }
 
@@ -373,8 +374,9 @@ server.tool(
     // No quotes/spaces/angle brackets — keeps it safe inside the reminder's
     // model="..." attribute; the daemon maps it to a known Agent-tool alias.
     model: z.string().regex(/^[A-Za-z0-9/_.-]+$/, "model has invalid characters").optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-6' for deep thinking tasks)"),
+    delivery: z.enum(["session", "headless"]).optional().describe("How the fired job runs. 'session' (default): queue a reminder drained into your next active session as a background subagent. 'headless': spawn a detached `claude --print` on the tick — runs unattended on schedule, but no-ops if the machine is asleep, and executes autonomously without surfacing in your session (reserve for trusted background jobs)."),
   },
-  async ({ type, id, expression, description, payload, model }) => {
+  async ({ type, id, expression, description, payload, model, delivery }) => {
     const schedule: Schedule = {
       id,
       type,
@@ -383,6 +385,7 @@ server.tool(
       payload,
       agent: "claude",
       model,
+      delivery,
       createdAt: new Date().toISOString(),
     };
 

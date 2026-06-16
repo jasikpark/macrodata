@@ -16,6 +16,7 @@ import {
   neutralizeTags,
   resolveModel,
   formatReminder,
+  buildHeadlessArgs,
   DEFAULT_MODEL,
 } from "../src/reminders";
 
@@ -95,6 +96,52 @@ describe("resolveModel", () => {
     fc.assert(
       fc.property(fc.option(fc.string(), { nil: undefined }), (m) => {
         expect(allowed.has(resolveModel(m))).toBe(true);
+      })
+    );
+  });
+});
+
+describe("buildHeadlessArgs (headless delivery)", () => {
+  test("builds `claude --print <payload> --model <alias>`", () => {
+    expect(buildHeadlessArgs({ id: "x", description: "d", payload: "Run /dreamtime" })).toEqual([
+      "--print",
+      "Run /dreamtime",
+      "--model",
+      DEFAULT_MODEL,
+    ]);
+  });
+
+  test("clamps the model to a safe alias — no expensive-model re-arming, no raw passthrough", () => {
+    expect(
+      buildHeadlessArgs({ id: "x", description: "d", payload: "p", model: "anthropic/claude-opus-4-8" })
+    ).toEqual(["--print", "p", "--model", "opus"]);
+    // injection chars / unknown ids never reach argv raw — resolveModel clamps them
+    expect(
+      buildHeadlessArgs({ id: "x", description: "d", payload: "p", model: 'opus" --dangerously-skip x' })
+    ).toEqual(["--print", "p", "--model", "opus"]);
+    expect(buildHeadlessArgs({ id: "x", description: "d", payload: "p", model: "gpt-4" })).toEqual([
+      "--print",
+      "p",
+      "--model",
+      DEFAULT_MODEL,
+    ]);
+  });
+
+  test("payload is a single argv element — never shell-split or interpreted", () => {
+    const args = buildHeadlessArgs({ id: "x", description: "d", payload: "a; rm -rf / && echo $HOME" });
+    expect(args[1]).toBe("a; rm -rf / && echo $HOME");
+    expect(args).toHaveLength(4);
+  });
+
+  test("property: argv always starts --print and pins a known alias", () => {
+    const allowed = new Set(["opus", "sonnet", "haiku", "fable"]);
+    fc.assert(
+      fc.property(fc.string(), fc.option(fc.string(), { nil: undefined }), (payload, model) => {
+        const args = buildHeadlessArgs({ id: "x", description: "d", payload, model });
+        expect(args[0]).toBe("--print");
+        expect(args[1]).toBe(payload);
+        expect(args[2]).toBe("--model");
+        expect(allowed.has(args[3])).toBe(true);
       })
     );
   });
