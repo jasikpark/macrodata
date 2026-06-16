@@ -135,7 +135,8 @@ function gcReminderOrphans() {
 // delivery: "headless" — spawn a detached `claude --print` on the tick, the
 // pre-0.3.0 behavior (claude-only; the old opencode branch was dropped). Runs
 // unattended on schedule without a live session, but NO-OPS if the machine is
-// asleep (entities/topics/macrodata-cron-sleep-behavior.md). Each fire spawns
+// asleep at the fire time (a sleeping host can't run the spawned process; the
+// tick is skipped, not deferred). Each fire spawns
 // with NO last-fire-wins coalescing (unlike the session claim-file), so keep
 // headless to jobs that finish well within their cadence — a sub-runtime
 // cadence (e.g. */5 on a slow task) could overlap itself. The model is clamped
