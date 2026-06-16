@@ -461,6 +461,11 @@ class MacrodataLocalDaemon {
       // Entity files - inject just the name
       else if (path.startsWith(entitiesDir)) {
         const relative = path.slice(entitiesDir.length + 1);
+        // Ignore dot-dir artifacts (.obsidian, .trash, .git) at any depth.
+        // NOTE: filter on the entities-relative path, NOT the absolute path —
+        // the default store lives under ~/.config/macrodata, so an absolute
+        // dotfile match would ignore the entire store.
+        if (relative.split("/").slice(0, -1).some((seg) => seg.startsWith("."))) return;
         writePendingContext(`<macrodata-update type="entity" file="${relative}" />`);
         this.queueReindex(path);
       }

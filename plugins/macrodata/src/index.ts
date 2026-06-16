@@ -45,6 +45,25 @@ import {
 import { unlinkSync } from "fs";
 import { getRecentJournalEntries, type JournalEntry } from "./journal.js";
 
+/**
+ * Filterable search types: "journal" plus the live entities/<subdir> folder
+ * names (dot-dirs excluded, matching the indexer). The filesystem is the
+ * single source of truth, so the filter cannot drift from what the indexer
+ * stores. Recomputed per search_memory call, so a category added mid-session
+ * is filterable immediately — no server restart needed.
+ */
+function entitySubdirs(): string[] {
+  try {
+    const dir = getEntitiesDir();
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
+}
+
 interface Schedule {
   id: string;
   type: "cron" | "once";
@@ -213,15 +232,32 @@ server.tool(
   "Semantic search across journal entries and entity files. Returns ranked results.",
   {
     query: z.string().describe("Natural language search query"),
-    type: z.enum(["journal", "person", "project", "all"]).default("all").describe("Filter by content type"),
+    type: z.string().optional().describe("Filter by content type: 'journal' or an entity folder name (people, projects, topics, …). Omit or 'all' for everything."),
     since: z.string().optional().describe("Only include items after this ISO date"),
     limit: z.number().default(5).describe("Maximum results to return"),
   },
   async ({ query, type, since, limit }) => {
     try {
+      // Validate against the live folder set rather than a load-time enum, so
+      // a category created mid-session is filterable without a restart. Only
+      // touch the filesystem when an actual filter is supplied.
+      if (type && type !== "all") {
+        const validTypes = ["journal", ...entitySubdirs()];
+        if (!validTypes.includes(type)) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Unknown type "${type}". Valid: all, ${validTypes.join(", ")}.`,
+              },
+            ],
+          };
+        }
+      }
+
       const results = await doSearchMemory(query, {
         limit,
-        type: type === "all" ? undefined : (type as MemoryItemType),
+        type: !type || type === "all" ? undefined : (type as MemoryItemType),
         since,
       });
 
@@ -273,7 +309,7 @@ server.tool(
   "Manage search indexes. Target 'memory' for journal/entities, 'conversations' for past Claude Code sessions.",
   {
     target: z.enum(["memory", "conversations"]).describe("Which index to manage"),
-    action: z.enum(["rebuild", "update", "stats"]).describe("'rebuild' to reindex from scratch, 'update' for incremental (conversations only), 'stats' to get counts"),
+    action: z.enum(["rebuild", "update", "stats"]).describe("'rebuild' re-scans all sources and upserts (does NOT purge records for deleted/renamed files — delete the index dir first for a truly clean rebuild), 'update' for incremental (conversations only), 'stats' to get counts"),
   },
   async ({ target, action }) => {
     try {

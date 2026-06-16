@@ -150,7 +150,7 @@ Loves systems programming and performance optimization.
         limit: 5,
       });
       expect(results.length).toBeGreaterThan(0);
-      expect(results[0].type).toBe("person");
+      expect(results[0].type).toBe("people");
     });
   });
 
@@ -167,7 +167,7 @@ Loves systems programming and performance optimization.
       });
 
       const projectOnly = await indexer!.searchMemory("authentication", {
-        type: "project",
+        type: "projects",
         limit: 5,
       });
 
@@ -176,8 +176,24 @@ Loves systems programming and performance optimization.
         expect(result.type).toBe("journal");
       }
       for (const result of projectOnly) {
-        expect(result.type).toBe("project");
+        expect(result.type).toBe("projects");
       }
+    });
+
+    test("indexes categories beyond people/projects (topics)", async () => {
+      addEntityFile(
+        ctx,
+        "topics",
+        "raft",
+        "# Raft\n\n## Summary\n\nRaft is a consensus algorithm for managing a replicated log."
+      );
+      await indexer!.rebuildIndex();
+      const results = await indexer!.searchMemory("consensus algorithm replicated log", {
+        limit: 5,
+      });
+      // The whole point of the fix: a non-people/projects category is indexed,
+      // and its type is the verbatim folder name.
+      expect(results.some((r) => r.type === "topics")).toBe(true);
     });
 
     test("filters by since date", async () => {

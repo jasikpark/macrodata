@@ -16,7 +16,11 @@ import { embed, embedBatch, preloadModel as preloadEmbeddings } from "./embeddin
 import { getIndexDir, getEntitiesDir, getJournalDir } from "./config.js";
 
 // Item types for filtering
-export type MemoryItemType = "journal" | "person" | "project";
+// "journal", or an entity folder name (people, projects, topics, agents, …).
+// The entities/ subdirectory names ARE the type set — see rebuildIndex and
+// indexEntityFile, which both derive the type from the folder. No closed union,
+// so new categories index automatically.
+export type MemoryItemType = string;
 
 export interface MemoryItem {
   id: string;
@@ -238,9 +242,10 @@ function parseJournalForIndexing(): MemoryItem[] {
 }
 
 /**
- * Parse entity files (people, projects) for indexing
+ * Parse entity files in an entities/<subdir>/ directory for indexing.
+ * The subdir name is the item type (e.g. people, projects, topics, agents).
  */
-function parseEntitiesForIndexing(subdir: "people" | "projects", type: MemoryItemType): MemoryItem[] {
+function parseEntitiesForIndexing(subdir: string, type: MemoryItemType): MemoryItem[] {
   const items: MemoryItem[] = [];
   const dir = join(getEntitiesDir(), subdir);
 
@@ -299,19 +304,33 @@ export async function rebuildIndex(): Promise<{ itemCount: number }> {
   console.log("[Indexer] Starting full index rebuild...");
   const startTime = Date.now();
 
+  // Rebuild is upsert-only: it deliberately does NOT delete+recreate the index.
+  // The daemon and MCP server are separate processes sharing one lock-free
+  // Vectra index; an rm-then-repopulate window would let a concurrent daemon
+  // reindex read a half-deleted index (ENOENT) or clobber the rebuilt one.
+  // Trade-off: records for deleted files/sections, or renamed types, are not
+  // purged here — the one-time person->people rename needs a manual
+  // `rm -rf <root>/.index` before rebuild. A safe cross-process clean rebuild
+  // (temp-dir atomic swap + daemon coordination) is a tracked follow-up.
   const allItems: MemoryItem[] = [];
 
   // 1. Index journal entries
   console.log("[Indexer] Parsing journal...");
   allItems.push(...parseJournalForIndexing());
 
-  // 2. Index people
-  console.log("[Indexer] Parsing people...");
-  allItems.push(...parseEntitiesForIndexing("people", "person"));
-
-  // 3. Index projects
-  console.log("[Indexer] Parsing projects...");
-  allItems.push(...parseEntitiesForIndexing("projects", "project"));
+  // 2. Index every entity subdirectory (people, projects, topics, agents, …).
+  // The folder list is the single source of truth for entity types, so new
+  // categories are picked up automatically with no code change.
+  const entitiesDir = getEntitiesDir();
+  if (existsSync(entitiesDir)) {
+    for (const dirent of readdirSync(entitiesDir, { withFileTypes: true })) {
+      // Skip non-dirs and dot-dirs (.obsidian, .git, .trash) so tooling
+      // artifacts don't become bogus entity types.
+      if (!dirent.isDirectory() || dirent.name.startsWith(".")) continue;
+      console.log(`[Indexer] Parsing ${dirent.name}...`);
+      allItems.push(...parseEntitiesForIndexing(dirent.name, dirent.name));
+    }
+  }
 
   // Index all items
   console.log(`[Indexer] Indexing ${allItems.length} items...`);
@@ -357,21 +376,24 @@ export async function getIndexStats(): Promise<{ itemCount: number }> {
 export async function indexEntityFile(filePath: string): Promise<void> {
   const filename = basename(filePath, ".md");
   
-  // Determine type from path
-  let type: MemoryItemType;
-  if (filePath.includes("/people/")) {
-    type = "person";
-  } else if (filePath.includes("/projects/")) {
-    type = "project";
-  } else {
-    console.error(`[Indexer] Unknown entity type for: ${filePath}`);
+  // The entities/<subdir>/ folder name is the item type (people, projects,
+  // topics, …). Deriving it from the path means any category indexes without a
+  // code change — same source of truth as rebuildIndex.
+  const match = filePath.match(/\/entities\/([^/]+)\//);
+  if (!match) {
+    console.error(`[Indexer] Not an entity path, skipping: ${filePath}`);
     return;
   }
+  const subdir = match[1];
+  // Skip files under a dot-dir at any depth (.obsidian, .trash, .git) — tooling
+  // artifacts, not entities. Check every dir segment, not just the first.
+  const afterEntities = filePath.slice(filePath.indexOf("/entities/") + "/entities/".length);
+  if (afterEntities.split("/").slice(0, -1).some((seg) => seg.startsWith("."))) return;
+  const type: MemoryItemType = subdir;
 
   try {
     const content = readFileSync(filePath, "utf-8");
     const items: MemoryItem[] = [];
-    const subdir = type === "person" ? "people" : "projects";
 
     // Split by ## headers for section-level indexing
     const sections = content.split(/^## /m);
