@@ -219,6 +219,7 @@ function parseJournalForIndexing(): MemoryItem[] {
       const content = readFileSync(join(journalDir, file), "utf-8");
       const lines = content.trim().split("\n").filter(Boolean);
 
+      let malformedLines = 0;
       for (let i = 0; i < lines.length; i++) {
         try {
           const entry = JSON.parse(lines[i]);
@@ -230,11 +231,14 @@ function parseJournalForIndexing(): MemoryItem[] {
             timestamp: entry.timestamp,
           });
         } catch {
-          // Skip malformed lines
+          malformedLines++;
         }
       }
-    } catch {
-      // Skip unreadable files
+      if (malformedLines > 0) {
+        console.warn(`[Indexer] Skipped ${malformedLines} malformed lines in journal/${file}`);
+      }
+    } catch (err) {
+      console.warn(`[Indexer] Failed to read journal/${file}: ${String(err)}`);
     }
   }
 
