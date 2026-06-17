@@ -11,7 +11,10 @@ function compose(ctx: TestContext): string {
   return execSync(`bun "${COMPOSER}"`, {
     encoding: "utf8",
     timeout: 10000,
-    env: { ...process.env, MACRODATA_ROOT: ctx.root },
+    // Pin TZ so journal-timestamp rendering is deterministic regardless of the
+    // runner's timezone (compose-lists.ts formats in the system TZ). Snapshots
+    // below are in UTC. Without this, snapshots authored in CDT fail in CI (UTC).
+    env: { ...process.env, MACRODATA_ROOT: ctx.root, TZ: "UTC" },
   });
 }
 
@@ -38,7 +41,7 @@ describe("compose-lists", () => {
     test("journal entries render newest-first with a footer pointer", () => {
       addJournalEntry(ctx, "test", "hello world", new Date("2026-05-29T12:00:00Z"));
       expect(section(compose(ctx), "journal")).toMatchInlineSnapshot(`
-"- [2026-05-29 07:00] [test] hello world
+"- [2026-05-29 12:00] [test] hello world
 _More journal: \`get_recent_journal\` for full recent entries, or \`search_memory\` with type: journal to search the whole journal._"
 `);
     });
@@ -71,7 +74,7 @@ _More: \`list_reminders\` for full payloads._"
     test("a long first line is capped (~500) with an ellipsis", () => {
       addJournalEntry(ctx, "bloat", "x".repeat(800), new Date("2026-05-29T12:00:00Z"));
       const line = section(compose(ctx), "journal").split("\n")[0];
-      // "- [2026-05-29 07:00] [bloat] " prefix + 500 x's + "…"
+      // "- [2026-05-29 12:00] [bloat] " prefix + 500 x's + "…"
       expect(line.length).toBeGreaterThan(500);
       expect(line.length).toBeLessThan(560);
       expect(line.endsWith("…")).toBe(true);
