@@ -2,5 +2,12 @@
 	"name": "macrodata",
 	"private": true,
 	"type": "module",
-	"workspaces": ["plugins/*"]
+	"workspaces": ["plugins/*"],
+	"scripts": {
+		"version": "bun run scripts/version.ts"
+	},
+	"devDependencies": {
+		"@changesets/changelog-github": "^0.7.0",
+		"@changesets/cli": "^2.31.0"
+	}
 }

@@ -52,13 +52,15 @@ bun test test/indexer.test.ts   # a single file
 
 Two daemon tests (`SIGHUP reload`, `detects new schedules at runtime`) are `Bun.sleep`-timed and flake under full-suite CPU load; they pass in isolation. Re-run them isolated before treating either as a real failure.
 
-## Releasing (manual — no CI/changesets)
+## Releasing (changesets — versioning only, no npm publish)
 
-Releases are made **by hand**; there is no release automation. (The upstream changesets machinery — `.changeset/`, `.github/workflows/release.yml`, `scripts/version.ts` — was removed as unused.) To cut a release:
+Releases are automated with [changesets](https://github.com/changesets/changesets), **version-only**: it never publishes to npm (the plugin installs via the Claude Code marketplace, and the package is `private`). The flow:
 
-1. Bump the version in three files, kept in lockstep: `.claude-plugin/marketplace.json`, `plugins/macrodata/.claude-plugin/plugin.json`, `plugins/macrodata/package.json`.
-2. Move `CHANGELOG.md`'s `[Unreleased]` items into a new `## [X.Y.Z] — YYYY-MM-DD` section. A merged PR may have skipped its changelog entry — backfill it here.
-3. Commit `release X.Y.Z`, tag `vX.Y.Z`, push the commit and the tag.
+1. **Per change:** add a changeset — `bunx changeset` (pick a bump level, write a summary). Commit the `.changeset/*.md` with the PR. This is what keeps `CHANGELOG.md` honest (a skipped changeset = a missing changelog entry, the failure mode hit pre-0.4.0).
+2. **On merge to `main`:** `.github/workflows/release.yml` opens/refreshes a **"ci: release"** PR via `changesets/action`. That PR runs `bun run version` → `changeset version` bumps `plugins/macrodata/package.json` + writes `CHANGELOG.md`, and `scripts/version.ts` syncs the new version into `plugin.json` + `marketplace.json` (the 3-file lockstep, automated).
+3. **Merge the "ci: release" PR** → `changesets/action` runs `bunx changeset tag` to create the `vX.Y.Z` git tag. No npm publish.
+
+Auth: default `GITHUB_TOKEN` (no GitHub App — the fork has no branch protection). Caveat: a Version PR opened by `GITHUB_TOKEN` does NOT trigger `test.yml` on itself (GitHub's anti-recursion rule); merge it anyway. Whether the action also creates a GitHub *Release* object (vs. just the tag) in `changeset tag` mode is unverified — confirm on the first real release.
 
 The installed plugin picks up a release via `/plugin update` + `/reload-plugins`; merged-but-unreleased `main` commits are NOT live in the running plugin until a release is cut.
 
