@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install root dependencies
+        run: bun install
+
+      - name: Install plugin dependencies
+        run: bun install
+        working-directory: plugins/macrodata
+
+      - name: Lint
+        run: bun run check
+        working-directory: plugins/macrodata
+
+      # Version-only release: open/refresh the "ci: release" PR (bumps versions +
+      # syncs plugin manifests + CHANGELOG via `bun run version`), and on merge
+      # create the git tag with `changeset tag`. No npm publish — the plugin
+      # installs via the Claude Code marketplace, not npm. Default GITHUB_TOKEN is
+      # enough for a solo fork with no branch protection (no GitHub App needed).
+      - name: Release PR / tag
+        uses: changesets/action@v1
+        with:
+          version: bun run version
+          publish: bunx changeset tag
+          commit: "ci: release"
+          title: "ci: release"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
