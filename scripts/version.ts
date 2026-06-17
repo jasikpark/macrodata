@@ -1,11 +1,18 @@
 #!/usr/bin/env bun
 /**
  * Version script for changesets.
- * Runs changeset version, then syncs version to the Claude Code plugin manifests.
  *
- * Re-added from upstream (ascorbic/macrodata 3a739907) 2026-06-17 — the fork had
- * removed it with the changesets machinery, but its 3-file version sync was the
- * exact thing the manual release process was redoing by hand.
+ * The repo ROOT package (`macrodata`) is a workspace member (`workspaces` lists
+ * `"."`) and is the versioned package, so `changeset version` writes the
+ * changelog to the root `CHANGELOG.md` natively. The nested plugin package
+ * (`@macrodata/opencode`) is changeset-ignored (see .changeset/config.json).
+ * This step then syncs the new root version into the plugin's package.json and
+ * the two Claude Code plugin manifests, so all four stay in lockstep off a
+ * single source (the root version).
+ *
+ * (History: re-added from upstream ascorbic/macrodata 3a739907 on 2026-06-17 —
+ * the fork had removed it with the changesets machinery, but its version sync
+ * was exactly what the manual release process was redoing by hand.)
  */
 import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -13,26 +20,23 @@ import { join } from "node:path";
 
 const root = join(import.meta.dirname, "..");
 
-// Run changeset version first (bumps package.json + CHANGELOG, consumes changesets)
+// Bump the root package + write root CHANGELOG.md, consuming the changesets.
 execSync("bunx changeset version", { cwd: root, stdio: "inherit" });
 
-// Read the new version from the package
-const pkgPath = join(root, "plugins/macrodata/package.json");
-const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-const version = pkg.version;
+// Root package = single source of truth for the version.
+const version = JSON.parse(readFileSync(join(root, "package.json"), "utf-8")).version;
+console.log(`Syncing version ${version} to plugin package + manifests...`);
 
-console.log(`Syncing version ${version} to plugin manifests...`);
+// Sync into each target, preserving its existing indent.
+const sync = (relPath: string, indent: string | number, mutate: (j: any) => void) => {
+  const p = join(root, relPath);
+  const j = JSON.parse(readFileSync(p, "utf-8"));
+  mutate(j);
+  writeFileSync(p, JSON.stringify(j, null, indent) + "\n");
+};
 
-// Sync to .claude-plugin/plugin.json
-const pluginJsonPath = join(root, "plugins/macrodata/.claude-plugin/plugin.json");
-const pluginJson = JSON.parse(readFileSync(pluginJsonPath, "utf-8"));
-pluginJson.version = version;
-writeFileSync(pluginJsonPath, JSON.stringify(pluginJson, null, "\t") + "\n");
-
-// Sync to root marketplace.json
-const marketplacePath = join(root, ".claude-plugin/marketplace.json");
-const marketplace = JSON.parse(readFileSync(marketplacePath, "utf-8"));
-marketplace.plugins[0].version = version;
-writeFileSync(marketplacePath, JSON.stringify(marketplace, null, "\t") + "\n");
+sync("plugins/macrodata/package.json", 2, (j) => (j.version = version));
+sync("plugins/macrodata/.claude-plugin/plugin.json", "\t", (j) => (j.version = version));
+sync(".claude-plugin/marketplace.json", "\t", (j) => (j.plugins[0].version = version));
 
 console.log("Version sync complete.");
