@@ -136,11 +136,18 @@ that outlived their purpose, time-bound items now in the past.
 4. Verify, against your own diagnosis: did you lose any specific gotcha, command
    pattern, or rationale during cleanup? If so, put it back (in an entity if it
    doesn't belong in state).
-5. Re-index after edits: `manage_index(target="memory", action="rebuild")`.
-   Note this is upsert-only — it re-scans and updates, but does NOT purge
-   records for files you *deleted* or *renamed* (incl. moving an entity between
-   category folders). To clear those orphans you must delete the index dir
-   (`rm -rf <root>/.index`) and rebuild.
+5. Re-indexing after edits is **usually automatic.** When the daemon is
+   running it watches `state/` and `entities/` and incrementally reindexes
+   every entity add/change (`indexEntityFile`, ~1s debounce); state files
+   aren't indexed at all (they're always in-context). So a normal
+   create/edit needs **no** manual reindex — a full
+   `manage_index(target="memory", action="rebuild")` just re-embeds the whole
+   store for one changed file the daemon already handled.
+   Run a rebuild only after **deletes or renames** (incl. moving an entity
+   between category folders): rebuild is upsert-only and does NOT purge
+   records for files that no longer exist, so the correct fix there is to
+   delete the index dir (`rm -rf <root>/.index`) and rebuild — a plain
+   rebuild won't clear the orphans.
 
 ## Finish
 
