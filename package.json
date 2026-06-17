@@ -1,8 +1,9 @@
 {
 	"name": "macrodata",
+	"version": "0.5.0",
 	"private": true,
 	"type": "module",
-	"workspaces": ["plugins/*"],
+	"workspaces": [".", "plugins/*"],
 	"scripts": {
 		"version": "bun run scripts/version.ts"
 	},

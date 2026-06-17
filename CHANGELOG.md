@@ -1,11 +1,5 @@
 # Changelog
 
-All notable changes to this fork of [ascorbic/macrodata](https://github.com/ascorbic/macrodata) are tracked here.
-
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-Pending changes live as changeset files in `.changeset/` until a release rolls them in — run `bunx changeset` when you make a change. Older entries below predate changesets and keep their hand-curated Keep-a-Changelog format; changesets-generated sections will look a little different (flat bullets under a version heading).
-
 ## [0.5.0] — 2026-06-16
 
 ### Added
