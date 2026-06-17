@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1
+
+### Patch Changes
+
+- [#25](https://github.com/jasikpark/macrodata/pull/25) [`4cb8e04`](https://github.com/jasikpark/macrodata/commit/4cb8e0422cf51b73ac28c2fac760ae9c68f6fc12) Thanks [@jasikpark](https://github.com/jasikpark)! - Generate the changelog at the repo root. The root is now a workspace member (`workspaces: ["."]`) with a name + version, so changesets versions the **root** package and `changeset version` writes `CHANGELOG.md` at the repo root natively (the [#1137](https://github.com/changesets/changesets/issues/1137) workaround); the nested `@macrodata/opencode` plugin package is changeset-`ignore`d. `scripts/version.ts` syncs the bumped root version into the plugin's package.json and both Claude Code plugin manifests. Removes the stale pre-fork upstream `plugins/macrodata/CHANGELOG.md`.
+
+- [#21](https://github.com/jasikpark/macrodata/pull/21) [`c7864f1`](https://github.com/jasikpark/macrodata/commit/c7864f1b514358366dae47c797c68f9e9efeffde) Thanks [@jasikpark](https://github.com/jasikpark)! - context-doctor: clarify that the daemon auto-reindexes entity add/change incrementally (`indexEntityFile`, ~1s debounce), so a manual `manage_index` rebuild is only needed after **deletes or renames** — and for those the fix is `rm -rf <root>/.index` + rebuild, since rebuild is upsert-only and won't purge orphaned records. ([#20](https://github.com/jasikpark/macrodata/issues/20))
+
+- [#21](https://github.com/jasikpark/macrodata/pull/21) [`c7864f1`](https://github.com/jasikpark/macrodata/commit/c7864f1b514358366dae47c797c68f9e9efeffde) Thanks [@jasikpark](https://github.com/jasikpark)! - Re-add changesets-driven release automation (versioning only, no npm publish). `bun run version` runs `changeset version` and syncs the bumped version into `plugin.json` + `marketplace.json`; `changeset tag` creates the `vX.Y.Z` git tag. The release workflow uses the default `GITHUB_TOKEN` (no GitHub App) and never publishes to npm — the package is now `private`, and the plugin installs via the Claude Code marketplace. Replaces the manual 3-file version bump.
+
 ## [0.5.0] — 2026-06-16
 
 ### Added
@@ -92,7 +102,7 @@
 ### Added
 
 - Dedicated `SessionStart` hook for the **files manifest**: `plugins/macrodata/bin/compose-files.ts` (TypeScript) + thin wrapper `plugins/macrodata/bin/inject-files.sh`, registered as a third no-matcher `SessionStart` entry in `plugin.json`. Renders a Letta-MemFS-style "filetree-as-index": one line per state/entity file, `- <path> — <description>` when an **entity** carries an authored frontmatter `description:`, else a bare `- <path>`, plus a single aggregate footer counting the entities still lacking one (a nudge to add it). Descriptions are read **only** from authored frontmatter — never scraped from the body/heading (a scraped heading just echoes the filename). **State files (`state/*.md`) are exempt** — they're always injected in full by the dynamic-state composer, so the manifest lists them as plain pointers and never nudges for a description; descriptions earn their keep only on entities, whose bodies are not injected. Runs in its own ~10K hook-output envelope so the index never competes with the composer's budget. Tag-openers in descriptions are entity-escaped (injection hardening); a defensive head-keep guards against a pathological store exceeding the cap.
-- `USAGE.md` documents the `description:` frontmatter convention in the Entities section (what it's for, that it feeds the manifest, that missing ones are nudged, and that state files are exempt) — written as "describe what the file *is*, not its status" so descriptions don't drift.
+- `USAGE.md` documents the `description:` frontmatter convention in the Entities section (what it's for, that it feeds the manifest, that missing ones are nudged, and that state files are exempt) — written as "describe what the file _is_, not its status" so descriptions don't drift.
 - The memory skills now teach the `description:` convention so newly-created/updated entities carry one: `onboarding` (+ OpenCode variant) shows an entity-file template with `description:` frontmatter; `distill`, `memory-maintenance`, and `dreamtime` (+ OpenCode variants) instruct adding/preserving it, and `memory-maintenance` backfills missing ones. Examples use synthetic stand-ins, not real personal data.
 - The `onboarding` state-file templates (identity/today/human/workspace, + OpenCode variant) now ship with a `description:` frontmatter cribbed from `USAGE.md`'s explanation of each file. State files stay **manifest-exempt** (the listing still shows them as bare pointers), but because they're injected in full, the description rides along inline as a per-file purpose reminder — mirroring Letta's `block.description`.
 - Tests at `plugins/macrodata/test/compose-files.test.ts`: inline snapshots for the rendering cases (state-file exemption, inline descriptions, no-scrape, footer presence/absence, description cap) and `fast-check` property tests (arbitrary descriptions stay under the 10K cliff with exactly one intact closer; footer count always equals the number of undescribed entities).
@@ -162,4 +172,3 @@
 [0.2.3]: https://github.com/jasikpark/macrodata/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/jasikpark/macrodata/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jasikpark/macrodata/releases/tag/v0.2.1
-
