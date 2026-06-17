@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+### Patch Changes
+
+- [#28](https://github.com/jasikpark/macrodata/pull/28) [`166ef83`](https://github.com/jasikpark/macrodata/commit/166ef83fae331b9483209defaff02d14e33f717d) Thanks [@jasikpark](https://github.com/jasikpark)! - Log malformed lines in journal and conversation parsing instead of silently skipping them. The journal indexer (`parseJournalForIndexing`) and the conversation parser (`parseConversationFile`, `expandConversation`) now count unparseable lines and `console.warn`, so corrupted or multi-line entries that drop out of search are diagnosable instead of vanishing silently. Unreadable journal files warn too.
+
 ## 0.5.1
 
 ### Patch Changes
