@@ -6,9 +6,16 @@
  * `"."`) and is the versioned package, so `changeset version` writes the
  * changelog to the root `CHANGELOG.md` natively. The nested plugin package
  * (`@macrodata/opencode`) is changeset-ignored (see .changeset/config.json).
- * This step then syncs the new root version into the plugin's package.json and
- * the two Claude Code plugin manifests, so all four stay in lockstep off a
- * single source (the root version).
+ * This step then syncs the new root version into the two Claude Code plugin
+ * manifests (plugin.json + marketplace.json) off the single root source.
+ *
+ * NOTE: we deliberately do NOT sync the plugin's own package.json version.
+ * changesets/action reads CHANGELOG.md for every package whose version *changed*
+ * (its `getChangedPackages`); bumping the ignored plugin's package.json here
+ * would make the action treat it as changed and try to read its (intentionally
+ * root-only) changelog → ENOENT, plus a spurious `@macrodata/opencode` tag. The
+ * plugin package.json version is decorative (private, unpublished), so leaving
+ * it is harmless.
  *
  * (History: re-added from upstream ascorbic/macrodata 3a739907 on 2026-06-17 —
  * the fork had removed it with the changesets machinery, but its version sync
@@ -35,7 +42,6 @@ const sync = (relPath: string, indent: string | number, mutate: (j: any) => void
   writeFileSync(p, JSON.stringify(j, null, indent) + "\n");
 };
 
-sync("plugins/macrodata/package.json", 2, (j) => (j.version = version));
 sync("plugins/macrodata/.claude-plugin/plugin.json", "\t", (j) => (j.version = version));
 sync(".claude-plugin/marketplace.json", "\t", (j) => (j.plugins[0].version = version));
 
