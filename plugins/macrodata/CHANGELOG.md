@@ -1,5 +1,13 @@
 # @macrodata/opencode
 
+## 0.5.1
+
+### Patch Changes
+
+- [#21](https://github.com/jasikpark/macrodata/pull/21) [`c7864f1`](https://github.com/jasikpark/macrodata/commit/c7864f1b514358366dae47c797c68f9e9efeffde) Thanks [@jasikpark](https://github.com/jasikpark)! - context-doctor: clarify that the daemon auto-reindexes entity add/change incrementally (`indexEntityFile`, ~1s debounce), so a manual `manage_index` rebuild is only needed after **deletes or renames** — and for those the fix is `rm -rf <root>/.index` + rebuild, since rebuild is upsert-only and won't purge orphaned records. ([#20](https://github.com/jasikpark/macrodata/issues/20))
+
+- [#21](https://github.com/jasikpark/macrodata/pull/21) [`c7864f1`](https://github.com/jasikpark/macrodata/commit/c7864f1b514358366dae47c797c68f9e9efeffde) Thanks [@jasikpark](https://github.com/jasikpark)! - Re-add changesets-driven release automation (versioning only, no npm publish). `bun run version` runs `changeset version` and syncs the bumped version into `plugin.json` + `marketplace.json`; `changeset tag` creates the `vX.Y.Z` git tag. The release workflow uses the default `GITHUB_TOKEN` (no GitHub App) and never publishes to npm — the package is now `private`, and the plugin installs via the Claude Code marketplace. Replaces the manual 3-file version bump.
+
 ## 0.2.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@macrodata/opencode",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "Stateful agent tools for OpenCode. Learns who you are, remembers what you're working on, schedules tasks, maintains itself.",
   "type": "module",
