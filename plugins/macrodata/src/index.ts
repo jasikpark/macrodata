@@ -157,6 +157,7 @@ const server = new McpServer({
 });
 
 // Tool: log_journal
+// @ts-expect-error TS2589: deep generic instantiation in the deprecated server.tool() overload (SDK 1.29.0 recommends registerTool); suppressed pending migration to registerTool
 server.tool(
   "log_journal",
   "Append a timestamped entry to the journal",
@@ -306,6 +307,7 @@ server.tool(
 );
 
 // Tool: manage_index
+// @ts-expect-error TS2589: deep generic instantiation in the deprecated server.tool() overload (SDK 1.29.0 recommends registerTool); suppressed pending migration to registerTool
 server.tool(
   "manage_index",
   "Manage search indexes. Target 'memory' for journal/entities, 'conversations' for past Claude Code sessions.",
@@ -360,6 +362,7 @@ server.tool(
 );
 
 // Tool: schedule
+// @ts-expect-error TS2589: deep generic instantiation in the deprecated server.tool() overload (SDK 1.29.0 recommends registerTool); suppressed pending migration to registerTool
 server.tool(
   "schedule",
   "Create a reminder. Use type 'cron' for recurring (expression is cron syntax) or 'once' for one-shot (expression is ISO datetime).",
@@ -455,6 +458,7 @@ server.tool(
 );
 
 // Tool: save_conversation_summary
+// @ts-expect-error TS2589: deep generic instantiation in the deprecated server.tool() overload (SDK 1.29.0 recommends registerTool); suppressed pending migration to registerTool
 server.tool(
   "save_conversation_summary",
   "Save a summary of the current conversation for context recovery in future sessions",
@@ -537,6 +541,7 @@ server.tool(
 );
 
 // Tool: search_conversations
+// @ts-expect-error TS2589: deep generic instantiation in the deprecated server.tool() overload (SDK 1.29.0 recommends registerTool); suppressed pending migration to registerTool
 server.tool(
   "search_conversations",
   "Search past Claude Code conversations for similar problems/solutions. By default searches current project first, with recent conversations weighted higher.",
