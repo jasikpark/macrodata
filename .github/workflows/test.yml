@@ -1,4 +1,4 @@
-name: Test
+name: Lint & Test
 
 on:
   pull_request:
@@ -6,7 +6,8 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  lint-and-test:
+    name: Lint & Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
