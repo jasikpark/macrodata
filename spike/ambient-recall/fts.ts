@@ -90,9 +90,11 @@ export async function rerank(query: string, docs: string[]): Promise<number[]> {
   return scores;
 }
 
-// Full 3-stage pipeline: vector + FTS recall -> union candidate slate ->
-// cross-encoder rerank -> floor. The reranker re-scores the fused recall, so it
-// can drop FTS's lexical noise while keeping what vector missed.
+// Full pipeline (Porrima placement): vector + FTS recall -> RRF fuse ->
+// recency-biased candidate SELECTION -> cross-encoder rerank -> floor on the
+// PURE rerank score. Recency decides which candidates earn a rerank slot; it
+// never touches the final ranking, so a stale-but-strongly-relevant memory that
+// survives into the pool still wins on pure relevance.
 export async function pipelineSearch(
   query: string,
   opts: { limit?: number; task?: string; floor?: number; rerankQuery?: string; exclude?: Set<string> } = {},
@@ -100,37 +102,32 @@ export async function pipelineSearch(
   const { limit = 5, task, floor = 0.5, rerankQuery, exclude } = opts;
   // Recall legs use the WIDE query; the rerank precision pass uses the TIGHT
   // query (the agent's current trajectory) when provided, else the same query.
-  // 20 each — wide recall slate for the reranker. Slow-and-strong; latency is
-  // the async rebuild's job, not something to buy by shrinking the slate.
   const vec = await searchMemory(query, { limit: 20, task });
   const fts = await ftsSearch(query, 20);
-  const seen = new Set<string>();
-  const candidates: SearchResult[] = [];
-  for (const r of [...vec, ...fts]) {
-    // Drop already-injected chunks BEFORE rerank (not after) — otherwise repeats
-    // occupy the top-N and starve fresh lower-ranked chunks below the limit.
-    if (exclude?.has(r.content)) continue;
-    if (!seen.has(r.content)) {
-      seen.add(r.content);
-      candidates.push(r);
-    }
-  }
-  const scores = await rerank(rerankQuery || query, candidates.map((c) => c.content));
 
-  // Recency bias. Episodic memory (journal entries carry an ISO `timestamp`)
-  // DECAYS with age so a stale-but-semantically-close hit can't outrank fresh
-  // context. Evergreen entities (no timestamp) are exempt (weight 1).
-  // Multiplicative on the rerank score and applied BEFORE the floor, so old
-  // marginal hits also drop out.
-  //
-  // Half-life default 60d — DELIBERATELY GENTLER than Porrima's 30d. Porrima can
-  // decay hard because recency is one of four multiplicative signals there (LLM
-  // importance, last_accessed refresh, supersession penalty); ours is the only
-  // signal besides the rerank score, so a steep curve would let age override the
-  // one semantic judgment we have, on noisier data. Keep it a thumb on the
-  // scale: barely touches anything <2wk old, only meaningfully fades month-plus
-  // journal cruft (365d → ~1.5%). Also note we decay from CREATION, not Porrima's
-  // last_accessed (we have no access-tracking layer). Tunable via env.
+  // RRF-fuse the two recall legs into one ranked slate (K=60), keyed by content.
+  // Drop already-injected chunks here, BEFORE rerank, so repeats don't occupy
+  // the pool and starve fresh chunks.
+  const K = 60;
+  const fused = new Map<string, { item: SearchResult; rrf: number }>();
+  const add = (list: SearchResult[]) =>
+    list.forEach((r, i) => {
+      if (exclude?.has(r.content)) return;
+      const prev = fused.get(r.content);
+      fused.set(r.content, { item: prev?.item ?? r, rrf: (prev?.rrf ?? 0) + 1 / (K + i + 1) });
+    });
+  add(vec);
+  add(fts);
+
+  // Recency BEFORE rerank (Porrima placement, verified in source 2026-06-17):
+  // Porrima bakes recency into the fused RETRIEVAL score (rrf * recencyDecay *
+  // importance * supersession) that picks candidates, then OVERWRITES it with the
+  // pure cross-encoder score — recency never gates the final output. We mirror
+  // that: recency multiplies the RRF score for selection only. This is gentler
+  // than our old after-rerank multiply-then-floor, which imposed a hard age
+  // ceiling (a 107d hit at rerank 1.0 still floored out); now that same hit wins
+  // if it survives into the pool. halfLife default 60d; entities (no timestamp)
+  // are evergreen (weight 1). We decay from CREATION (no access-tracking layer).
   const halfLifeDays = Number(process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 60);
   const now = Date.now();
   const recency = (ts?: string): number => {
@@ -141,8 +138,19 @@ export async function pipelineSearch(
     return Math.pow(0.5, ageDays / halfLifeDays);
   };
 
+  // Pool cap: rerank is the expensive precision stage, so recency-adjusted RRF
+  // chooses which top-N candidates to spend it on. A pool >= the slate size makes
+  // recency a no-op (everyone gets reranked); tighten it to give recency bite.
+  const pool = Number(process.env.MACRODATA_RECALL_RERANK_POOL ?? 20);
+  const candidates = [...fused.values()]
+    .sort((a, b) => b.rrf * recency(b.item.timestamp) - a.rrf * recency(a.item.timestamp))
+    .slice(0, pool)
+    .map((x) => x.item);
+
+  // Rerank the pool; the PURE cross-encoder score is the final score.
+  const scores = await rerank(rerankQuery || query, candidates.map((c) => c.content));
   return candidates
-    .map((c, i) => ({ ...c, score: scores[i] * recency(c.timestamp) }))
+    .map((c, i) => ({ ...c, score: scores[i] }))
     .filter((c) => c.score >= floor)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);

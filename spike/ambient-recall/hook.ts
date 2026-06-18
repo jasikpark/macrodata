@@ -129,15 +129,25 @@ async function main(): Promise<void> {
   // systemMessage -> user (so the human sees exactly what the model got, plus
   // the latency `tag`). RAW content is injected (scrubbing is query-only).
   const emitHits = (chunks: SearchResult[], tag: string): never => {
+    // Age visibility: show each hit's age. Recency is a PRE-rerank candidate-
+    // selection bias (Porrima placement), so the displayed score is the pure
+    // cross-encoder relevance — an old hit with a high score survived on merit,
+    // which is the gentler behavior we want to see. Entities are evergreen.
+    const ageLabel = (ts?: string): string => {
+      if (!ts) return "evergreen";
+      const d = (Date.now() - Date.parse(ts)) / 86_400_000;
+      return Number.isNaN(d) ? "evergreen" : d < 1 ? "<1d" : `${Math.round(d)}d`;
+    };
+    const halfLife = process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 60;
     const block =
       "<macrodata-recall>\n" +
       chunks.map((h) => {
         const where = h.section ? `${h.source} › ${h.section}` : h.source;
         const snippet = h.content.replace(/\s+/g, " ").slice(0, 220);
-        return `- (${h.score.toFixed(2)}) ${where}\n  ${snippet}`;
+        return `- (${h.score.toFixed(2)} · ${ageLabel(h.timestamp)}) ${where}\n  ${snippet}`;
       }).join("\n") +
       "\n</macrodata-recall>";
-    const visible = `[macrodata-recall] ${chunks.length} new hit(s) from ${env.tool_name ?? event} · ${tag}\n${block}`;
+    const visible = `[macrodata-recall] ${chunks.length} new hit(s) from ${env.tool_name ?? event} · recency ${halfLife}d (pre-rerank select) · ${tag}\n${block}`;
     process.stdout.write(JSON.stringify({
       systemMessage: visible,
       hookSpecificOutput: { hookEventName: event, additionalContext: block },
