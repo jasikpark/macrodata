@@ -9,8 +9,9 @@
  */
 
 import { LocalIndex } from "vectra";
+import { statSync } from "fs";
 import { join } from "path";
-import { getIndexDir } from "./config.ts";
+import { getIndexDir, getEntitiesDir } from "./config.ts";
 import { searchMemory, type SearchResult } from "./indexer.ts";
 
 const STOP = new Set(
@@ -126,12 +127,32 @@ export async function pipelineSearch(
   // that: recency multiplies the RRF score for selection only. This is gentler
   // than our old after-rerank multiply-then-floor, which imposed a hard age
   // ceiling (a 107d hit at rerank 1.0 still floored out); now that same hit wins
-  // if it survives into the pool. halfLife default 60d; entities (no timestamp)
-  // are evergreen (weight 1). We decay from CREATION (no access-tracking layer).
+  // if it survives into the pool. halfLife default 60d.
+  //
+  // No evergreen class (step 1 of the access-data design — Porrima has none):
+  // EVERY item decays. Journal items seed from their created `timestamp`; entities
+  // seed from their file BIRTHTIME (creation ≈ Porrima's `created_at`, and unlike
+  // mtime it doesn't move on every edit), statted at query time (NOT baked into
+  // the shared vectra index — the prod daemon reindexes entities without it and
+  // would clobber it). Birthtime is just a BOOTSTRAP: a later step overlays an
+  // overlay-owned `firstSeen` + `last_accessed`-on-use, the way Porrima captures
+  // created_at once and owns it. A dormant entity fades from ambient recall but
+  // stays reachable via explicit search_memory. (Caveat: a move/copy can reset
+  // birthtime, so it's a prior, not ground truth.)
   const halfLifeDays = Number(process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 60);
   const now = Date.now();
+  const entitiesDir = getEntitiesDir();
+  const seedCache = new Map<string, string | undefined>();
+  const seed = (c: SearchResult): string | undefined => {
+    if (c.timestamp) return c.timestamp; // journal: created_at
+    if (seedCache.has(c.source)) return seedCache.get(c.source);
+    let ts: string | undefined;
+    try { ts = statSync(join(entitiesDir, c.source)).birthtime.toISOString(); } catch { ts = undefined; }
+    seedCache.set(c.source, ts);
+    return ts;
+  };
   const recency = (ts?: string): number => {
-    if (!ts) return 1; // evergreen entity — no decay
+    if (!ts) return 1; // unresolved seed (stat failed) — neutral, don't over-penalize
     const t = Date.parse(ts);
     if (Number.isNaN(t)) return 1;
     const ageDays = Math.max(0, (now - t) / 86_400_000);
@@ -141,16 +162,21 @@ export async function pipelineSearch(
   // Pool cap: rerank is the expensive precision stage, so recency-adjusted RRF
   // chooses which top-N candidates to spend it on. A pool >= the slate size makes
   // recency a no-op (everyone gets reranked); tighten it to give recency bite.
+  // Seed is precomputed once per candidate (not in the sort comparator) to avoid
+  // redundant statSync calls.
   const pool = Number(process.env.MACRODATA_RECALL_RERANK_POOL ?? 20);
   const candidates = [...fused.values()]
-    .sort((a, b) => b.rrf * recency(b.item.timestamp) - a.rrf * recency(a.item.timestamp))
+    .map((x) => ({ item: x.item, w: x.rrf * recency(seed(x.item)) }))
+    .sort((a, b) => b.w - a.w)
     .slice(0, pool)
-    .map((x) => x.item);
+    .map((e) => e.item);
 
-  // Rerank the pool; the PURE cross-encoder score is the final score.
+  // Rerank the pool; the PURE cross-encoder score is the final score. Stamp the
+  // resolved seed onto the result (entities gain their birthtime here) so the
+  // hook's age label reflects the real age instead of showing "evergreen".
   const scores = await rerank(rerankQuery || query, candidates.map((c) => c.content));
   return candidates
-    .map((c, i) => ({ ...c, score: scores[i] }))
+    .map((c, i) => ({ ...c, score: scores[i], timestamp: seed(c) }))
     .filter((c) => c.score >= floor)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
