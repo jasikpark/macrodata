@@ -5,3 +5,4 @@
 node_modules/
 .recall-inbox-*.json
 .recall-request-*.json
+.access-events.jsonl

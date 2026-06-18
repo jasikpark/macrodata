@@ -13,6 +13,7 @@ import { statSync } from "fs";
 import { join } from "path";
 import { getIndexDir, getEntitiesDir } from "./config.ts";
 import { searchMemory, type SearchResult } from "./indexer.ts";
+import { loadAccessOverlay, memKey } from "./access.ts";
 
 const STOP = new Set(
   "the a an is are was were be by of to in on for and or but with that this it as at from how do does did what why which when who whose into over under not no yes can could would should i we you they them their our your my me".split(" "),
@@ -151,6 +152,19 @@ export async function pipelineSearch(
     seedCache.set(c.source, ts);
     return ts;
   };
+  // Access overlay (step 2): using a memory refreshes its clock. Effective
+  // last_accessed = most-recent of (birthtime/created seed, last access event).
+  // This is what recency actually decays from — Porrima's last_accessed, not
+  // created_at. A perennially-relevant memory stays warm; a never-touched one
+  // decays from its seed.
+  const overlay = loadAccessOverlay();
+  const lastAccessed = (c: SearchResult): string | undefined => {
+    const s = seed(c);
+    const a = overlay.get(memKey(c))?.lastAccessed;
+    if (!s) return a;
+    if (!a) return s;
+    return a > s ? a : s;
+  };
   const recency = (ts?: string): number => {
     if (!ts) return 1; // unresolved seed (stat failed) — neutral, don't over-penalize
     const t = Date.parse(ts);
@@ -166,17 +180,17 @@ export async function pipelineSearch(
   // redundant statSync calls.
   const pool = Number(process.env.MACRODATA_RECALL_RERANK_POOL ?? 20);
   const candidates = [...fused.values()]
-    .map((x) => ({ item: x.item, w: x.rrf * recency(seed(x.item)) }))
+    .map((x) => ({ item: x.item, w: x.rrf * recency(lastAccessed(x.item)) }))
     .sort((a, b) => b.w - a.w)
     .slice(0, pool)
     .map((e) => e.item);
 
   // Rerank the pool; the PURE cross-encoder score is the final score. Stamp the
-  // resolved seed onto the result (entities gain their birthtime here) so the
-  // hook's age label reflects the real age instead of showing "evergreen".
+  // effective last_accessed onto the result so the hook's age label shows the
+  // real age (entities gain their birthtime/last-access instead of "evergreen").
   const scores = await rerank(rerankQuery || query, candidates.map((c) => c.content));
   return candidates
-    .map((c, i) => ({ ...c, score: scores[i], timestamp: seed(c) }))
+    .map((c, i) => ({ ...c, score: scores[i], timestamp: lastAccessed(c) }))
     .filter((c) => c.score >= floor)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);

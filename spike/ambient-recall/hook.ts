@@ -17,10 +17,16 @@ import { join } from "path";
 import { pipelineSearch } from "./fts.ts";
 import type { SearchResult } from "./indexer.ts";
 import { buildHookQuery, buildTranscriptQuery, scrubOperationalNoise } from "./query.ts";
+import { memKey, recordAccess } from "./access.ts";
 
 const FLOOR = Number(process.env.MACRODATA_RECALL_FLOOR ?? 0.5);
 const LIMIT = Number(process.env.MACRODATA_RECALL_LIMIT ?? 3);
 const MIN_QUERY_CHARS = 8;
+// Sampled calibration: fraction of recall INJECTIONS that also ask the agent to
+// journal a usefulness verdict. Rate-limited so it doesn't flood the turn with
+// meta-tasks. 0 disables. This is the lossless human-judgment signal (distinct
+// from the punted "was-it-referenced" inference) that feeds floor/recency tuning.
+const VERDICT_RATE = Number(process.env.MACRODATA_RECALL_VERDICT_RATE ?? 0.25);
 
 function emitSilent(): never {
   // No output = nothing injected.
@@ -129,6 +135,9 @@ async function main(): Promise<void> {
   // systemMessage -> user (so the human sees exactly what the model got, plus
   // the latency `tag`). RAW content is injected (scrubbing is query-only).
   const emitHits = (chunks: SearchResult[], tag: string): never => {
+    // Record an access event per injected chunk (step 2: "surfaced" = touched).
+    // This is the single injection point for both sync + async-drain paths.
+    recordAccess(chunks.map(memKey), "surfaced", new Date().toISOString());
     // Age visibility: show each hit's age. Recency is a PRE-rerank candidate-
     // selection bias (Porrima placement), so the displayed score is the pure
     // cross-encoder relevance — an old hit with a high score survived on merit,
@@ -147,10 +156,22 @@ async function main(): Promise<void> {
         return `- (${h.score.toFixed(2)} · ${ageLabel(h.timestamp)}) ${where}\n  ${snippet}`;
       }).join("\n") +
       "\n</macrodata-recall>";
-    const visible = `[macrodata-recall] ${chunks.length} new hit(s) from ${env.tool_name ?? event} · recency ${halfLife}d (pre-rerank select) · ${tag}\n${block}`;
+    // Sampled calibration prompt: on ~VERDICT_RATE of injections, ask the agent to
+    // journal a usefulness verdict. Goes in additionalContext (model-facing) so the
+    // agent acts on it; the human sees a marker in systemMessage. Reinstates the
+    // first-iteration ambient-memory-calibration loop (cf. feedback_ambient_calibration),
+    // now sampled to avoid flooding the turn.
+    const askVerdict = VERDICT_RATE > 0 && Math.random() < VERDICT_RATE;
+    const verdictGuidance = askVerdict
+      ? `\n<recall-calibration sampled="~${Math.round(VERDICT_RATE * 100)}%">\n` +
+        `Were any of the above relevant to what you're doing right now? Before the turn ends, ` +
+        `log a one-line verdict via log_journal(topic="ambient-memory-calibration"): the scores + ` +
+        `useful | off-topic + why. (Sampled, so it won't fire every recall.)\n</recall-calibration>`
+      : "";
+    const visible = `[macrodata-recall] ${chunks.length} new hit(s) from ${env.tool_name ?? event} · recency ${halfLife}d (pre-rerank select) · ${tag}${askVerdict ? " · ⊙ verdict requested" : ""}\n${block}`;
     process.stdout.write(JSON.stringify({
       systemMessage: visible,
-      hookSpecificOutput: { hookEventName: event, additionalContext: block },
+      hookSpecificOutput: { hookEventName: event, additionalContext: block + verdictGuidance },
     }));
     process.exit(0);
   };
