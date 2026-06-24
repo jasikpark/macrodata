@@ -9,8 +9,10 @@
  *
  * Append-only so concurrent processes (hook fires + worker) never clobber; the
  * fold is a cheap one-pass read. The overlay never touches the shared vectra
- * index. Keys are stable across the positional-id reshuffle (the malformed-line
- * lesson): entities by source§section, journal entries by content hash.
+ * index. Keys are the content sha for BOTH entities and journal entries (content
+ * = identity, Caleb 2026-06-24): an edit yields a new key by design. This also
+ * sidesteps the positional-id reshuffle entirely — the index id can churn; the
+ * access key depends only on content.
  */
 
 import { appendFileSync, existsSync, readFileSync } from "fs";
@@ -31,8 +33,13 @@ const REFRESH_KINDS = new Set(
 );
 
 export function memKey(r: SearchResult): string {
-  if (r.section) return `e:${r.source}§${r.section}`; // entity: survives edits
-  return `j:${createHash("sha1").update(r.content).digest("hex").slice(0, 16)}`; // journal: immutable content
+  // Content IS the identity, uniformly (Caleb 2026-06-24): entities key by the same
+  // content sha as journals, so an edited section is a genuinely NEW memory (fresh
+  // recency/access clock) instead of inheriting the old version's stats through a
+  // stable source§section key. Content changed → new unit, by design. (Prefix kept
+  // `j:` so existing journal access history still matches — it's an opaque namespace
+  // now, not a type tag.)
+  return `j:${createHash("sha1").update(r.content).digest("hex").slice(0, 16)}`;
 }
 
 export function recordAccess(keys: string[], kind: string, ts: string): void {
