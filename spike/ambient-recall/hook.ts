@@ -124,8 +124,17 @@ async function main(): Promise<void> {
         ts: new Date().toISOString(), tool: env.tool_name ?? null,
         search: search.slice(0, 300), rerankQuery: rerankQuery.slice(0, 200),
         n: chunks.length, ms: Date.now() - t0,
-        scores: chunks.map((h) => Number(h.score.toFixed(3))),
+        scores: chunks.map((h) => Number(h.score.toFixed(3))), // back-compat: final score
         sources: chunks.map((h) => h.section ?? h.source),
+        // Per-STAGE breakdown so calibration sweeps can see WHY a hit ranked, not just
+        // the conflated final: rerank (final cross-encoder), rrf (fused recall), recency factor.
+        hits: chunks.map((h) => ({
+          src: h.section ?? h.source,
+          rerank: Number(h.score.toFixed(3)),
+          rrf: h.rrf != null ? Number(h.rrf.toFixed(4)) : null,
+          recency: h.recency != null ? Number(h.recency.toFixed(3)) : null,
+          ageDays: h.timestamp ? Math.round((Date.now() - Date.parse(h.timestamp)) / 86_400_000) : null,
+        })),
         ...extra,
       }) + "\n");
     } catch {}
@@ -148,14 +157,18 @@ async function main(): Promise<void> {
       return Number.isNaN(d) ? "evergreen" : d < 1 ? "<1d" : `${Math.round(d)}d`;
     };
     const halfLife = process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 60;
+    const fmtWhere = (h: SearchResult) => (h.section ? `${h.source} › ${h.section}` : h.source);
+    // CLEAN block → model (additionalContext): final score + age only, no diagnostics.
     const block =
       "<macrodata-recall>\n" +
-      chunks.map((h) => {
-        const where = h.section ? `${h.source} › ${h.section}` : h.source;
-        const snippet = h.content.replace(/\s+/g, " ").slice(0, 220);
-        return `- (${h.score.toFixed(2)} · ${ageLabel(h.timestamp)}) ${where}\n  ${snippet}`;
-      }).join("\n") +
+      chunks.map((h) => `- (${h.score.toFixed(2)} · ${ageLabel(h.timestamp)}) ${fmtWhere(h)}\n  ${h.content.replace(/\s+/g, " ").slice(0, 220)}`).join("\n") +
       "\n</macrodata-recall>";
+    // DEBUG block → human (systemMessage): per-STAGE numbers so calibration isn't judged
+    // on the conflated final. rerank = final cross-encoder; rrf = fused recall score
+    // (pre-rerank); rec = recency factor (0-1, pre-rerank candidate-selection only).
+    const debugBlock = chunks.map((h) =>
+      `- rerank ${h.score.toFixed(2)} · rrf ${(h.rrf ?? 0).toFixed(3)} · rec ${(h.recency ?? 1).toFixed(2)} · ${ageLabel(h.timestamp)} — ${fmtWhere(h)}\n  ${h.content.replace(/\s+/g, " ").slice(0, 220)}`
+    ).join("\n");
     // Sampled calibration prompt: on ~VERDICT_RATE of injections, ask the agent to
     // journal a usefulness verdict. Goes in additionalContext (model-facing) so the
     // agent acts on it; the human sees a marker in systemMessage. Reinstates the
@@ -168,7 +181,7 @@ async function main(): Promise<void> {
         `log a one-line verdict via log_journal(topic="ambient-memory-calibration"): the scores + ` +
         `useful | off-topic + why. (Sampled, so it won't fire every recall.)\n</recall-calibration>`
       : "";
-    const visible = `[macrodata-recall] ${chunks.length} new hit(s) from ${env.tool_name ?? event} · recency ${halfLife}d (pre-rerank select) · ${tag}${askVerdict ? " · ⊙ verdict requested" : ""}\n${block}`;
+    const visible = `[macrodata-recall] ${chunks.length} hit(s) from ${env.tool_name ?? event} · recency ${halfLife}d half-life · ${tag}${askVerdict ? " · ⊙ verdict requested" : ""}\n${debugBlock}`;
     process.stdout.write(JSON.stringify({
       systemMessage: visible,
       hookSpecificOutput: { hookEventName: event, additionalContext: block + verdictGuidance },

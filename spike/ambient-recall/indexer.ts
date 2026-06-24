@@ -30,7 +30,10 @@ export interface SearchResult {
   section?: string;
   timestamp?: string;
   type: MemoryItemType;
-  score: number;
+  score: number; // FINAL score = pure cross-encoder rerank (0-1)
+  // Per-stage diagnostics (carried through for calibration; not used in ranking):
+  rrf?: number; // RRF-fused recall score (vector+FTS), pre-recency, pre-rerank
+  recency?: number; // recency decay factor (0-1) applied for candidate SELECTION only
 }
 
 let index: LocalIndex | null = null;

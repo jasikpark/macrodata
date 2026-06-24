@@ -180,17 +180,17 @@ export async function pipelineSearch(
   // redundant statSync calls.
   const pool = Number(process.env.MACRODATA_RECALL_RERANK_POOL ?? 20);
   const candidates = [...fused.values()]
-    .map((x) => ({ item: x.item, w: x.rrf * recency(lastAccessed(x.item)) }))
+    .map((x) => { const rec = recency(lastAccessed(x.item)); return { item: x.item, rrf: x.rrf, rec, w: x.rrf * rec }; })
     .sort((a, b) => b.w - a.w)
-    .slice(0, pool)
-    .map((e) => e.item);
+    .slice(0, pool);
 
-  // Rerank the pool; the PURE cross-encoder score is the final score. Stamp the
-  // effective last_accessed onto the result so the hook's age label shows the
-  // real age (entities gain their birthtime/last-access instead of "evergreen").
-  const scores = await rerank(rerankQuery || query, candidates.map((c) => c.content));
+  // Rerank the pool; the PURE cross-encoder score is the final score. Carry the
+  // per-stage diagnostics (rrf recall score, recency factor) through UNCHANGED so
+  // the hook + calibration log can show each stage instead of conflating into the
+  // final. Stamp effective last_accessed so the age label shows the real age.
+  const scores = await rerank(rerankQuery || query, candidates.map((c) => c.item.content));
   return candidates
-    .map((c, i) => ({ ...c, score: scores[i], timestamp: lastAccessed(c) }))
+    .map((c, i) => ({ ...c.item, score: scores[i], rrf: c.rrf, recency: c.rec, timestamp: lastAccessed(c.item) }))
     .filter((c) => c.score >= floor)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
