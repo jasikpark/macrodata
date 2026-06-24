@@ -178,7 +178,7 @@ async function main(): Promise<void> {
       const d = (Date.now() - Date.parse(ts)) / 86_400_000;
       return Number.isNaN(d) ? "evergreen" : d < 1 ? "<1d" : `${Math.round(d)}d`;
     };
-    const halfLife = process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 60;
+    const halfLife = process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 30;
     const fmtWhere = (h: SearchResult) => (h.section ? `${h.source} › ${h.section}` : h.source);
     // CLEAN block → model (additionalContext): final score + age only, no diagnostics.
     const block =

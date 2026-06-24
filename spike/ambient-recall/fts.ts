@@ -128,7 +128,8 @@ export async function pipelineSearch(
   // that: recency multiplies the RRF score for selection only. This is gentler
   // than our old after-rerank multiply-then-floor, which imposed a hard age
   // ceiling (a 107d hit at rerank 1.0 still floored out); now that same hit wins
-  // if it survives into the pool. halfLife default 60d.
+  // if it survives into the pool. halfLife default 30d — matches Porrima now that the
+  // decay clock is last_accessed (was 60d when it decayed from created/birthtime).
   //
   // No evergreen class (step 1 of the access-data design — Porrima has none):
   // EVERY item decays. Journal items seed from their created `timestamp`; entities
@@ -140,7 +141,7 @@ export async function pipelineSearch(
   // created_at once and owns it. A dormant entity fades from ambient recall but
   // stays reachable via explicit search_memory. (Caveat: a move/copy can reset
   // birthtime, so it's a prior, not ground truth.)
-  const halfLifeDays = Number(process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 60);
+  const halfLifeDays = Number(process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 30);
   const now = Date.now();
   const entitiesDir = getEntitiesDir();
   const seedCache = new Map<string, string | undefined>();
