@@ -122,6 +122,52 @@ function parseRecent(transcriptPath: string, maxMessages: number): Msg[] {
   return merged.slice(-maxMessages);
 }
 
+// In-context exclusion derived from the live COMPACTION WINDOW (Porrima frozenIds∪deltaIds,
+// adapted). Claude Code compacts IN-PLACE: the same session file grows, and each boundary is
+// a `type:user` entry flagged `isCompactSummary:true` (preceded by a `compactMetadata` system
+// entry). Everything BEFORE the last boundary was summarized away — NOT in context — so we
+// must not suppress it (conservative: re-injecting summarized-away detail is useful, not echo).
+//
+// Returns the window start ts + the EXACT keys of journal memories I AUTHORED in the window:
+// `[topic] content`, byte-identical to how indexer.ts stores a journal entry, so it
+// exact-matches a recall candidate's content. EXACT only (no substring/cosine) — we suppress
+// ONLY what we provably produced; anything uncertain is injected (under-cull, never over-cull).
+export function inContextWindow(transcriptPath: string): { windowStartTs: string; authoredKeys: Set<string> } {
+  let raw: string;
+  try { raw = readFileSync(transcriptPath, "utf-8"); } catch { return { windowStartTs: "", authoredKeys: new Set() }; }
+  const entries: Array<{ idx: number; o: any }> = [];
+  let firstTs = "", windowStartTs = "", boundaryIdx = -1;
+  const lines = raw.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    let o: any; try { o = JSON.parse(lines[i]); } catch { continue; }
+    entries.push({ idx: i, o });
+    if (!firstTs && o.timestamp) firstTs = o.timestamp;
+    // STRUCTURED-FIELD check (NOT a substring scan): the boundary is a system entry
+    // carrying subtype:"compact_boundary" (+compactMetadata) immediately followed by a
+    // user entry with isCompactSummary:true. Keying on these object fields avoids the
+    // over-cull trap where prose merely CONTAINING the string "isCompactSummary"
+    // false-matches (confirmed 2026-06-24: a naive grep hit such a prose line).
+    if (o.subtype === "compact_boundary" || o.isCompactSummary === true || o.compactMetadata) {
+      boundaryIdx = i;
+      if (o.timestamp) windowStartTs = o.timestamp;
+    }
+  }
+  if (!windowStartTs) windowStartTs = firstTs; // no compaction yet → whole session is the window
+  const authoredKeys = new Set<string>();
+  for (const { idx, o } of entries) {
+    if (idx <= boundaryIdx) continue; // pre-compaction: summarized away, not in context
+    if (o.type !== "assistant" || !Array.isArray(o.message?.content)) continue;
+    for (const b of o.message.content) {
+      if (b?.type === "tool_use" && /log_journal$/.test(String(b.name || "")) && b.input
+          && typeof b.input.topic === "string" && typeof b.input.content === "string") {
+        authoredKeys.add(`[${b.input.topic}] ${b.input.content}`);
+      }
+    }
+  }
+  return { windowStartTs, authoredKeys };
+}
+
 export function buildTranscriptQuery(
   transcriptPath: string,
   opts: { maxMessages?: number; searchChars?: number; rerankChars?: number } = {},

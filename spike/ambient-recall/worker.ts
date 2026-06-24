@@ -18,8 +18,9 @@
  *   worker reads+deletes the request, reranks, writes
  *          .recall-inbox-<sid>.json  {ts, hits: SearchResult[]}
  *   hook  reads+deletes the inbox on its next fire and injects.
- * Seen-dedup: the worker excludes already-injected chunks by reading
- * .recall-injected-<sid>.json (the hook owns writing it, on actual injection).
+ * In-context exclude: the worker excludes chunks the hook says are already in
+ * context by reading .recall-exclude-<sid>.json (the hook computes the window-scoped
+ * delta∪frozen set each fire; the worker just consumes it).
  *
  * Run:  bun run worker.ts   (foreground; the supervisor will daemonize it later)
  */
@@ -37,10 +38,13 @@ interface Request { sid: string; search: string; rerankQuery: string; ts?: strin
 
 const reqPath = (sid: string) => join(DIR, `.recall-request-${sid}.json`);
 const inboxPath = (sid: string) => join(DIR, `.recall-inbox-${sid}.json`);
-const injectedPath = (sid: string) => join(DIR, `.recall-injected-${sid}.json`);
+// The hook computes the window-scoped, EXACT in-context exclude set (delta ∪ frozen,
+// Porrima inContextIds) and writes it here each fire; the worker just consumes it for
+// pool-stage (pre-rerank) exclusion so fresh hits backfill.
+const excludePath = (sid: string) => join(DIR, `.recall-exclude-${sid}.json`);
 
-function loadSeen(sid: string): Set<string> {
-  const p = injectedPath(sid);
+function loadExclude(sid: string): Set<string> {
+  const p = excludePath(sid);
   if (!existsSync(p)) return new Set();
   try { return new Set(JSON.parse(readFileSync(p, "utf-8")) as string[]); } catch { return new Set(); }
 }
@@ -57,12 +61,12 @@ const pending = new Map<string, Request>();
 let running = false;
 
 async function runPipeline(req: Request): Promise<void> {
-  const seen = loadSeen(req.sid);
+  const exclude = loadExclude(req.sid);
   const t0 = Date.now();
   let hits: Awaited<ReturnType<typeof pipelineSearch>>;
   try {
     hits = await pipelineSearch(req.search, {
-      limit: LIMIT, floor: FLOOR, rerankQuery: req.rerankQuery, exclude: seen,
+      limit: LIMIT, floor: FLOOR, rerankQuery: req.rerankQuery, exclude,
     });
   } catch (e) {
     console.error(`[worker] ${req.sid}: pipeline error: ${String(e)}`);

@@ -16,7 +16,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync, renameSync, un
 import { join } from "path";
 import { pipelineSearch } from "./fts.ts";
 import type { SearchResult } from "./indexer.ts";
-import { buildHookQuery, buildTranscriptQuery, scrubOperationalNoise } from "./query.ts";
+import { buildHookQuery, buildTranscriptQuery, scrubOperationalNoise, inContextWindow } from "./query.ts";
 import { memKey, recordAccess } from "./access.ts";
 
 const FLOOR = Number(process.env.MACRODATA_RECALL_FLOOR ?? 0.5);
@@ -90,31 +90,53 @@ async function main(): Promise<void> {
   }
   if (search.length < MIN_QUERY_CHARS) emitSilent();
 
-  // Cross-turn dedup: chunks already injected THIS session, keyed on CONTENT
-  // (journal SearchResults lack a section, so source§section would collapse a
-  // day's journal to one key). Used as a rerank EXCLUDE set (dropped before
-  // rerank so repeats don't occupy top-N and starve fresh chunks). Session-keyed
-  // file spans PostToolUse + UserPromptSubmit; new session = fresh set.
   const sid = (env.session_id || "").replace(/[^A-Za-z0-9_-]/g, "");
   const here = (name: string) => join(import.meta.dir, name);
   const injectedFile = sid ? here(`.recall-injected-${sid}.json`) : "";
-  const loadSeen = (): Set<string> => {
-    if (!injectedFile || !existsSync(injectedFile)) return new Set();
-    try { return new Set(JSON.parse(readFileSync(injectedFile, "utf-8")) as string[]); } catch { return new Set(); }
-  };
-  const persistSeen = (chunks: SearchResult[]): void => {
-    if (!injectedFile) return;
-    try {
-      const seen = loadSeen();
-      for (const h of chunks) seen.add(h.content);
-      writeFileSync(injectedFile, JSON.stringify([...seen]));
-    } catch {}
-  };
+  const excludeFile = sid ? here(`.recall-exclude-${sid}.json`) : "";
   const atomicWrite = (path: string, data: string): void => {
     const tmp = `${path}.tmp`;
     writeFileSync(tmp, data);
     renameSync(tmp, path);
   };
+
+  // ---- Unified in-context EXCLUDE (Porrima inContextIds = frozen ∪ delta) ----
+  // EXACT, content-keyed, scoped to the live COMPACTION WINDOW, and excluded in the
+  // candidate POOL (pre-rerank) so fresh hits backfill → inject MORE, never less.
+  //   delta  = chunks this session's hook injected WITHIN the window (.recall-injected,
+  //            stored {c,ts} so it window-scopes; Porrima deltaIds, resets at compaction).
+  //   frozen = journal entries I AUTHORED in the window (`[topic] content` log_journal
+  //            keys, byte-identical to the indexed form; Porrima frozenIds).
+  // EXACT match only — we suppress ONLY what we provably produced/injected; anything
+  // uncertain is injected (Caleb's under-cull). Written to .recall-exclude-<sid> so the
+  // worker (async path) excludes in its pool too. inContextWindow() handles the window.
+  type Inj = { c: string; ts: string };
+  const loadInjected = (): Inj[] => {
+    if (!injectedFile || !existsSync(injectedFile)) return [];
+    try {
+      return (JSON.parse(readFileSync(injectedFile, "utf-8")) as unknown[])
+        .map((e) => (typeof e === "string" ? { c: e, ts: "" } : (e as Inj))); // legacy string[] → ts-less
+    } catch { return []; }
+  };
+  const persistInjected = (chunks: SearchResult[]): void => {
+    if (!injectedFile) return;
+    try {
+      const now = new Date().toISOString();
+      const all = loadInjected();
+      for (const h of chunks) all.push({ c: h.content, ts: now });
+      writeFileSync(injectedFile, JSON.stringify(all));
+    } catch {}
+  };
+  const { windowStartTs, authoredKeys } = env.transcript_path
+    ? inContextWindow(env.transcript_path)
+    : { windowStartTs: "", authoredKeys: new Set<string>() };
+  const excludeSet = new Set<string>([
+    // delta in-window: a ts-less (legacy) or pre-window injection is treated as NOT in
+    // context (re-eligible) — conservative, under-cull.
+    ...loadInjected().filter((e) => e.ts && (!windowStartTs || e.ts >= windowStartTs)).map((e) => e.c),
+    ...authoredKeys,
+  ]);
+  if (excludeFile) atomicWrite(excludeFile, JSON.stringify([...excludeSet]));
 
   // Calibration log. `extra` carries mode + timing (sync: pipeMs; async:
   // offPathMs/queryToServeMs/fastMs) so the jsonl records both paths uniformly.
@@ -216,10 +238,9 @@ async function main(): Promise<void> {
     let meta: { requestedAt?: string; servedAt?: string; pipelineMs?: number } = {};
     if (inbox && existsSync(inbox)) {
       try {
-        const seen = loadSeen();
         const parsed = JSON.parse(readFileSync(inbox, "utf-8")) as
           { requestedAt?: string; servedAt?: string; pipelineMs?: number; hits: SearchResult[] };
-        ready = (parsed.hits || []).filter((h) => !seen.has(h.content)).slice(0, LIMIT);
+        ready = (parsed.hits || []).filter((h) => !excludeSet.has(h.content)).slice(0, LIMIT);
         meta = parsed;
       } catch {}
       try { unlinkSync(inbox); } catch {}
@@ -243,7 +264,7 @@ async function main(): Promise<void> {
         `async · saved ~${offPath}ms off-path (this fire ${fastMs}ms) · ` +
         `query ${clk(meta.requestedAt)} → served ${clk(meta.servedAt)} (${span})`;
       logCalibration(ready, { mode: "async", offPathMs: offPath, queryToServeMs: span, fastMs });
-      persistSeen(ready);
+      persistInjected(ready);
       emitHits(ready, tag);
     }
     // Nothing to inject this fire, but we enqueued the current context for the
@@ -267,14 +288,14 @@ async function main(): Promise<void> {
   let hits: SearchResult[] = [];
   const tPipe = Date.now();
   try {
-    hits = await pipelineSearch(search, { limit: LIMIT, floor: FLOOR, rerankQuery, exclude: loadSeen() });
+    hits = await pipelineSearch(search, { limit: LIMIT, floor: FLOOR, rerankQuery, exclude: excludeSet });
   } catch {
     emitSilent(); // servers down / error — never block the tool
   }
   const pipeMs = Date.now() - tPipe;
   logCalibration(hits, { mode: "sync", pipeMs });
   if (hits.length === 0) emitSilent(); // nothing fresh + relevant
-  persistSeen(hits);
+  persistInjected(hits);
   emitHits(hits, `${Date.now() - t0}ms (pipeline ${pipeMs}ms)`);
 }
 
