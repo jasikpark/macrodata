@@ -77,13 +77,19 @@ async function runPipeline(req: Request): Promise<void> {
     // Stamp timing so the hook can render the span: requestedAt (when the hook
     // enqueued) → servedAt (now); pipelineMs is the off-path cost the tool call
     // never paid.
-    atomicWrite(inboxPath(req.sid), JSON.stringify({
-      requestedAt: req.ts ?? null,
-      servedAt: new Date().toISOString(),
-      pipelineMs: ms,
-      hits,
-    }));
-    console.log(`[worker] ${req.sid}: ${hits.length} hit(s) -> inbox (${ms}ms)`);
+    try {
+      atomicWrite(inboxPath(req.sid), JSON.stringify({
+        requestedAt: req.ts ?? null,
+        servedAt: new Date().toISOString(),
+        pipelineMs: ms,
+        hits,
+      }));
+      console.log(`[worker] ${req.sid}: ${hits.length} hit(s) -> inbox (${ms}ms)`);
+    } catch (e) {
+      // Dropped result → under-recall (safe), but make it visible: an unwrapped throw
+      // here (e.g. ENOSPC) would otherwise vanish as an unhandled rejection on void drain().
+      console.warn(`[worker] ${req.sid}: inbox write failed, result dropped: ${String(e)}`);
+    }
   } else {
     console.log(`[worker] ${req.sid}: 0 hits (${ms}ms)`);
   }
@@ -107,7 +113,8 @@ function ingest(sid: string): void {
   const p = reqPath(sid);
   if (!existsSync(p)) return;
   let req: Request;
-  try { req = { ...JSON.parse(readFileSync(p, "utf-8")), sid }; } catch { return; }
+  try { req = { ...JSON.parse(readFileSync(p, "utf-8")), sid }; }
+  catch (e) { console.warn(`[worker] ${sid}: skipping malformed request file: ${String(e)}`); return; }
   try { unlinkSync(p); } catch {} // consume; latest-wins handled by the map
   if (!req.search || req.search.length < 8) return;
   pending.set(sid, req);
