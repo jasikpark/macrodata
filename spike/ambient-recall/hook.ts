@@ -144,7 +144,7 @@ async function main(): Promise<void> {
     ...loadInjected().filter((e) => e.ts && (!windowStartTs || e.ts >= windowStartTs)).map((e) => e.c),
     ...authoredKeys,
   ]);
-  if (excludeFile) atomicWrite(excludeFile, JSON.stringify([...excludeSet]));
+  try { if (excludeFile) atomicWrite(excludeFile, JSON.stringify([...excludeSet])); } catch {} // stay silent on ENOSPC/EACCES (matches every other write here)
 
   // Calibration log. `extra` carries mode + timing (sync: pipeMs; async:
   // offPathMs/queryToServeMs/fastMs) so the jsonl records both paths uniformly.
