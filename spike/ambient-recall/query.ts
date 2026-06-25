@@ -136,7 +136,7 @@ export function inContextWindow(transcriptPath: string): { windowStartTs: string
   let raw: string;
   try { raw = readFileSync(transcriptPath, "utf-8"); } catch { return { windowStartTs: "", authoredKeys: new Set() }; }
   const entries: Array<{ idx: number; o: any }> = [];
-  let firstTs = "", windowStartTs = "", boundaryIdx = -1;
+  let firstTs = "", boundaryIdx = -1, boundaryTs = "";
   const lines = raw.split("\n");
   for (let i = 0; i < lines.length; i++) {
     if (!lines[i].trim()) continue;
@@ -148,12 +148,20 @@ export function inContextWindow(transcriptPath: string): { windowStartTs: string
     // user entry with isCompactSummary:true. Keying on these object fields avoids the
     // over-cull trap where prose merely CONTAINING the string "isCompactSummary"
     // false-matches (confirmed 2026-06-24: a naive grep hit such a prose line).
-    if (o.subtype === "compact_boundary" || o.isCompactSummary === true || o.compactMetadata) {
+    // Guard each marker by its expected entry TYPE so a stray top-level field on the
+    // wrong entry kind can't advance the boundary (→ silent over-cull of everything after).
+    const isSummary = o.isCompactSummary === true && o.type === "user";
+    const isBoundarySys = (o.subtype === "compact_boundary" || o.compactMetadata) && o.type === "system";
+    if (isSummary || isBoundarySys) {
       boundaryIdx = i;
-      if (o.timestamp) windowStartTs = o.timestamp;
+      // Authoritative boundary ts = the isCompactSummary USER entry (defines what's in
+      // context); fall back to the compact_boundary system entry's ts only if the summary
+      // lacks one. Last-wins across multiple compactions.
+      if (isSummary) boundaryTs = o.timestamp || boundaryTs;
+      else if (o.timestamp) boundaryTs = o.timestamp;
     }
   }
-  if (!windowStartTs) windowStartTs = firstTs; // no compaction yet → whole session is the window
+  const windowStartTs = boundaryTs || firstTs; // no compaction → whole session is the window
   const authoredKeys = new Set<string>();
   for (const { idx, o } of entries) {
     if (idx <= boundaryIdx) continue; // pre-compaction: summarized away, not in context

@@ -118,21 +118,29 @@ async function main(): Promise<void> {
         .map((e) => (typeof e === "string" ? { c: e, ts: "" } : (e as Inj))); // legacy string[] → ts-less
     } catch { return []; }
   };
+  // Resolve the compaction window BEFORE persistInjected — that closure reads
+  // windowStartTs, so it must be in scope first (no temporal-dead-zone trap).
+  const { windowStartTs, authoredKeys } = env.transcript_path
+    ? inContextWindow(env.transcript_path)
+    : { windowStartTs: "", authoredKeys: new Set<string>() };
   const persistInjected = (chunks: SearchResult[]): void => {
     if (!injectedFile) return;
     try {
       const now = new Date().toISOString();
-      const all = loadInjected();
-      for (const h of chunks) all.push({ c: h.content, ts: now });
-      writeFileSync(injectedFile, JSON.stringify(all));
+      // Prune pre-window + ts-less entries (ineligible) — PRIMARY growth bound. Lexical
+      // ISO compare: both ts are canonical `…Z`+ms (toISOString), so lexical==chronological;
+      // a format mismatch fails toward DROPPING (under-cull), never echo. cap(1000) is a
+      // pathological backstop for a never-compacting mega-session — overshoot = harmless
+      // echo (under-cull-safe). atomicWrite so concurrent fires can't tear the file.
+      const kept = loadInjected().filter((e) => e.ts && (!windowStartTs || e.ts >= windowStartTs));
+      for (const h of chunks) kept.push({ c: h.content, ts: now });
+      atomicWrite(injectedFile, JSON.stringify(kept.slice(-1000)));
     } catch {}
   };
-  const { windowStartTs, authoredKeys } = env.transcript_path
-    ? inContextWindow(env.transcript_path)
-    : { windowStartTs: "", authoredKeys: new Set<string>() };
   const excludeSet = new Set<string>([
     // delta in-window: a ts-less (legacy) or pre-window injection is treated as NOT in
-    // context (re-eligible) — conservative, under-cull.
+    // context (re-eligible) — conservative, under-cull. Lexical ISO compare (canonical
+    // `…Z`+ms invariant; mismatch fails toward dropping = under-cull-safe).
     ...loadInjected().filter((e) => e.ts && (!windowStartTs || e.ts >= windowStartTs)).map((e) => e.c),
     ...authoredKeys,
   ]);
@@ -178,7 +186,7 @@ async function main(): Promise<void> {
       const d = (Date.now() - Date.parse(ts)) / 86_400_000;
       return Number.isNaN(d) ? "evergreen" : d < 1 ? "<1d" : `${Math.round(d)}d`;
     };
-    const halfLife = process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 30;
+    const halfLife = Number(process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 30);
     const fmtWhere = (h: SearchResult) => (h.section ? `${h.source} › ${h.section}` : h.source);
     // CLEAN block → model (additionalContext): final score + age only, no diagnostics.
     const block =

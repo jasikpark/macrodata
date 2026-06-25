@@ -72,6 +72,9 @@ export function loadAccessOverlay(): Map<string, AccessStat> {
       if (!e.key || !e.ts) continue;
       const s = m.get(e.key) ?? { firstSeen: e.ts, count: 0 };
       s.count++;
+      // Lexical ISO compare below: all event ts come from ONE writer (recordAccess →
+      // toISOString, canonical `…Z`+ms) so lexical == chronological. A backward clock
+      // step could mis-set firstSeen/lastAccessed → under-recall (safe direction).
       if (e.ts < s.firstSeen) s.firstSeen = e.ts;
       if (e.kind && REFRESH_KINDS.has(e.kind) && (!s.lastAccessed || e.ts > s.lastAccessed)) s.lastAccessed = e.ts;
       m.set(e.key, s);
