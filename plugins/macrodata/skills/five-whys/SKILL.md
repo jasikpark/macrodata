@@ -1,6 +1,6 @@
 ---
 name: five-whys
-description: Structured root cause analysis for arriving at a concrete action. Use when something went wrong, a pattern keeps recurring, behavior has drifted, or you catch yourself resolving to "do better" / "remember to X" without a concrete artifact. Five-whys forces behavioral resolutions into file edits, config changes, memory block updates, or scheduled jobs — the action item must produce a diff someone else can verify. Do not use for simple debugging with an obvious cause.
+description: Structured root cause analysis for arriving at a concrete action. Use when something went wrong, a pattern keeps recurring, behavior has drifted, or you catch yourself resolving to "do better" / "remember to X" without a concrete artifact. Five-whys forces behavioral resolutions into file edits, memory writes, or scheduled jobs — the action item must produce a diff someone else can verify. Do not use for simple debugging with an obvious cause.
 ---
 
 # Five Whys
@@ -47,13 +47,15 @@ an answer is incomplete. An answer without a clear question is unanchored.
 
 ```
 PROBLEM: 11 consecutive classifier errors, 57 min wasted
-  WHY: The proposer suggested CatBoost, which isn't in the allowed algorithm list
+  WHY: The proposer suggested an algorithm that isn't in the allowed list
   ANSWER: The proposer has no documentation of which algorithms are available
 ```
 
 **Rules for good answers:**
 - An answer must be **factual and verifiable**. Check logs, read code, look at data.
-  Don't speculate — investigate.
+  Don't speculate — investigate. (`search_memory` and `search_conversations` are
+  often where the evidence lives — a past session may have recorded why something
+  happened.)
 - If you can't verify an answer, say so. "I believe X but haven't confirmed" is
   honest. "X" stated as fact when you haven't checked is not.
 - An answer should be a **mechanism**, not a redescription. "It failed because it
@@ -97,7 +99,7 @@ PROBLEM: Agent was unresponsive for 62 minutes
 │           → BEDROCK: Missing trust documentation (structural — fixable)
 │
 └─ WHY-3: The LLM endpoint was unstable all day
-   └─ WHY: Another team member deleted the deployment
+   └─ WHY: Another team member changed the deployment
       → BEDROCK: Shared resource, no access control (external boundary)
 ```
 
@@ -114,49 +116,46 @@ Every bedrock node should produce an action item. Here's what separates useful
 actions from theater:
 
 **An action item must produce a concrete artifact.** It must result in a file edit,
-a config change, a memory block update, a code change, or a message sent. If you
-can't point to the diff afterward, it wasn't real.
+a memory write, a scheduled job, a code change, or a message sent. If you can't
+point to the diff afterward, it wasn't real.
 
 | Not actionable | Actionable |
 |---|---|
-| "Be more careful about X" | Edit program.md to add an explicit constraint about X |
-| "Remember to check Y" | Add Y to the pre-flight checklist in SKILL.md |
-| "Create a habit of Z" | Write a scheduled job that does Z automatically |
-| "Pay more attention to errors" | Add error-counting logic that alerts at a threshold |
-| "Improve communication" | Edit the communication block with a specific new rule |
+| "Be more careful about X" | Add an explicit rule about X to `state/identity.md` |
+| "Remember to check Y" | `schedule` a recurring job that surfaces Y, or add Y to a `state/*.md` file |
+| "Create a habit of Z" | `schedule` a job that does Z automatically |
+| "Pay more attention to errors" | Add a hook/check that counts errors and alerts at a threshold |
+| "Improve how I handle W" | Edit the relevant entity/state file with a specific new rule |
 
 The test: **Could someone else verify this was done?** If the action is internal
 ("be more careful"), no one can verify it and it will silently decay. If the action
 is an edit to a file, anyone can check the diff.
 
-Behavioral resolutions don't survive context windows. File edits do.
+Behavioral resolutions don't survive context windows. File edits do. (This is the
+same principle as macrodata's "noted must be written": a verbal "I'll remember to X"
+feels like remembering but evaporates at session end — the edit is the memory.)
 
-### Action Item Inspiration: Strengthening S4
+### Action Surfaces: Turn Bedrock Into a Macrodata Artifact
 
-A surprising number of bedrock causes turn out to be **S4 weaknesses** (in VSM terms —
-see `mountaineering/philosophy.md` for the full framing). The agent didn't notice X
-happened. Couldn't reach the operator when stuck. Didn't react in time. Lost context
-across a long wait. Had no API for the data it needed. These are all symptoms of a weak
-intelligence/adaptation function — the agent isn't perceiving or interacting with its
-environment well enough.
+A surprising number of bedrock causes share a shape: *the agent didn't notice
+something, didn't persist something, lost context across a gap, or had no record of a
+fact it needed.* Those all have structural fixes, and macrodata gives you the surfaces
+to make them concrete. When an action item is about to drift toward "I should pay more
+attention to X," map it to one of these instead:
 
-When a bedrock node has that shape, don't write a behavioral action item — open the
-`patterns` skill. It's a brainstorm bank organized roughly by the kind of S4 gap:
-
-| Bedrock shape | Where to look |
+| Bedrock shape | Macrodata artifact |
 |---|---|
-| "Agent didn't know X happened" / info was stale | `patterns/world-scanning.md` — turn it into a poller |
-| "Agent didn't notice X *didn't* happen" | `patterns/world-scanning.md` "Inversions" — dead-man switch |
-| "Agent reacted to a system event late" | `patterns/os-events-{macos,windows,linux}.md` — bind to the OS-native hook |
-| "Agent had no way to reach the operator / another agent" | `patterns/messaging.md` — pick a channel |
-| "Agent burned tokens waiting / lost context across a wait" | `patterns/async-tasks.md` — async-block on the wake-up signal |
-| "No API exists for the data we needed" | `patterns/browser-automation.md` — Playwright + persistent profile |
+| "I keep forgetting to do X" (behavioral) | An imperative rule in `state/identity.md` (always loaded) |
+| "Context didn't carry across sessions" | Edit `state/today.md` / `state/workspace.md` (surfaced every SessionStart), or write an entity |
+| "I didn't notice X happened / it drifted" | `schedule` a recurring (cron) check that surfaces it |
+| "I needed to follow up at time T" | `schedule` a one-shot reminder for T |
+| "A finding got lost / no record existed" | `log_journal` it, or create a dedicated entity file |
+| "I should react when event E fires" | Add or adjust a hook (SessionStart / UserPromptSubmit / PreCompact) |
 
-These all map cleanly to *concrete artifacts* — a `pollers.json` entry, a launchd plist,
-an `osascript` one-liner, an `async_mode=True` shell call, a Playwright skill — which is
-exactly the bar this step sets. Reach for `patterns` whenever an action item is about to
-drift toward "the agent should pay more attention to X." That phrase is almost always an
-S4 gap with a structural fix.
+Each of these is a verifiable diff — a new rule in a state file, a new schedule, a
+journal entry, a hook edit — which is exactly the bar this step sets. Reach for them
+whenever a fix is about to become a resolution to try harder. That phrasing is almost
+always a structural gap with a concrete artifact waiting to be written.
 
 ### Step 6: Verify the Chain
 
@@ -220,26 +219,25 @@ Signs you should keep going:
 - The action items are behavioral resolutions, not file edits
 - There's a "because we always do it that way" that hasn't been questioned
 
-## Storage: Chainlink or Markdown
+## Storage
 
-If `chainlink` is available (check with `which chainlink`), use it. Chainlink gives
-you persistent issue tracking with parent-child relationships, labels, search,
-falsification cascades, and cross-analysis querying. See `CHAINLINK_SETUP.md` for
-installation and `CHAINLINK_USAGE.md` for the workflow.
+A Five Whys analysis is worth keeping — the tree explains *why* you made the changes
+the action items produced, and recurring problems benefit from cross-referencing past
+analyses. Store it in macrodata:
 
-**Important:** Use a dedicated chainlink database for 5 Whys — separate from task
-tracking or backlog management. RCA chains and task backlogs serve different purposes
-and create noise when mixed. See CHAINLINK_SETUP.md for how to set this up.
+- **Quick analysis** → `log_journal(topic="five-whys", content=...)` with the tree
+  and action items. Searchable later via `search_memory`.
+- **Substantial or recurring problem** → a dedicated entity file,
+  `entities/rca/<slug>.md`, with a `description:` frontmatter line. This gives the
+  analysis a stable home you can revisit and update if the problem resurfaces.
+- **The action items themselves aren't "stored" — they're *done*.** Each one is a
+  diff (a `state/identity.md` rule, a new `schedule`, an entity edit, a hook change).
+  Make the edit in the same session; the diff is the proof the action was real, and
+  the journal/entity record points at what changed.
 
-A common sibling use of chainlink (in its own database) is the **interest backlog** —
-see `patterns/interest-backlog.md`. The two share substrate but answer different
-questions: 5-whys answers *why this kept happening*; interest backlog answers *what
-have I noticed but not yet acted on*. Items in the interest backlog often get
-escalated to a five-whys analysis once they recur.
-
-If chainlink isn't available, write the tree as structured markdown (see Output
-Format below). The methodology is the same either way — chainlink just gives you
-persistence and search.
+Before analyzing a recurring problem, `search_memory` for prior five-whys on the same
+theme — you may be re-deriving a bedrock cause you already found, which is itself a
+signal that the earlier action item didn't hold.
 
 ## Output Format
 
@@ -266,8 +264,8 @@ caught? Why was it possible to have a bad config? Keep going.
 cause failures — they reveal them. What was happening that took too long?
 
 **Speculation without investigation.** "I think it's probably X." Did you check?
-Read the logs, read the code, read the data. "I think" is the start of a
-hypothesis, not the end of an investigation.
+Read the logs, read the code, read the data, search memory. "I think" is the start
+of a hypothesis, not the end of an investigation.
 
 **Non-actionable action items.** If your action item is a resolution to try harder,
 it will not work. See Step 5.
@@ -278,3 +276,10 @@ structure. Real problems have multiple contributing causes. Let the tree branch.
 **Defending instead of investigating.** When the analysis is about your own
 behavior, the temptation is to explain why the failure was reasonable. Resist.
 Reasonable failures are still failures with structural causes worth finding.
+
+---
+
+_Adapted from the five-whys skill in [open-strix](https://github.com/tkellogg/open-strix)
+by Tim Kellogg (MIT). The methodology is unchanged; storage and action surfaces were
+rewritten for macrodata's own tools (journal / entities / state files / scheduled jobs
+/ hooks)._
