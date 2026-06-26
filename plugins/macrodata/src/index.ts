@@ -378,7 +378,7 @@ server.tool(
     // No quotes/spaces/angle brackets — keeps it safe inside the reminder's
     // model="..." attribute; the daemon maps it to a known Agent-tool alias.
     model: z.string().regex(/^[A-Za-z0-9/_.-]{1,64}$/, "model must be 1-64 chars of [A-Za-z0-9/_.-]").optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-6' for deep thinking tasks). Omitting it — or passing an unrecognized value — defaults to haiku."),
-    delivery: z.enum(["session", "headless"]).optional().describe("How the fired job runs. 'session' (default): queue a reminder drained into your next active session as a background subagent. 'headless': spawn a detached `claude --print` on the tick — runs unattended on schedule, but no-ops if the machine is asleep, and executes autonomously without surfacing in your session (reserve for trusted background jobs)."),
+    delivery: z.enum(["session", "headless"]).optional().describe("How the fired job runs; pick by intent — both modes are first-class. 'session' (default): queue a reminder drained into your next active session as a background subagent — use when a human should see or act on the result. 'headless': spawn a detached `claude --print` on the tick that runs on schedule with no session open — use when the job should just run on its own. Headless runs unsupervised (and no-ops while the machine is asleep — e.g. a laptop on battery), so give it a payload you trust to run without review — that's a constraint to design around, not a reason to avoid it."),
   },
   async ({ type, id, expression, description, payload, model, delivery }) => {
     // Reject sub-2-minute cron cadences: macrodata has no use for them, and a
