@@ -118,16 +118,16 @@ Every bedrock node should produce an action item. Here's what separates useful
 actions from theater:
 
 **An action item must produce a concrete artifact.** It must result in a file edit,
-a config change, a memory block update, a code change, or a message sent. If you
+a config change, a memory write, a code change, or a message sent. If you
 can't point to the diff afterward, it wasn't real.
 
 | Not actionable | Actionable |
 |---|---|
-| "Be more careful about X" | Edit program.md to add an explicit constraint about X |
+| "Be more careful about X" | Add an explicit rule about X to `state/identity.md` |
 | "Remember to check Y" | Add Y to the pre-flight checklist in SKILL.md |
 | "Create a habit of Z" | Write a scheduled job that does Z automatically |
 | "Pay more attention to errors" | Add error-counting logic that alerts at a threshold |
-| "Improve communication" | Edit the communication block with a specific new rule |
+| "Improve communication" | Edit the communication section of `state/identity.md` with a specific new rule |
 
 The test: **Could someone else verify this was done?** If the action is internal
 ("be more careful"), no one can verify it and it will silently decay. If the action
