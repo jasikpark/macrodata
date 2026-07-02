@@ -53,7 +53,11 @@ PROBLEM: 11 consecutive classifier errors, 57 min wasted
 
 **Rules for good answers:**
 - An answer must be **factual and verifiable**. Check logs, read code, look at data.
-  Don't speculate — investigate.
+  Don't speculate — investigate. (`search_conversations` retrieves transcripts of
+  past sessions — a hard record of what actually happened. `search_memory` retrieves
+  what you *wrote down* about it — a fast lead, but a memory is a past interpretation,
+  not evidence: verify it against the transcript, logs, or code before it anchors
+  a WHY.)
 - If you can't verify an answer, say so. "I believe X but haven't confirmed" is
   honest. "X" stated as fact when you haven't checked is not.
 - An answer should be a **mechanism**, not a redescription. "It failed because it
@@ -266,8 +270,8 @@ caught? Why was it possible to have a bad config? Keep going.
 cause failures — they reveal them. What was happening that took too long?
 
 **Speculation without investigation.** "I think it's probably X." Did you check?
-Read the logs, read the code, read the data. "I think" is the start of a
-hypothesis, not the end of an investigation.
+Read the logs, read the code, read the data, search past sessions. "I think" is
+the start of a hypothesis, not the end of an investigation.
 
 **Non-actionable action items.** If your action item is a resolution to try harder,
 it will not work. See Step 5.
