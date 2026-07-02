@@ -135,32 +135,31 @@ is an edit to a file, anyone can check the diff.
 
 Behavioral resolutions don't survive context windows. File edits do.
 
-### Action Item Inspiration: Strengthening S4
+### Action Surfaces: Turn Bedrock Into a Concrete Artifact
 
-A surprising number of bedrock causes turn out to be **S4 weaknesses** (in VSM terms —
-see `mountaineering/philosophy.md` for the full framing). The agent didn't notice X
-happened. Couldn't reach the operator when stuck. Didn't react in time. Lost context
-across a long wait. Had no API for the data it needed. These are all symptoms of a weak
-intelligence/adaptation function — the agent isn't perceiving or interacting with its
-environment well enough.
+A surprising number of bedrock causes are perception and memory gaps: the agent
+didn't notice something happened, didn't notice something *didn't* happen, lost
+context across a gap, had no record of a fact it needed, or had no way to sense
+the data at all. These all have structural fixes — a new sense organ or a new
+memory surface, never a resolution to try harder. Macrodata, and the Claude Code
+harness it lives in, give you the surfaces:
 
-When a bedrock node has that shape, don't write a behavioral action item — open the
-`patterns` skill. It's a brainstorm bank organized roughly by the kind of S4 gap:
-
-| Bedrock shape | Where to look |
+| Bedrock shape | Concrete artifact |
 |---|---|
-| "Agent didn't know X happened" / info was stale | `patterns/world-scanning.md` — turn it into a poller |
-| "Agent didn't notice X *didn't* happen" | `patterns/world-scanning.md` "Inversions" — dead-man switch |
-| "Agent reacted to a system event late" | `patterns/os-events-{macos,windows,linux}.md` — bind to the OS-native hook |
-| "Agent had no way to reach the operator / another agent" | `patterns/messaging.md` — pick a channel |
-| "Agent burned tokens waiting / lost context across a wait" | `patterns/async-tasks.md` — async-block on the wake-up signal |
-| "No API exists for the data we needed" | `patterns/browser-automation.md` — Playwright + persistent profile |
+| "I didn't notice X happened / info went stale" | `schedule` a recurring check that surfaces it |
+| "I didn't notice X *didn't* happen" | Invert it: a scheduled check that alerts when the expected thing is *absent* (dead-man switch) |
+| "I should react when event E fires" | Bind a hook to the harness event (SessionStart / UserPromptSubmit / PostToolUse / PreCompact) |
+| "I needed to follow up at time T" | `schedule` a one-shot reminder for T |
+| "The operator needed to know, and didn't" | Push a notification, or queue a session-delivered schedule payload |
+| "No tool existed for the data I needed" | Wire a new sensor: an MCP server, or a WebFetch / browser check inside a scheduled job |
+| "I keep forgetting to do X" (behavioral) | An imperative rule in `state/identity.md` (always loaded) |
+| "Context didn't carry across sessions" | Edit `state/today.md` / `state/workspace.md` (surfaced every SessionStart), or write an entity |
+| "A finding got lost / no record existed" | `log_journal` it, or create a dedicated entity file |
 
-These all map cleanly to *concrete artifacts* — a `pollers.json` entry, a launchd plist,
-an `osascript` one-liner, an `async_mode=True` shell call, a Playwright skill — which is
-exactly the bar this step sets. Reach for `patterns` whenever an action item is about to
-drift toward "the agent should pay more attention to X." That phrase is almost always an
-S4 gap with a structural fix.
+Each of these is a verifiable diff — a new rule in a state file, a new schedule, a
+journal entry, a hook edit — which is exactly the bar this step sets. Reach for them
+whenever a fix is about to become a resolution to try harder. That phrasing is almost
+always a structural gap with a concrete artifact waiting to be written.
 
 ### Step 6: Verify the Chain
 
