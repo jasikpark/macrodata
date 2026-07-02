@@ -284,3 +284,10 @@ structure. Real problems have multiple contributing causes. Let the tree branch.
 **Defending instead of investigating.** When the analysis is about your own
 behavior, the temptation is to explain why the failure was reasonable. Resist.
 Reasonable failures are still failures with structural causes worth finding.
+
+---
+
+_Adapted from the five-whys skill in [open-strix](https://github.com/tkellogg/open-strix)
+by Tim Kellogg (MIT). The methodology is unchanged; storage and action surfaces were
+rewritten for macrodata's own tools (journal / entities / state files / scheduled jobs
+/ hooks)._
