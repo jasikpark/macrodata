@@ -223,26 +223,29 @@ Signs you should keep going:
 - The action items are behavioral resolutions, not file edits
 - There's a "because we always do it that way" that hasn't been questioned
 
-## Storage: Chainlink or Markdown
+## Storage
 
-If `chainlink` is available (check with `which chainlink`), use it. Chainlink gives
-you persistent issue tracking with parent-child relationships, labels, search,
-falsification cascades, and cross-analysis querying. See `CHAINLINK_SETUP.md` for
-installation and `CHAINLINK_USAGE.md` for the workflow.
+A Five Whys analysis is worth keeping — the tree explains *why* you made the changes
+the action items produced, and recurring problems benefit from cross-referencing past
+analyses. Store it in macrodata:
 
-**Important:** Use a dedicated chainlink database for 5 Whys — separate from task
-tracking or backlog management. RCA chains and task backlogs serve different purposes
-and create noise when mixed. See CHAINLINK_SETUP.md for how to set this up.
+- **Quick analysis** → `log_journal(topic="five-whys", content=...)` with the tree
+  and action items. Searchable later via `search_memory`.
+- **Substantial or recurring problem** → a dedicated entity file,
+  `entities/rca/<slug>.md`, with a `description:` frontmatter line. This gives the
+  analysis a stable home you can revisit and update if the problem resurfaces.
+- **The action items themselves aren't "stored" — they're *done*.** Each one is a
+  diff (a `state/identity.md` rule, a new `schedule`, an entity edit, a hook change).
+  Make the edit in the same session; the diff is the proof the action was real, and
+  the journal/entity record points at what changed.
 
-A common sibling use of chainlink (in its own database) is the **interest backlog** —
-see `patterns/interest-backlog.md`. The two share substrate but answer different
-questions: 5-whys answers *why this kept happening*; interest backlog answers *what
-have I noticed but not yet acted on*. Items in the interest backlog often get
-escalated to a five-whys analysis once they recur.
+Before analyzing a recurring problem, `search_memory` for prior five-whys on the same
+theme — you may be re-deriving a bedrock cause you already found, which is itself a
+signal that the earlier action item didn't hold.
 
-If chainlink isn't available, write the tree as structured markdown (see Output
-Format below). The methodology is the same either way — chainlink just gives you
-persistence and search.
+The reverse flow matters too: an observation you keep journaling without acting on is
+a candidate for escalation — when the same annoyance surfaces a third time, that's a
+five-whys trigger, not another journal entry.
 
 ## Output Format
 
