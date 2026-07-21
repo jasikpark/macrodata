@@ -11,7 +11,8 @@
  * Why this shape (profiled 2026-06-17): rerank dominates at ~127ms/doc × ~40
  * candidates ≈ 5s; vector+fts+corpus ≈ 320ms. Moving the rerank off the tool
  * round-trip is the whole win. A long-lived worker also amortizes the
- * per-process FTS corpus build (~160ms) and keeps the llama-servers warm.
+ * per-process FTS corpus build (~160ms) and owns the in-process models
+ * (models.ts singletons) — the ONLY process that loads them; the hook never does.
  *
  * Protocol (all files live in this dir, keyed by session_id):
  *   hook  writes  .recall-request-<sid>.json  {sid, search, rerankQuery, ts}
@@ -121,6 +122,9 @@ function ingest(sid: string): void {
   void drain();
 }
 
+// Models load LAZILY on the first request (Caleb, 2026-07-21): no memory held
+// until recall actually fires; the mailbox protocol already tolerates a late
+// first hit. Do not add eager preload here.
 // Initial sweep (pick up requests written before the worker started), then watch.
 for (const f of readdirSync(DIR)) {
   const m = f.match(REQ_RE);
@@ -131,4 +135,4 @@ watch(DIR, (_event, filename) => {
   const m = String(filename).match(REQ_RE);
   if (m) ingest(m[1]);
 });
-console.log(`[worker] watching ${DIR} for .recall-request-*.json (embed :8091, rerank :8090, floor ${FLOOR}, limit ${LIMIT})`);
+console.log(`[worker] watching ${DIR} for .recall-request-*.json (in-process models, floor ${FLOOR}, limit ${LIMIT})`);
