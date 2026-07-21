@@ -12,7 +12,7 @@ import { LocalIndex } from "vectra";
 import { statSync } from "fs";
 import { join } from "path";
 import { getIndexDir, getEntitiesDir } from "./config.ts";
-import { searchMemory, type SearchResult } from "./indexer.ts";
+import { searchMemory, resetIndexCache, type SearchResult } from "./indexer.ts";
 import { loadAccessOverlay, memKey } from "./access.ts";
 import { rankContext } from "./models.ts";
 
@@ -38,6 +38,24 @@ interface Doc {
 let corpus: Doc[] | null = null;
 let idf: Map<string, number> | null = null;
 
+// Staleness gate for the long-lived worker: the FTS corpus is built FROM the
+// Vectra index, so one index.json mtime covers both caches. On change, drop
+// corpus/idf AND the indexer's cached LocalIndex so a reindex is picked up
+// without a worker restart.
+let corpusStamp = -1;
+function checkIndexFresh(): void {
+  let stamp = 0;
+  try {
+    stamp = statSync(join(getIndexDir(), "vectors", "index.json")).mtimeMs;
+  } catch {}
+  if (stamp !== corpusStamp) {
+    corpus = null;
+    idf = null;
+    resetIndexCache();
+    corpusStamp = stamp;
+  }
+}
+
 async function buildCorpus(): Promise<void> {
   const idx = new LocalIndex(join(getIndexDir(), "vectors"));
   const items = await idx.listItems();
@@ -56,6 +74,7 @@ async function buildCorpus(): Promise<void> {
 }
 
 export async function ftsSearch(query: string, k = 20): Promise<SearchResult[]> {
+  checkIndexFresh();
   if (!corpus || !idf) await buildCorpus();
   const qts = terms(query);
   return corpus!
@@ -94,6 +113,9 @@ export async function pipelineSearch(
   opts: { limit?: number; task?: string; floor?: number; rerankQuery?: string; exclude?: Set<string> } = {},
 ): Promise<SearchResult[]> {
   const { limit = 5, task, floor = 0.5, rerankQuery, exclude } = opts;
+  // Freshness check BEFORE the vector leg — searchMemory uses the cached
+  // LocalIndex, so the reset must happen ahead of it, not just in ftsSearch.
+  checkIndexFresh();
   // Recall legs use the WIDE query; the rerank precision pass uses the TIGHT
   // query (the agent's current trajectory) when provided, else the same query.
   const vec = await searchMemory(query, { limit: 20, task });

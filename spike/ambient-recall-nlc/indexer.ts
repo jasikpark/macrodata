@@ -38,6 +38,14 @@ export interface SearchResult {
 
 let index: LocalIndex | null = null;
 
+// Drop the cached LocalIndex (it holds index.json in memory) so the next call
+// re-reads from disk. Called by the staleness check in fts.ts when a reindex
+// bumps the on-disk index — without it the long-lived worker serves the old
+// snapshot forever.
+export function resetIndexCache(): void {
+  index = null;
+}
+
 async function getIndex(): Promise<LocalIndex> {
   const dir = getIndexDir();
   if (index) return index;
