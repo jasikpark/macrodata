@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
-# Ensure-up + reap supervisor for the ambient-recall spike (shape B).
+# Ensure-up + reap supervisor for the ambient-recall spike (-nlc variant).
 #
-# Run by the SessionStart hook. Converges each of the three to EXACTLY ONE
-# running instance, then exits:
-#   - embed  llama-server  :8091  (--alias macrodata-ambient-embed)
-#   - rerank llama-server  :8090  (--alias macrodata-ambient-rerank)
+# Run by the SessionStart hook. Converges to EXACTLY ONE running instance of
 #   - worker  bun run worker.ts   (drains .recall-request-*, writes .recall-inbox-*)
+# then exits. The llama-servers (:8091 embed, :8090 rerank) are GONE — the
+# worker owns the models in-process via node-llama-cpp (models.ts, lazy load).
 #
-# Ownership: our llama-servers carry a unique --alias, and we match ONLY on that
-# (never the model name) — so a llama-server you start by hand in a shell is
-# invisible here and can never be counted or reaped. The worker is matched by its
-# own script path (no one else runs it).
+# Ownership: the worker is matched on this dir's ABSOLUTE script path, so the
+# plain-spike variant's worker (or any other bun worker.ts) is invisible here
+# and can never be counted or reaped.
 #
 # Spawned directly via nohup (no shell wrapper) so one logical process = one PID,
-# which keeps the reap honest. Reap rule: if >1 of ours, keep the lowest PID (the
-# first to start = the one holding the port) and kill the rest. Detached procs
-# persist after this script + the session exit. Logs → .{supervisor,embed,rerank,
-# worker}.log (gitignored). Silent on stdout.
+# which keeps the reap honest. Reap rule: if >1 of ours, keep the lowest PID and
+# kill the rest. Detached procs persist after this script + the session exit.
+# Logs → .{supervisor,worker}.log (gitignored). Silent on stdout.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 log() { echo "[$(date '+%F %T')] $*" >> "$DIR/.supervisor.log"; }
@@ -40,13 +37,7 @@ ensure() { # name  pgrep-pattern  -- start-cmd...
   fi
 }
 
-ensure embed 'macrodata-ambient-embed' \
-  llama-server -hf Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0 --alias macrodata-ambient-embed --embedding --pooling last --port 8091 -c 4096 -b 8192 -ub 8192
-
-ensure rerank 'macrodata-ambient-rerank' \
-  llama-server -hf ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF --alias macrodata-ambient-rerank --reranking --pooling rank --port 8090 -c 4096 -b 8192 -ub 8192
-
-ensure worker 'bun run .*worker\.ts' \
-  bun run worker.ts
+ensure worker "bun run ${DIR}/worker\.ts" \
+  bun run "$DIR/worker.ts"
 
 log "pass complete"
