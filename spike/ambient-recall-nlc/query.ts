@@ -80,14 +80,47 @@ function clamp(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) : s;
 }
 
-function parseRecent(transcriptPath: string, maxMessages: number): Msg[] {
+interface TranscriptScan {
+  msgs: Msg[];
+  windowStartTs: string;
+  authoredKeys: Set<string>;
+}
+
+// ONE pass over the transcript serving BOTH consumers: the recent-message query
+// build AND the compaction-window exclude set. The hook fires on every tool call,
+// so this path must not read+parse the file twice (it used to) or retain every
+// parsed entry — retention is bounded to the coalesced message tail (maxMessages)
+// and the CURRENT window's authored keys (cleared at each compact boundary).
+function scanTranscript(transcriptPath: string, maxMessages: number): TranscriptScan {
   let raw: string;
-  try { raw = readFileSync(transcriptPath, "utf-8"); } catch { return []; }
-  const msgs: Msg[] = [];
+  try { raw = readFileSync(transcriptPath, "utf-8"); } catch {
+    return { msgs: [], windowStartTs: "", authoredKeys: new Set() };
+  }
+  const merged: Msg[] = [];
+  let firstTs = "", boundaryTs = "";
+  let authoredKeys = new Set<string>();
+
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     let e: any;
     try { e = JSON.parse(line); } catch { continue; }
+    if (!firstTs && e.timestamp) firstTs = e.timestamp;
+
+    // STRUCTURED-FIELD boundary check (NOT a substring scan): the boundary is a
+    // system entry carrying subtype:"compact_boundary" (+compactMetadata) followed
+    // by a user entry with isCompactSummary:true. Keying on object fields avoids
+    // the over-cull trap where prose merely CONTAINING the marker false-matches
+    // (confirmed 2026-06-24). Guard each marker by entry TYPE.
+    const isSummary = e.isCompactSummary === true && e.type === "user";
+    const isBoundarySys = (e.subtype === "compact_boundary" || e.compactMetadata) && e.type === "system";
+    if (isSummary || isBoundarySys) {
+      // Authoritative boundary ts = the isCompactSummary USER entry; fall back to
+      // the system entry's ts only if the summary lacks one. Last-wins.
+      if (isSummary) boundaryTs = e.timestamp || boundaryTs;
+      else if (e.timestamp) boundaryTs = e.timestamp;
+      authoredKeys = new Set(); // pre-boundary keys were summarized away — not in context
+    }
+
     if (e.type !== "user" && e.type !== "assistant") continue;
     const content = e.message?.content;
     if (content == null) continue;
@@ -99,27 +132,42 @@ function parseRecent(transcriptPath: string, maxMessages: number): Msg[] {
         if (!b || typeof b !== "object") continue;
         if (b.type === "thinking" && b.thinking) thinking += " " + b.thinking;
         else if (b.type === "text" && b.text) text += " " + b.text;
-        else if (b.type === "tool_use") tool += " " + toolIntent(b.input);
+        else if (b.type === "tool_use") {
+          tool += " " + toolIntent(b.input);
+          // Frozen-set capture: journal entries I authored in the current window,
+          // keyed `[topic] content` byte-identical to the indexed form.
+          if (e.type === "assistant" && /log_journal$/.test(String(b.name || "")) && b.input
+              && typeof b.input.topic === "string" && typeof b.input.content === "string") {
+            authoredKeys.add(`[${b.input.topic}] ${b.input.content}`);
+          }
+        }
         // tool_result intentionally skipped (raw output is noise)
       }
     }
-    if (thinking || text || tool) msgs.push({ role: e.message.role ?? e.type, thinking, text, tool });
-  }
-  // Claude Code emits a turn as separate thinking/text/tool_use events; coalesce
-  // consecutive same-role events into one logical message so "latest assistant
-  // message" is the whole final response, not just its last block.
-  const merged: Msg[] = [];
-  for (const m of msgs) {
-    const last = merged[merged.length - 1];
-    if (last && last.role === m.role) {
-      last.thinking += " " + m.thinking;
-      last.text += " " + m.text;
-      last.tool += " " + m.tool;
-    } else {
-      merged.push({ ...m });
+    if (thinking || text || tool) {
+      // Claude Code emits a turn as separate thinking/text/tool_use events; coalesce
+      // consecutive same-role events into one logical message so "latest assistant
+      // message" is the whole final response, not just its last block.
+      const role = e.message.role ?? e.type;
+      const last = merged[merged.length - 1];
+      if (last && last.role === role) {
+        last.thinking += " " + thinking;
+        last.text += " " + text;
+        last.tool += " " + tool;
+      } else {
+        merged.push({ role, thinking, text, tool });
+        // Bounded retention: coalescing only ever touches the LAST element, so the
+        // front can drop as we go (keep one spare so a same-role merge still lands).
+        if (merged.length > maxMessages + 1) merged.splice(0, merged.length - (maxMessages + 1));
+      }
     }
   }
-  return merged.slice(-maxMessages);
+  return {
+    // slice(-0) would return the WHOLE array — guard the 0 case explicitly.
+    msgs: maxMessages > 0 ? merged.slice(-maxMessages) : [],
+    windowStartTs: boundaryTs || firstTs, // no compaction → whole session is the window
+    authoredKeys,
+  };
 }
 
 // In-context exclusion derived from the live COMPACTION WINDOW (Porrima frozenIds∪deltaIds,
@@ -133,46 +181,7 @@ function parseRecent(transcriptPath: string, maxMessages: number): Msg[] {
 // exact-matches a recall candidate's content. EXACT only (no substring/cosine) — we suppress
 // ONLY what we provably produced; anything uncertain is injected (under-cull, never over-cull).
 export function inContextWindow(transcriptPath: string): { windowStartTs: string; authoredKeys: Set<string> } {
-  let raw: string;
-  try { raw = readFileSync(transcriptPath, "utf-8"); } catch { return { windowStartTs: "", authoredKeys: new Set() }; }
-  const entries: Array<{ idx: number; o: any }> = [];
-  let firstTs = "", boundaryIdx = -1, boundaryTs = "";
-  const lines = raw.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    let o: any; try { o = JSON.parse(lines[i]); } catch { continue; }
-    entries.push({ idx: i, o });
-    if (!firstTs && o.timestamp) firstTs = o.timestamp;
-    // STRUCTURED-FIELD check (NOT a substring scan): the boundary is a system entry
-    // carrying subtype:"compact_boundary" (+compactMetadata) immediately followed by a
-    // user entry with isCompactSummary:true. Keying on these object fields avoids the
-    // over-cull trap where prose merely CONTAINING the string "isCompactSummary"
-    // false-matches (confirmed 2026-06-24: a naive grep hit such a prose line).
-    // Guard each marker by its expected entry TYPE so a stray top-level field on the
-    // wrong entry kind can't advance the boundary (→ silent over-cull of everything after).
-    const isSummary = o.isCompactSummary === true && o.type === "user";
-    const isBoundarySys = (o.subtype === "compact_boundary" || o.compactMetadata) && o.type === "system";
-    if (isSummary || isBoundarySys) {
-      boundaryIdx = i;
-      // Authoritative boundary ts = the isCompactSummary USER entry (defines what's in
-      // context); fall back to the compact_boundary system entry's ts only if the summary
-      // lacks one. Last-wins across multiple compactions.
-      if (isSummary) boundaryTs = o.timestamp || boundaryTs;
-      else if (o.timestamp) boundaryTs = o.timestamp;
-    }
-  }
-  const windowStartTs = boundaryTs || firstTs; // no compaction → whole session is the window
-  const authoredKeys = new Set<string>();
-  for (const { idx, o } of entries) {
-    if (idx <= boundaryIdx) continue; // pre-compaction: summarized away, not in context
-    if (o.type !== "assistant" || !Array.isArray(o.message?.content)) continue;
-    for (const b of o.message.content) {
-      if (b?.type === "tool_use" && /log_journal$/.test(String(b.name || "")) && b.input
-          && typeof b.input.topic === "string" && typeof b.input.content === "string") {
-        authoredKeys.add(`[${b.input.topic}] ${b.input.content}`);
-      }
-    }
-  }
+  const { windowStartTs, authoredKeys } = scanTranscript(transcriptPath, 0);
   return { windowStartTs, authoredKeys };
 }
 
@@ -180,8 +189,30 @@ export function buildTranscriptQuery(
   transcriptPath: string,
   opts: { maxMessages?: number; searchChars?: number; rerankChars?: number } = {},
 ): { search: string; rerank: string; latest: { thinking: number; text: number } } {
-  const { maxMessages = 12, searchChars = 6000, rerankChars = 900 } = opts;
-  const recent = parseRecent(transcriptPath, maxMessages);
+  return queryFromMsgs(scanTranscript(transcriptPath, opts.maxMessages ?? 12).msgs, opts);
+}
+
+// One-read entry point for the hook: the transcript is parsed ONCE per fire,
+// serving both the query build and the compaction-window exclude set. Prefer
+// this over calling buildTranscriptQuery + inContextWindow separately (each of
+// those re-reads the file).
+export function analyzeTranscript(
+  transcriptPath: string,
+  opts: { maxMessages?: number; searchChars?: number; rerankChars?: number } = {},
+): {
+  query: { search: string; rerank: string; latest: { thinking: number; text: number } };
+  windowStartTs: string;
+  authoredKeys: Set<string>;
+} {
+  const scan = scanTranscript(transcriptPath, opts.maxMessages ?? 12);
+  return { query: queryFromMsgs(scan.msgs, opts), windowStartTs: scan.windowStartTs, authoredKeys: scan.authoredKeys };
+}
+
+function queryFromMsgs(
+  recent: Msg[],
+  opts: { maxMessages?: number; searchChars?: number; rerankChars?: number } = {},
+): { search: string; rerank: string; latest: { thinking: number; text: number } } {
+  const { searchChars = 6000, rerankChars = 900 } = opts;
   if (recent.length === 0) return { search: "", rerank: "", latest: { thinking: 0, text: 0 } };
 
   // WIDE search query — everything recent, scrubbed, tail-clamped.

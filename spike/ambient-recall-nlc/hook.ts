@@ -16,7 +16,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync, renameSync, un
 import { join } from "path";
 import { pipelineSearch } from "./fts.ts";
 import type { SearchResult } from "./indexer.ts";
-import { buildHookQuery, buildTranscriptQuery, scrubOperationalNoise, inContextWindow } from "./query.ts";
+import { buildHookQuery, analyzeTranscript, scrubOperationalNoise } from "./query.ts";
 import { memKey, recordAccess } from "./access.ts";
 
 const FLOOR = Number(process.env.MACRODATA_RECALL_FLOOR ?? 0.5);
@@ -55,6 +55,11 @@ async function main(): Promise<void> {
 
   const event = env.hook_event_name ?? "PostToolUse";
 
+  // ONE transcript read per fire — query build AND compaction window come out
+  // of the same parse (this used to be two full read+parse passes, a real tax
+  // on the blocking path late in a long session).
+  const ta = env.transcript_path ? analyzeTranscript(env.transcript_path) : null;
+
   // Real query = the surrounding conversation (wide search / tight rerank).
   let search: string, rerankQuery: string;
   if (event === "UserPromptSubmit") {
@@ -62,15 +67,13 @@ async function main(): Promise<void> {
     // spoke); blend recent transcript context into the wide search. The window
     // already includes the prior assistant turn, so no separate Stop pass.
     const prompt = scrubOperationalNoise(typeof env.prompt === "string" ? env.prompt : "");
-    const tq = env.transcript_path
-      ? buildTranscriptQuery(env.transcript_path)
-      : { search: "", rerank: "" };
+    const tq = ta?.query ?? { search: "", rerank: "" };
     search = `${prompt}\n${tq.search}`.slice(0, 6000);
     // Blend fresh prompt + recent trajectory — bare prompt is too thin a rerank
     // signal (the naive-prompt-as-query trap, this time at the rerank stage).
     rerankQuery = `${prompt} ${tq.rerank}`.slice(0, 900);
-  } else if (env.transcript_path) {
-    const q = buildTranscriptQuery(env.transcript_path);
+  } else if (ta) {
+    const q = ta.query;
     search = q.search;
     rerankQuery = q.rerank;
     // Stop is registered as a PRIME-ONLY pass (see the async branch below +
@@ -120,9 +123,8 @@ async function main(): Promise<void> {
   };
   // Resolve the compaction window BEFORE persistInjected — that closure reads
   // windowStartTs, so it must be in scope first (no temporal-dead-zone trap).
-  const { windowStartTs, authoredKeys } = env.transcript_path
-    ? inContextWindow(env.transcript_path)
-    : { windowStartTs: "", authoredKeys: new Set<string>() };
+  // Comes from the SAME transcript parse as the query build (analyzeTranscript).
+  const { windowStartTs, authoredKeys } = ta ?? { windowStartTs: "", authoredKeys: new Set<string>() };
   const persistInjected = (chunks: SearchResult[]): void => {
     if (!injectedFile) return;
     try {
