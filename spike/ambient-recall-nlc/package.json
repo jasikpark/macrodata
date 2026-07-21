@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.6.0",
-    "node-llama-cpp": "^3.18.1",
+    "node-llama-cpp": "^3.19.1",
     "vectra": "^0.9.0"
   },
   "devDependencies": {
