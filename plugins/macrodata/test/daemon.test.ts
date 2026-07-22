@@ -4,8 +4,9 @@
  * Tests the background daemon process that handles scheduling and file watching.
  * NOTE: These tests start real daemon processes in isolated temp directories.
  *
- * IMPORTANT: The daemon imports the indexer which requires @huggingface/transformers
- * and sharp. If sharp is not built, these tests will be skipped.
+ * The daemon lazy-loads the indexer (@huggingface/transformers); no sharp
+ * postinstall build is involved anymore, so there is no skip guard — a
+ * failure to load the library is a real failure.
  */
 
 import { describe, test, expect, beforeEach, afterEach, afterAll } from "bun:test";
@@ -18,15 +19,6 @@ import {
   addReminder,
   type TestContext,
 } from "./helpers";
-
-// Check if daemon can start (requires sharp to be built)
-let daemonAvailable = false;
-try {
-  await import("@huggingface/transformers");
-  daemonAvailable = true;
-} catch {
-  console.warn("[Test] Daemon tests skipped - sharp not built");
-}
 
 // Track all spawned daemon processes for cleanup, including ones whose PID
 // file never appeared — otherwise a startup slower than the poll window leaks
@@ -110,7 +102,7 @@ afterAll(() => {
   }
 });
 
-describe.skipIf(!daemonAvailable)("daemon", () => {
+describe("daemon", () => {
   let ctx: TestContext;
 
   beforeEach(() => {
