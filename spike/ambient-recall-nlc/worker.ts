@@ -83,6 +83,12 @@ async function runPipeline(req: Request): Promise<void> {
         requestedAt: req.ts ?? null,
         servedAt: new Date().toISOString(),
         pipelineMs: ms,
+        // Echo the query that PRODUCED these hits. Async injection lags ~1 fire,
+        // so the draining hook's own query is NOT this result's query — without
+        // this the calibration log pairs each row's hits with the wrong (later)
+        // query, poisoning any retrieval-quality read of the log.
+        servedSearch: req.search,
+        servedRerankQuery: req.rerankQuery,
         hits,
       }));
       console.log(`[worker] ${req.sid}: ${hits.length} hit(s) -> inbox (${ms}ms)`);

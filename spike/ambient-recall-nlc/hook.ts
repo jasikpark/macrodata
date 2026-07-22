@@ -161,14 +161,26 @@ async function main(): Promise<void> {
 
   // Calibration log. `extra` carries mode + timing (sync: pipeMs; async:
   // offPathMs/queryToServeMs/fastMs) so the jsonl records both paths uniformly.
-  const logCalibration = (chunks: SearchResult[], extra: Record<string, unknown>): void => {
+  const logCalibration = (
+    chunks: SearchResult[],
+    extra: Record<string, unknown>,
+    servedQuery?: { search?: string; rerankQuery?: string },
+  ): void => {
     try {
+      // Async injection lags ~1 fire, so a drained row's hits were reranked
+      // against a PRIOR query, not this fire's. When the worker echoes back the
+      // query it actually served, log THAT — otherwise the row pairs this fire's
+      // `search` with the prior query's `hits` and any retrieval-quality read of
+      // the log is judging the wrong query. This fire's own query isn't lost: it
+      // was just enqueued and will surface as the served query of a later drain.
+      const logSearch = servedQuery?.search ?? search;
+      const logRerank = servedQuery?.rerankQuery ?? rerankQuery;
       appendFileSync(here(".recall-calibration.jsonl"), JSON.stringify({
         // sid segments fires by session — without it the N2 blind-cycle
         // adjacency test can't tell a real post-injection blackout from two
         // unrelated sessions interleaved in this shared flat log.
         ts: new Date().toISOString(), sid: sid || null, event, tool: env.tool_name ?? null,
-        search: search.slice(0, 300), rerankQuery: rerankQuery.slice(0, 200),
+        search: logSearch.slice(0, 300), rerankQuery: logRerank.slice(0, 200),
         n: chunks.length, ms: Date.now() - t0,
         scores: chunks.map((h) => Number(h.score.toFixed(3))), // back-compat: final score
         sources: chunks.map((h) => h.section ?? h.source),
@@ -260,7 +272,7 @@ async function main(): Promise<void> {
   if (MODE === "async") {
     const inbox = sid ? here(`.recall-inbox-${sid}.json`) : "";
     let ready: SearchResult[] = [];
-    let meta: { requestedAt?: string; servedAt?: string; pipelineMs?: number } = {};
+    let meta: { requestedAt?: string; servedAt?: string; pipelineMs?: number; servedSearch?: string; servedRerankQuery?: string } = {};
     // Drain accounting (feeds calibration): `drained` = hits the worker had
     // waiting; `filteredInContext` = how many of those the in-context exclude
     // dropped before injection. A one-cycle blind spot (the N2 post-injection
@@ -271,7 +283,7 @@ async function main(): Promise<void> {
     if (inbox && existsSync(inbox)) {
       try {
         const parsed = JSON.parse(readFileSync(inbox, "utf-8")) as
-          { requestedAt?: string; servedAt?: string; pipelineMs?: number; hits: SearchResult[] };
+          { requestedAt?: string; servedAt?: string; pipelineMs?: number; servedSearch?: string; servedRerankQuery?: string; hits: SearchResult[] };
         const raw = parsed.hits || [];
         drained = raw.length;
         const kept = raw.filter((h) => !excludeSet.has(h.content));
@@ -299,7 +311,11 @@ async function main(): Promise<void> {
       const tag =
         `async · saved ~${offPath}ms off-path (this fire ${fastMs}ms) · ` +
         `query ${clk(meta.requestedAt)} → served ${clk(meta.servedAt)} (${span})`;
-      logCalibration(ready, { mode: "async", offPathMs: offPath, queryToServeMs: span, fastMs, drained, filteredInContext, excludeSize: excludeSet.size });
+      logCalibration(
+        ready,
+        { mode: "async", offPathMs: offPath, queryToServeMs: span, fastMs, drained, filteredInContext, excludeSize: excludeSet.size },
+        { search: meta.servedSearch, rerankQuery: meta.servedRerankQuery },
+      );
       persistInjected(ready);
       emitHits(ready, tag);
     }
