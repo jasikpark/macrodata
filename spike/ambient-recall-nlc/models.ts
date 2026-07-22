@@ -3,7 +3,8 @@
  * replacement for the external llama-server HTTP endpoints (:8091 embed, :8090
  * rerank) and supervisor.sh. Models load ONCE per process (lazy): fine for the
  * long-lived worker and the one-shot reindex / `--query` CLI, but NOT the per-fire
- * hook (so the -nlc hook is async-only — it never loads models, the worker does).
+ * hook — in its default async mode the hook never loads models, the worker does
+ * (MACRODATA_RECALL_MODE=sync is the explicit inline-debug override).
  *
  * Same GGUFs as the llama-server setup; embedding pooling is driven by the model's
  * own GGUF metadata (Qwen3-Embedding ships last-token pooling).

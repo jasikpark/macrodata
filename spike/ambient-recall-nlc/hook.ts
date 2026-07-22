@@ -1,14 +1,20 @@
 #!/usr/bin/env bun
 /**
- * Ambient-recall PostToolUse hook (spike).
+ * Ambient-recall hook (spike) — fires on UserPromptSubmit, PostToolUse
+ * (Read/WebSearch/WebFetch), and Stop.
  *
- * Reads a Claude Code PostToolUse envelope on stdin, builds a scrubbed query
- * from the tool's intent, runs the full pipeline (vector :8080 + FTS + RRF +
- * rerank :8090 + floor), and — only if something clears the floor — emits an
- * additionalContext block. Stays SILENT otherwise (the whole point: no noise).
- * Fails silent on any error so it can never block a tool call.
+ * Reads a Claude Code hook envelope on stdin, builds a scrubbed query from the
+ * current context, runs the retrieval pipeline (vector + FTS + RRF + recency +
+ * in-process rerank + floor), and — only if something clears the floor — emits
+ * an additionalContext block. Stays SILENT otherwise (the whole point: no
+ * noise). Fails silent on any error so it can never block a tool call.
  *
- * Manual test:  echo '{"tool_name":"Read","tool_input":{"file_path":"x/porrima.md"}}' | bun run hook.ts
+ * Modes (MACRODATA_RECALL_MODE): "async" (default) — mailbox protocol with
+ * worker.ts; this process NEVER loads models. "sync" — run the pipeline inline,
+ * which loads the GGUFs IN THIS per-fire process; debugging only. --query
+ * always runs sync.
+ *
+ * Manual test:  echo '{"tool_name":"Read","tool_input":{"file_path":"x/porrima.md"}}' | MACRODATA_RECALL_MODE=sync bun run hook.ts
  *          or:  bun run hook.ts --query "what is porrima"
  */
 
@@ -54,6 +60,11 @@ async function main(): Promise<void> {
   }
 
   const event = env.hook_event_name ?? "PostToolUse";
+
+  // Mode: async (default) keeps models strictly in the worker; sync is the
+  // explicit debug override (inline pipeline = per-fire model load). The old
+  // MACRODATA_RECALL_ASYNC=1 wiring is subsumed by the async default.
+  const MODE = qIdx >= 0 || process.env.MACRODATA_RECALL_MODE === "sync" ? "sync" : "async";
 
   // ONE transcript read per fire — query build AND compaction window come out
   // of the same parse (this used to be two full read+parse passes, a real tax
@@ -221,28 +232,29 @@ async function main(): Promise<void> {
     process.exit(0);
   };
 
-  // ---- ASYNC path: drain the inbox (a PRIOR fire's results), enqueue THIS
-  // query for the worker, exit fast. The slow rerank never blocks the tool;
-  // results surface one fire later (3fz competitive injection).
-  if (process.env.MACRODATA_RECALL_ASYNC === "1") {
-    // STOP = PRIME-ONLY. Enqueue the just-ended turn's context so the worker
-    // reranks during the idle gap before the user's next prompt — but DON'T
-    // drain or inject. Two reasons: (1) a Stop hook emitting additionalContext
-    // can re-trigger the turn → loop; (2) draining without injecting would
-    // throw away a computed result. The next UserPromptSubmit drains this primed
-    // inbox → near-zero felt latency. (Trivial turns were already filtered by
-    // the thinking/text gate above, so we only prime substantial turns.)
-    if (event === "Stop") {
-      if (sid) {
-        try {
-          atomicWrite(here(`.recall-request-${sid}.json`),
-            JSON.stringify({ sid, search, rerankQuery, ts: new Date().toISOString(), primedBy: "Stop" }));
-        } catch {}
-        logCalibration([], { mode: "stop-prime" });
-      }
-      emitSilent(); // zero output → cannot loop
+  // ---- STOP = PRIME-ONLY, in EVERY mode. Enqueue the just-ended turn's
+  // context so the worker reranks during the idle gap before the user's next
+  // prompt — but DON'T drain or inject. Two reasons: (1) a Stop hook emitting
+  // additionalContext can re-trigger the turn → loop (mode-independent: the
+  // sync path must not inject on Stop either); (2) draining without injecting
+  // would throw away a computed result. The next UserPromptSubmit drains this
+  // primed inbox → near-zero felt latency. (Trivial turns were already filtered
+  // by the thinking/text gate above, so we only prime substantial turns.)
+  if (event === "Stop") {
+    if (sid) {
+      try {
+        atomicWrite(here(`.recall-request-${sid}.json`),
+          JSON.stringify({ sid, search, rerankQuery, ts: new Date().toISOString(), primedBy: "Stop" }));
+      } catch {}
+      logCalibration([], { mode: "stop-prime" });
     }
+    emitSilent(); // zero output → cannot loop
+  }
 
+  // ---- ASYNC mode (default): drain the inbox (a PRIOR fire's results), enqueue
+  // THIS query for the worker, exit fast. The slow rerank never blocks the tool;
+  // results surface one fire later (3fz competitive injection).
+  if (MODE === "async") {
     const inbox = sid ? here(`.recall-inbox-${sid}.json`) : "";
     let ready: SearchResult[] = [];
     let meta: { requestedAt?: string; servedAt?: string; pipelineMs?: number } = {};
@@ -294,7 +306,9 @@ async function main(): Promise<void> {
     emitSilent();
   }
 
-  // ---- SYNC path (default): run the full pipeline inline (blocks ~5s).
+  // ---- SYNC mode (MACRODATA_RECALL_MODE=sync, or --query): run the full
+  // pipeline inline — loads the GGUF models IN THIS per-fire process. Debug and
+  // manual-CLI use only; wired sessions should always run async.
   let hits: SearchResult[] = [];
   const tPipe = Date.now();
   try {
