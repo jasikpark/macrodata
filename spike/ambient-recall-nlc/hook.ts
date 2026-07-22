@@ -164,7 +164,10 @@ async function main(): Promise<void> {
   const logCalibration = (chunks: SearchResult[], extra: Record<string, unknown>): void => {
     try {
       appendFileSync(here(".recall-calibration.jsonl"), JSON.stringify({
-        ts: new Date().toISOString(), tool: env.tool_name ?? null,
+        // sid segments fires by session — without it the N2 blind-cycle
+        // adjacency test can't tell a real post-injection blackout from two
+        // unrelated sessions interleaved in this shared flat log.
+        ts: new Date().toISOString(), sid: sid || null, event, tool: env.tool_name ?? null,
         search: search.slice(0, 300), rerankQuery: rerankQuery.slice(0, 200),
         n: chunks.length, ms: Date.now() - t0,
         scores: chunks.map((h) => Number(h.score.toFixed(3))), // back-compat: final score
@@ -258,11 +261,22 @@ async function main(): Promise<void> {
     const inbox = sid ? here(`.recall-inbox-${sid}.json`) : "";
     let ready: SearchResult[] = [];
     let meta: { requestedAt?: string; servedAt?: string; pipelineMs?: number } = {};
+    // Drain accounting (feeds calibration): `drained` = hits the worker had
+    // waiting; `filteredInContext` = how many of those the in-context exclude
+    // dropped before injection. A one-cycle blind spot (the N2 post-injection
+    // blackout) shows up here as drained>0 with filteredInContext===drained and
+    // n:0 — the signature that was previously unattributable in the soak logs.
+    let drained = 0;
+    let filteredInContext = 0;
     if (inbox && existsSync(inbox)) {
       try {
         const parsed = JSON.parse(readFileSync(inbox, "utf-8")) as
           { requestedAt?: string; servedAt?: string; pipelineMs?: number; hits: SearchResult[] };
-        ready = (parsed.hits || []).filter((h) => !excludeSet.has(h.content)).slice(0, LIMIT);
+        const raw = parsed.hits || [];
+        drained = raw.length;
+        const kept = raw.filter((h) => !excludeSet.has(h.content));
+        filteredInContext = drained - kept.length;
+        ready = kept.slice(0, LIMIT);
         meta = parsed;
       } catch {}
       try { unlinkSync(inbox); } catch {}
@@ -285,7 +299,7 @@ async function main(): Promise<void> {
       const tag =
         `async · saved ~${offPath}ms off-path (this fire ${fastMs}ms) · ` +
         `query ${clk(meta.requestedAt)} → served ${clk(meta.servedAt)} (${span})`;
-      logCalibration(ready, { mode: "async", offPathMs: offPath, queryToServeMs: span, fastMs });
+      logCalibration(ready, { mode: "async", offPathMs: offPath, queryToServeMs: span, fastMs, drained, filteredInContext, excludeSize: excludeSet.size });
       persistInjected(ready);
       emitHits(ready, tag);
     }
@@ -295,7 +309,7 @@ async function main(): Promise<void> {
     // there's no sid we couldn't enqueue, so stay truly silent.)
     if (sid) {
       const fastMs = Date.now() - t0;
-      logCalibration([], { mode: "async-enqueue", fastMs });
+      logCalibration([], { mode: "async-enqueue", fastMs, drained, filteredInContext, excludeSize: excludeSet.size });
       const visible = `[macrodata-recall] queued from ${env.tool_name ?? event} · reranking off-path, nothing ready yet (this fire ${fastMs}ms)`;
       process.stdout.write(JSON.stringify({
         systemMessage: visible,

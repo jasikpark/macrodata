@@ -118,16 +118,24 @@ export async function pipelineSearch(
   checkIndexFresh();
   // Recall legs use the WIDE query; the rerank precision pass uses the TIGHT
   // query (the agent's current trajectory) when provided, else the same query.
-  // The vector leg can throw where FTS can't (e.g. getEmbeddingFor throws on a
-  // token-dense query exceeding contextSize) — isolate it so one leg failing
-  // degrades to the other instead of killing the whole pipeline.
+  // BOTH legs read the shared Vectra index — the vector leg via searchMemory,
+  // the FTS leg via buildCorpus -> listItems — so EITHER can throw on a torn
+  // index.json read during a concurrent reindex (and the vector leg can also
+  // throw on a token-dense query exceeding contextSize). Isolate each leg so
+  // one failing degrades to the other instead of killing the whole pipeline;
+  // an unguarded ftsSearch throw would also discard a successful vector result.
   let vec: SearchResult[] = [];
   try {
     vec = await searchMemory(query, { limit: 20, task });
   } catch (e) {
     console.warn(`[fts] vector leg failed, continuing FTS-only: ${String(e)}`);
   }
-  const fts = await ftsSearch(query, 20);
+  let fts: SearchResult[] = [];
+  try {
+    fts = await ftsSearch(query, 20);
+  } catch (e) {
+    console.warn(`[fts] FTS leg failed, continuing vector-only: ${String(e)}`);
+  }
 
   // RRF-fuse the two recall legs into one ranked slate (K=60), keyed by content.
   // Drop already-injected chunks here, BEFORE rerank, so repeats don't occupy
@@ -217,27 +225,4 @@ export async function pipelineSearch(
     .filter((c) => c.score >= floor)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
-}
-
-// RRF fuse vector + FTS, keyed by content. Returns fused order with rrf score.
-export async function hybridSearch(query: string, opts: { limit?: number; task?: string } = {}): Promise<SearchResult[]> {
-  const { limit = 5, task } = opts;
-  const K = 60;
-  const vec = await searchMemory(query, { limit: 20, task });
-  const fts = await ftsSearch(query, 20);
-
-  const fused = new Map<string, { item: SearchResult; rrf: number }>();
-  const add = (list: SearchResult[]) =>
-    list.forEach((r, i) => {
-      const key = r.content;
-      const prev = fused.get(key);
-      fused.set(key, { item: prev?.item ?? r, rrf: (prev?.rrf ?? 0) + 1 / (K + i + 1) });
-    });
-  add(vec);
-  add(fts);
-
-  return [...fused.values()]
-    .sort((a, b) => b.rrf - a.rrf)
-    .slice(0, limit)
-    .map((x) => ({ ...x.item, score: x.rrf }));
 }

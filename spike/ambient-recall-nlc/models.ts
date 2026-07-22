@@ -37,7 +37,9 @@ async function loadEmbed() {
   try {
     return await model.createEmbeddingContext({ contextSize: 4096 });
   } catch (e) {
-    await model.dispose().catch(() => {});
+    await model
+      .dispose()
+      .catch((de) => console.warn(`[models] embed model dispose failed after context-init error (weights may leak): ${String(de)}`));
     throw e;
   }
 }
@@ -48,7 +50,9 @@ async function loadRank() {
   try {
     return await model.createRankingContext({ contextSize: 4096 });
   } catch (e) {
-    await model.dispose().catch(() => {});
+    await model
+      .dispose()
+      .catch((de) => console.warn(`[models] rerank model dispose failed after context-init error (weights may leak): ${String(de)}`));
     throw e;
   }
 }
