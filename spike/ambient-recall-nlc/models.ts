@@ -32,14 +32,32 @@ const llama = memoAsync(() => getLlama());
 // exact case the retry exists for), dispose the model before rethrowing: node-
 // llama-cpp does NOT reclaim models on GC, so a bare retry would load a second
 // copy of the weights and compound the pressure that caused the failure.
+//
+// The dispose itself must not hold the rethrow hostage: a wedged Metal dispose
+// (same pressure that broke context-create) would leave the memoized promise
+// forever-pending — memoAsync's rejection-drop only fires on rejection, so the
+// long-lived worker would brick with every request awaiting a promise that
+// never settles. Bound the cleanup; on timeout the weights may leak, which the
+// retry path already tolerates and the warn makes visible.
+async function disposeBounded(model: { dispose(): Promise<void> }, label: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), 10_000); });
+  try {
+    const winner = await Promise.race([model.dispose().then(() => "ok" as const), timeout]);
+    if (winner === "timeout") console.warn(`[models] ${label} model dispose timed out after context-init error (weights may leak)`);
+  } catch (de) {
+    console.warn(`[models] ${label} model dispose failed after context-init error (weights may leak): ${String(de)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function loadEmbed() {
   const model = await (await llama()).loadModel({ modelPath: await resolveModelFile(EMBED_URI) });
   try {
     return await model.createEmbeddingContext({ contextSize: 4096 });
   } catch (e) {
-    await model
-      .dispose()
-      .catch((de) => console.warn(`[models] embed model dispose failed after context-init error (weights may leak): ${String(de)}`));
+    await disposeBounded(model, "embed");
     throw e;
   }
 }
@@ -50,9 +68,7 @@ async function loadRank() {
   try {
     return await model.createRankingContext({ contextSize: 4096 });
   } catch (e) {
-    await model
-      .dispose()
-      .catch((de) => console.warn(`[models] rerank model dispose failed after context-init error (weights may leak): ${String(de)}`));
+    await disposeBounded(model, "rerank");
     throw e;
   }
 }

@@ -109,7 +109,11 @@ async function main(): Promise<void> {
   const injectedFile = sid ? here(`.recall-injected-${sid}.json`) : "";
   const excludeFile = sid ? here(`.recall-exclude-${sid}.json`) : "";
   const atomicWrite = (path: string, data: string): void => {
-    const tmp = `${path}.tmp`;
+    // pid-unique tmp: parallel tool calls fire concurrent same-sid hooks, and
+    // a shared tmp path lets two writers interleave (write is not atomic
+    // across processes) before one renames torn bytes into place. rename
+    // itself is atomic; the tmp file must be private to this writer.
+    const tmp = `${path}.${process.pid}.tmp`;
     writeFileSync(tmp, data);
     renameSync(tmp, path);
   };
@@ -144,7 +148,9 @@ async function main(): Promise<void> {
       // ISO compare: both ts are canonical `…Z`+ms (toISOString), so lexical==chronological;
       // a format mismatch fails toward DROPPING (under-cull), never echo. cap(1000) is a
       // pathological backstop for a never-compacting mega-session — overshoot = harmless
-      // echo (under-cull-safe). atomicWrite so concurrent fires can't tear the file.
+      // echo (under-cull-safe). atomicWrite publishes whole files only; note a
+      // concurrent fire's read-modify-write can still lose entries last-writer-
+      // wins (under-cull-safe, tracked with the mailbox-robustness work).
       const kept = loadInjected().filter((e) => e.ts && (!windowStartTs || e.ts >= windowStartTs));
       for (const h of chunks) kept.push({ c: h.content, ts: now });
       atomicWrite(injectedFile, JSON.stringify(kept.slice(-1000)));
@@ -280,6 +286,14 @@ async function main(): Promise<void> {
     // n:0 — the signature that was previously unattributable in the soak logs.
     let drained = 0;
     let filteredInContext = 0;
+    // WHICH hits the exclude suppressed (source labels, <= worker limit) — a
+    // blackout row needs identities, not just a count, to tell true N2 (the
+    // just-injected chunk re-won) from an exclude false positive.
+    let filteredSrc: string[] = [];
+    // A torn/malformed inbox parse would otherwise log as drained:0 — byte-
+    // identical to "worker hadn't served yet" — misattributing a destroyed
+    // result to worker latency. Flag it so the read/unlink race is observable.
+    let drainError = false;
     if (inbox && existsSync(inbox)) {
       try {
         const parsed = JSON.parse(readFileSync(inbox, "utf-8")) as
@@ -288,9 +302,13 @@ async function main(): Promise<void> {
         drained = raw.length;
         const kept = raw.filter((h) => !excludeSet.has(h.content));
         filteredInContext = drained - kept.length;
-        ready = kept.slice(0, LIMIT);
+        filteredSrc = raw.filter((h) => excludeSet.has(h.content)).map((h) => h.section ?? h.source);
+        // Re-apply this process's FLOOR too, not just LIMIT: hook and worker
+        // read separate environments, and on skew a tightened hook floor must
+        // not be bypassed by hits the worker admitted under its looser one.
+        ready = kept.filter((h) => h.score >= FLOOR).slice(0, LIMIT);
         meta = parsed;
-      } catch {}
+      } catch { drainError = true; }
       try { unlinkSync(inbox); } catch {}
     }
     // Enqueue THIS turn's context for the worker (latest-wins; worker consumes).
@@ -313,7 +331,7 @@ async function main(): Promise<void> {
         `query ${clk(meta.requestedAt)} → served ${clk(meta.servedAt)} (${span})`;
       logCalibration(
         ready,
-        { mode: "async", offPathMs: offPath, queryToServeMs: span, fastMs, drained, filteredInContext, excludeSize: excludeSet.size },
+        { mode: "async", offPathMs: offPath, queryToServeMs: span, fastMs, drained, filteredInContext, filteredSrc, excludeSize: excludeSet.size, drainError },
         { search: meta.servedSearch, rerankQuery: meta.servedRerankQuery },
       );
       persistInjected(ready);
@@ -325,7 +343,16 @@ async function main(): Promise<void> {
     // there's no sid we couldn't enqueue, so stay truly silent.)
     if (sid) {
       const fastMs = Date.now() - t0;
-      logCalibration([], { mode: "async-enqueue", fastMs, drained, filteredInContext, excludeSize: excludeSet.size });
+      // Pass the served query here too: when the exclude filtered EVERYTHING
+      // (drained>0, n:0 — the N2 blackout signature this row exists to catch),
+      // the counters must pair with the query that produced the suppressed
+      // hits, not this fire's. On a pure-enqueue row meta is {} and the
+      // undefined fields fall back to this fire's query, which is then correct.
+      logCalibration(
+        [],
+        { mode: "async-enqueue", fastMs, drained, filteredInContext, filteredSrc, excludeSize: excludeSet.size, drainError },
+        { search: meta.servedSearch, rerankQuery: meta.servedRerankQuery },
+      );
       const visible = `[macrodata-recall] queued from ${env.tool_name ?? event} · reranking off-path, nothing ready yet (this fire ${fastMs}ms)`;
       process.stdout.write(JSON.stringify({
         systemMessage: visible,

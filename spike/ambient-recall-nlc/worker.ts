@@ -51,7 +51,9 @@ function loadExclude(sid: string): Set<string> {
 }
 
 function atomicWrite(path: string, data: string): void {
-  const tmp = `${path}.tmp`;
+  // pid-unique tmp so a hook process writing the same path can't interleave
+  // with this writer's tmp file before the atomic rename (see hook.ts twin).
+  const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, data);
   renameSync(tmp, path);
 }
