@@ -28,15 +28,29 @@ function memoAsync<T>(load: () => Promise<T>): () => Promise<T> {
 
 const llama = memoAsync(() => getLlama());
 
+// If context creation fails AFTER the model loaded (Metal alloc pressure — the
+// exact case the retry exists for), dispose the model before rethrowing: node-
+// llama-cpp does NOT reclaim models on GC, so a bare retry would load a second
+// copy of the weights and compound the pressure that caused the failure.
 async function loadEmbed() {
   const model = await (await llama()).loadModel({ modelPath: await resolveModelFile(EMBED_URI) });
-  return model.createEmbeddingContext({ contextSize: 4096 });
+  try {
+    return await model.createEmbeddingContext({ contextSize: 4096 });
+  } catch (e) {
+    await model.dispose().catch(() => {});
+    throw e;
+  }
 }
 export const embedContext = memoAsync(loadEmbed);
 
 async function loadRank() {
   const model = await (await llama()).loadModel({ modelPath: await resolveModelFile(RERANK_URI) });
-  return model.createRankingContext({ contextSize: 4096 });
+  try {
+    return await model.createRankingContext({ contextSize: 4096 });
+  } catch (e) {
+    await model.dispose().catch(() => {});
+    throw e;
+  }
 }
 export const rankContext = memoAsync(loadRank);
 

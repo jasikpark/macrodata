@@ -118,7 +118,15 @@ export async function pipelineSearch(
   checkIndexFresh();
   // Recall legs use the WIDE query; the rerank precision pass uses the TIGHT
   // query (the agent's current trajectory) when provided, else the same query.
-  const vec = await searchMemory(query, { limit: 20, task });
+  // The vector leg can throw where FTS can't (e.g. getEmbeddingFor throws on a
+  // token-dense query exceeding contextSize) — isolate it so one leg failing
+  // degrades to the other instead of killing the whole pipeline.
+  let vec: SearchResult[] = [];
+  try {
+    vec = await searchMemory(query, { limit: 20, task });
+  } catch (e) {
+    console.warn(`[fts] vector leg failed, continuing FTS-only: ${String(e)}`);
+  }
   const fts = await ftsSearch(query, 20);
 
   // RRF-fuse the two recall legs into one ranked slate (K=60), keyed by content.
