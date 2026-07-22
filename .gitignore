@@ -5,3 +5,4 @@ dist/
 *.log
 .gest/
 .DS_Store
+.claude/settings.local.json
