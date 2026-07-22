@@ -165,6 +165,13 @@ async function main(): Promise<void> {
   ]);
   try { if (excludeFile) atomicWrite(excludeFile, JSON.stringify([...excludeSet])); } catch {} // stay silent on ENOSPC/EACCES (matches every other write here)
 
+  // Source label for logs + display: always carry the file, qualified by the
+  // section when present. A bare `section ?? source` collapses two files
+  // sharing a section title ("Notes", "Status") into one indistinguishable
+  // label — fatal for blackout forensics, which exist to identify WHICH hit
+  // the exclude suppressed.
+  const srcLabel = (h: SearchResult): string => (h.section ? `${h.source} › ${h.section}` : h.source);
+
   // Calibration log. `extra` carries mode + timing (sync: pipeMs; async:
   // offPathMs/queryToServeMs/fastMs) so the jsonl records both paths uniformly.
   const logCalibration = (
@@ -189,11 +196,11 @@ async function main(): Promise<void> {
         search: logSearch.slice(0, 300), rerankQuery: logRerank.slice(0, 200),
         n: chunks.length, ms: Date.now() - t0,
         scores: chunks.map((h) => Number(h.score.toFixed(3))), // back-compat: final score
-        sources: chunks.map((h) => h.section ?? h.source),
+        sources: chunks.map(srcLabel),
         // Per-STAGE breakdown so calibration sweeps can see WHY a hit ranked, not just
         // the conflated final: rerank (final cross-encoder), rrf (fused recall), recency factor.
         hits: chunks.map((h) => ({
-          src: h.section ?? h.source,
+          src: srcLabel(h),
           rerank: Number(h.score.toFixed(3)),
           rrf: h.rrf != null ? Number(h.rrf.toFixed(4)) : null,
           recency: h.recency != null ? Number(h.recency.toFixed(3)) : null,
@@ -221,17 +228,16 @@ async function main(): Promise<void> {
       return Number.isNaN(d) ? "evergreen" : d < 1 ? "<1d" : `${Math.round(d)}d`;
     };
     const halfLife = Number(process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 30);
-    const fmtWhere = (h: SearchResult) => (h.section ? `${h.source} › ${h.section}` : h.source);
     // CLEAN block → model (additionalContext): final score + age only, no diagnostics.
     const block =
       "<macrodata-recall>\n" +
-      chunks.map((h) => `- (${h.score.toFixed(2)} · ${ageLabel(h.timestamp)}) ${fmtWhere(h)}\n  ${h.content.replace(/\s+/g, " ").slice(0, 220)}`).join("\n") +
+      chunks.map((h) => `- (${h.score.toFixed(2)} · ${ageLabel(h.timestamp)}) ${srcLabel(h)}\n  ${h.content.replace(/\s+/g, " ").slice(0, 220)}`).join("\n") +
       "\n</macrodata-recall>";
     // DEBUG block → human (systemMessage): per-STAGE numbers so calibration isn't judged
     // on the conflated final. rerank = final cross-encoder; rrf = fused recall score
     // (pre-rerank); rec = recency factor (0-1, pre-rerank candidate-selection only).
     const debugBlock = chunks.map((h) =>
-      `- rerank ${h.score.toFixed(2)} · rrf ${(h.rrf ?? 0).toFixed(3)} · rec ${(h.recency ?? 1).toFixed(2)} · ${ageLabel(h.timestamp)} — ${fmtWhere(h)}\n  ${h.content.replace(/\s+/g, " ").slice(0, 220)}`
+      `- rerank ${h.score.toFixed(2)} · rrf ${(h.rrf ?? 0).toFixed(3)} · rec ${(h.recency ?? 1).toFixed(2)} · ${ageLabel(h.timestamp)} — ${srcLabel(h)}\n  ${h.content.replace(/\s+/g, " ").slice(0, 220)}`
     ).join("\n");
     // Sampled calibration prompt: on ~VERDICT_RATE of injections, ask the agent to
     // journal a usefulness verdict. Goes in additionalContext (model-facing) so the
@@ -290,26 +296,49 @@ async function main(): Promise<void> {
     // blackout row needs identities, not just a count, to tell true N2 (the
     // just-injected chunk re-won) from an exclude false positive.
     let filteredSrc: string[] = [];
-    // A torn/malformed inbox parse would otherwise log as drained:0 — byte-
+    // Hits the FLOOR re-check (or a malformed score) dropped after the exclude
+    // accounting — without this counter a floor-dropped hit leaves a drain row
+    // (drained>0, filteredInContext<drained, n:0) matching no documented
+    // signature, and a mixed row would fail the N2 test even when N2 fired.
+    let floorDropped = 0;
+    // A malformed claimed-inbox parse would otherwise log as drained:0 — byte-
     // identical to "worker hadn't served yet" — misattributing a destroyed
-    // result to worker latency. Flag it so the read/unlink race is observable.
+    // result to worker latency. (A rename ENOENT is NOT this: that's a
+    // concurrent fire winning the claim, handled silently below.)
     let drainError = false;
     if (inbox && existsSync(inbox)) {
-      try {
-        const parsed = JSON.parse(readFileSync(inbox, "utf-8")) as
-          { requestedAt?: string; servedAt?: string; pipelineMs?: number; servedSearch?: string; servedRerankQuery?: string; hits: SearchResult[] };
-        const raw = parsed.hits || [];
-        drained = raw.length;
-        const kept = raw.filter((h) => !excludeSet.has(h.content));
-        filteredInContext = drained - kept.length;
-        filteredSrc = raw.filter((h) => excludeSet.has(h.content)).map((h) => h.section ?? h.source);
-        // Re-apply this process's FLOOR too, not just LIMIT: hook and worker
-        // read separate environments, and on skew a tightened hook floor must
-        // not be bypassed by hits the worker admitted under its looser one.
-        ready = kept.filter((h) => h.score >= FLOOR).slice(0, LIMIT);
-        meta = parsed;
-      } catch { drainError = true; }
-      try { unlinkSync(inbox); } catch {}
+      // Claim-by-rename BEFORE reading: parallel tool calls fire concurrent
+      // same-sid hooks (the reason atomicWrite's tmp is pid-unique), and a
+      // bare read→unlink would let two fires drain the same complete inbox —
+      // double-injecting, double-counting recordAccess (which feeds back into
+      // recency ranking), and landing duplicate calibration rows. rename is
+      // atomic: exactly one fire wins; the loser's ENOENT means "nothing
+      // ready", not an error.
+      const claim = `${inbox}.${process.pid}.claim`;
+      let claimed = false;
+      try { renameSync(inbox, claim); claimed = true; } catch {}
+      if (claimed) {
+        try {
+          const parsed = JSON.parse(readFileSync(claim, "utf-8")) as
+            { requestedAt?: string; servedAt?: string; pipelineMs?: number; servedSearch?: string; servedRerankQuery?: string; hits: SearchResult[] };
+          const raw = parsed.hits || [];
+          drained = raw.length;
+          const kept = raw.filter((h) => !excludeSet.has(h.content));
+          filteredInContext = drained - kept.length;
+          filteredSrc = raw.filter((h) => excludeSet.has(h.content)).map(srcLabel);
+          // Re-apply this process's FLOOR too, not just LIMIT: hook and worker
+          // read separate environments, and on skew a tightened hook floor must
+          // not be bypassed by hits the worker admitted under its looser one.
+          // The typeof guard keeps a version-skewed inbox (e.g. string scores)
+          // from reaching h.score.toFixed() in emitHits, which would crash the
+          // hook instead of failing silent.
+          const floored = kept.filter((h) => typeof h.score === "number" && h.score >= FLOOR);
+          floorDropped = kept.length - floored.length;
+          ready = floored.slice(0, LIMIT);
+          meta = parsed;
+        } catch { drainError = true; }
+        try { unlinkSync(claim); } catch {}
+      }
     }
     // Enqueue THIS turn's context for the worker (latest-wins; worker consumes).
     if (sid) {
@@ -331,7 +360,7 @@ async function main(): Promise<void> {
         `query ${clk(meta.requestedAt)} → served ${clk(meta.servedAt)} (${span})`;
       logCalibration(
         ready,
-        { mode: "async", offPathMs: offPath, queryToServeMs: span, fastMs, drained, filteredInContext, filteredSrc, excludeSize: excludeSet.size, drainError },
+        { mode: "async", offPathMs: offPath, queryToServeMs: span, fastMs, drained, filteredInContext, filteredSrc, floorDropped, excludeSize: excludeSet.size, drainError },
         { search: meta.servedSearch, rerankQuery: meta.servedRerankQuery },
       );
       persistInjected(ready);
@@ -350,7 +379,7 @@ async function main(): Promise<void> {
       // undefined fields fall back to this fire's query, which is then correct.
       logCalibration(
         [],
-        { mode: "async-enqueue", fastMs, drained, filteredInContext, filteredSrc, excludeSize: excludeSet.size, drainError },
+        { mode: "async-enqueue", fastMs, drained, filteredInContext, filteredSrc, floorDropped, excludeSize: excludeSet.size, drainError },
         { search: meta.servedSearch, rerankQuery: meta.servedRerankQuery },
       );
       const visible = `[macrodata-recall] queued from ${env.tool_name ?? event} · reranking off-path, nothing ready yet (this fire ${fastMs}ms)`;

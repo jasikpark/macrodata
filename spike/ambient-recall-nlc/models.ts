@@ -26,6 +26,40 @@ function memoAsync<T>(load: () => Promise<T>): () => Promise<T> {
     }));
 }
 
+// Circuit breaker between memoAsync's retry-on-rejection and the loaders: the
+// retry exists for TRANSIENT failures, but under sustained Metal pressure each
+// failed cycle can strand another ~600MB weights copy (loadModel succeeds,
+// context-create fails, dispose may wedge — node-llama-cpp never reclaims on
+// GC), and hook fires arrive seconds apart. Unbounded retry is a positive-
+// feedback leak amplifier on unified memory: each leaked copy worsens the
+// pressure that caused the failure, until the machine swap-storms. After
+// MAX_CONSECUTIVE failures the circuit opens for COOLDOWN_MS — requests fail
+// fast (recall degrades to nothing, which the mailbox protocol tolerates)
+// instead of eating RAM. A post-cooldown success resets the count.
+const MAX_CONSECUTIVE = 3;
+const COOLDOWN_MS = 10 * 60_000;
+function breaker<T>(load: () => Promise<T>, label: string): () => Promise<T> {
+  let failures = 0;
+  let openUntil = 0;
+  return async () => {
+    if (failures >= MAX_CONSECUTIVE && Date.now() < openUntil) {
+      throw new Error(`[models] ${label} circuit open after ${failures} consecutive load failures; retrying after cooldown`);
+    }
+    try {
+      const v = await load();
+      failures = 0;
+      return v;
+    } catch (e) {
+      failures++;
+      if (failures >= MAX_CONSECUTIVE) {
+        openUntil = Date.now() + COOLDOWN_MS;
+        console.error(`[models] ${label} failed ${failures}x consecutively — circuit open ${COOLDOWN_MS / 60_000}min (weights may have leaked; restart the worker to reclaim)`);
+      }
+      throw e;
+    }
+  };
+}
+
 const llama = memoAsync(() => getLlama());
 
 // If context creation fails AFTER the model loaded (Metal alloc pressure — the
@@ -61,7 +95,7 @@ async function loadEmbed() {
     throw e;
   }
 }
-export const embedContext = memoAsync(loadEmbed);
+export const embedContext = memoAsync(breaker(loadEmbed, "embed"));
 
 async function loadRank() {
   const model = await (await llama()).loadModel({ modelPath: await resolveModelFile(RERANK_URI) });
@@ -72,7 +106,7 @@ async function loadRank() {
     throw e;
   }
 }
-export const rankContext = memoAsync(loadRank);
+export const rankContext = memoAsync(breaker(loadRank, "rerank"));
 
 // Which GPU backend resolved (metal/cuda/false) — for the smoke/CLI to report.
 export async function gpuInfo(): Promise<string> {
