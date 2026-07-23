@@ -316,7 +316,13 @@ async function main(): Promise<void> {
       // ready", not an error.
       const claim = `${inbox}.${process.pid}.claim`;
       let claimed = false;
-      try { renameSync(inbox, claim); claimed = true; } catch {}
+      // Only ENOENT means "a concurrent fire won the claim". Any other rename
+      // failure (EACCES/EROFS/...) means the inbox exists but can never be
+      // claimed — without the flag that strands the inbox forever while the
+      // log shows drained:0, the exact worker-latency misattribution the
+      // drainError flag exists to prevent.
+      try { renameSync(inbox, claim); claimed = true; }
+      catch (e) { if ((e as { code?: string }).code !== "ENOENT") drainError = true; }
       if (claimed) {
         try {
           const parsed = JSON.parse(readFileSync(claim, "utf-8")) as
@@ -329,15 +335,27 @@ async function main(): Promise<void> {
           // Re-apply this process's FLOOR too, not just LIMIT: hook and worker
           // read separate environments, and on skew a tightened hook floor must
           // not be bypassed by hits the worker admitted under its looser one.
-          // The typeof guard keeps a version-skewed inbox (e.g. string scores)
-          // from reaching h.score.toFixed() in emitHits, which would crash the
-          // hook instead of failing silent.
-          const floored = kept.filter((h) => typeof h.score === "number" && h.score >= FLOOR);
+          // The typeof guards keep a version-skewed inbox (string scores,
+          // missing content/source) from reaching h.score.toFixed(),
+          // memKey's sha1 update, or persistInjected downstream — each of
+          // which would crash the fail-silent hook, and persistInjected runs
+          // BEFORE emitHits, so a crash there would also write a phantom
+          // exclude for content the model never saw.
+          const floored = kept.filter((h) =>
+            typeof h.content === "string" && typeof h.source === "string" &&
+            typeof h.score === "number" && h.score >= FLOOR);
           floorDropped = kept.length - floored.length;
           ready = floored.slice(0, LIMIT);
           meta = parsed;
-        } catch { drainError = true; }
-        try { unlinkSync(claim); } catch {}
+        } catch {
+          drainError = true;
+          // Keep the evidence: a malformed CLAIMED file is post-atomic-rename,
+          // so it's an anomaly worth an autopsy (version skew? worker bug?) —
+          // unlinking it would leave the drainError row undiagnosable. The
+          // .bad file joins the deferred tmp/claim litter sweep.
+          try { renameSync(claim, `${claim}.bad`); } catch {}
+        }
+        try { unlinkSync(claim); } catch {} // no-op (ENOENT) when renamed to .bad
       }
     }
     // Enqueue THIS turn's context for the worker (latest-wins; worker consumes).

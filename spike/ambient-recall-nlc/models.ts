@@ -76,14 +76,18 @@ const llama = memoAsync(() => getLlama());
 async function disposeBounded(model: { dispose(): Promise<void> }, label: string): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), 10_000); });
-  try {
-    const winner = await Promise.race([model.dispose().then(() => "ok" as const), timeout]);
-    if (winner === "timeout") console.warn(`[models] ${label} model dispose timed out after context-init error (weights may leak)`);
-  } catch (de) {
-    console.warn(`[models] ${label} model dispose failed after context-init error (weights may leak): ${String(de)}`);
-  } finally {
-    clearTimeout(timer);
-  }
+  // The rejection handler is attached BEFORE the race, not in a catch around
+  // it: when the timeout wins, the still-pending dispose promise leaves the
+  // race unobserved, and a wedge that eventually ERRORS (the most plausible
+  // wedge outcome) would then reject with no handler — an unhandled rejection
+  // that kills the long-lived worker long after this function returned.
+  const disposed = model.dispose().then(
+    () => "ok" as const,
+    (de) => { console.warn(`[models] ${label} model dispose failed after context-init error (weights may leak): ${String(de)}`); return "ok" as const; },
+  );
+  const winner = await Promise.race([disposed, timeout]);
+  if (winner === "timeout") console.warn(`[models] ${label} model dispose timed out after context-init error (weights may leak)`);
+  clearTimeout(timer);
 }
 
 async function loadEmbed() {
