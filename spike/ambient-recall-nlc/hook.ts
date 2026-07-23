@@ -7,7 +7,12 @@
  * current context, runs the retrieval pipeline (vector + FTS + RRF + recency +
  * in-process rerank + floor), and — only if something clears the floor — emits
  * an additionalContext block. Stays SILENT otherwise (the whole point: no
- * noise). Fails silent on any error so it can never block a tool call.
+ * noise). EXPECTED errors (missing files, lost claim races, malformed inbox
+ * hits) degrade silently; an UNEXPECTED error fails LOUDLY — visible stderr +
+ * exit 1 — but never BLOCKS: exit 1 is Claude Code's non-blocking hook
+ * failure (exit 2 would block the tool call; nothing here may exit 2).
+ * Squeaky-gate policy (Caleb, 2026-07-23): a surprise bug should announce
+ * itself per-fire until fixed, not silently disable recall.
  *
  * Modes (MACRODATA_RECALL_MODE): "async" (default) — mailbox protocol with
  * worker.ts; this process NEVER loads models. "sync" — run the pipeline inline,
@@ -338,7 +343,8 @@ async function main(): Promise<void> {
           // The typeof guards keep a version-skewed inbox (string scores,
           // missing content/source) from reaching h.score.toFixed(),
           // memKey's sha1 update, or persistInjected downstream — each of
-          // which would crash the fail-silent hook, and persistInjected runs
+          // which would crash the hook (a skewed inbox is an EXPECTED case —
+          // degrade, don't squeak), and persistInjected runs
           // BEFORE emitHits, so a crash there would also write a phantom
           // exclude for content the model never saw.
           const floored = kept.filter((h) =>
@@ -427,4 +433,10 @@ async function main(): Promise<void> {
   emitHits(hits, `${Date.now() - t0}ms (pipeline ${pipeMs}ms)`);
 }
 
-main();
+// Intentional squeak, not an accident of a floating promise: an unexpected
+// throw prints one attributed line + the stack and exits 1 (non-blocking,
+// user-visible) instead of surfacing as a bare unhandled-rejection dump.
+main().catch((e) => {
+  console.error(`[macrodata-recall] hook failed (unexpected): ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
+  process.exit(1);
+});
