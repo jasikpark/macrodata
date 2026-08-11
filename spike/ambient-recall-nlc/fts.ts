@@ -37,6 +37,12 @@ interface Doc {
 
 let corpus: Doc[] | null = null;
 let idf: Map<string, number> | null = null;
+// content -> embedding, for MMR's similarity leg. Built from the same
+// listItems() pass as the corpus (every candidate from EITHER leg lives in the
+// index, so this one map covers both — searchMemory discards vectors and the
+// FTS leg never had them). ~20MB at 2.4k items x 1024 dims: trivial next to
+// the loaded GGUFs in the long-lived worker.
+let contentVec: Map<string, number[]> | null = null;
 
 // Staleness gate for the long-lived worker: the FTS corpus is built FROM the
 // Vectra index, so one index.json mtime covers both caches. On change, drop
@@ -51,6 +57,7 @@ function checkIndexFresh(): void {
   if (stamp !== corpusStamp) {
     corpus = null;
     idf = null;
+    contentVec = null;
     resetIndexCache();
     corpusStamp = stamp;
   }
@@ -59,9 +66,11 @@ function checkIndexFresh(): void {
 async function buildCorpus(): Promise<void> {
   const idx = new LocalIndex(join(getIndexDir(), "vectors"));
   const items = await idx.listItems();
+  contentVec = new Map();
   corpus = items.map((it) => {
     const m = it.metadata as Record<string, unknown>;
     const content = (m.content as string) ?? "";
+    if (it.vector?.length) contentVec!.set(content, it.vector);
     const tf = new Map<string, number>();
     for (const t of terms(content)) tf.set(t, (tf.get(t) ?? 0) + 1);
     return { content, source: m.source as string, section: m.section as string | undefined, type: m.type as string, timestamp: m.timestamp as string | undefined, tf };
@@ -103,11 +112,100 @@ export async function rerank(query: string, docs: string[]): Promise<number[]> {
   return ctx.rankAll(query, docs.map((d) => d.slice(0, 2000)));
 }
 
+export interface PoolCandidate {
+  item: SearchResult;
+  rrf: number;
+  rec: number;
+  w: number;
+  vector?: number[];
+}
+
+// Similarity leg of MMR: cosine over the index embeddings (Porrima's metric,
+// same qwen3-embedding family — so its lambda values transfer at face value),
+// with Jaccard over terms() token sets as the degraded path when a vector is
+// missing (contentVec unbuilt after an FTS-leg failure). Cosine matters
+// because journal redundancy is often PARAPHRASE — same fact, different
+// words — which token overlap cannot see.
+function cosine(a: number[], b: number[]): number {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  return denom > 0 ? dot / denom : 0;
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
+// MMR pool selection (Porrima's passive-recall placement: mmrRerank at
+// lambda=0.55 BEFORE the cross-encoder — memory-storage.ts:927,
+// passive-memory-recall.ts:489): greedy diverse selection deciding which
+// candidates earn a rerank slot, so the expensive precision pass stops
+// spending slots on near-duplicates. Relevance = the recency-adjusted RRF
+// weight `w`, min-max normalized within the slate: raw RRF magnitudes (~1/60)
+// would let the (1-lambda) similarity term swamp relevance at any lambda,
+// making lambda a dead knob. (Min-max pins the slate's top to 1 and its last
+// to 0 — the weakest candidate competes on novelty alone, which is the
+// intent.) Expects `slate` sorted by w descending; lambda >= 1 degenerates to
+// plain top-k (same short-circuit as Porrima).
+export function mmrSelect(slate: PoolCandidate[], k: number, lambda: number): PoolCandidate[] {
+  if (slate.length <= k || lambda >= 1) return slate.slice(0, k);
+  const wMax = slate[0].w;
+  const wMin = slate[slate.length - 1].w;
+  const range = wMax - wMin;
+  const relevance = (c: PoolCandidate) => (range > 0 ? (c.w - wMin) / range : 1);
+  const tokens = new Map<PoolCandidate, Set<string>>(
+    slate.map((c) => [c, new Set(terms(c.item.content))]),
+  );
+  const sim = (a: PoolCandidate, b: PoolCandidate): number =>
+    a.vector && b.vector
+      ? cosine(a.vector, b.vector)
+      : jaccard(tokens.get(a)!, tokens.get(b)!);
+
+  // Greedy selection: first pick is the highest-relevance candidate; each
+  // later pick maximizes lambda * relevance - (1 - lambda) * maxSim against
+  // the picks so far. maxSim clamps at 0 (Porrima does the same): negative
+  // cosine means "very diverse", which must not become a relevance bonus.
+  const selected: PoolCandidate[] = [];
+  const remaining = [...slate];
+  while (selected.length < k && remaining.length > 0) {
+    if (selected.length === 0) {
+      selected.push(remaining.shift()!);
+      continue;
+    }
+    let bestIdx = 0;
+    let bestScore = -Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const c = remaining[i];
+      let maxSim = 0;
+      for (const s of selected) {
+        const v = sim(c, s);
+        if (v > maxSim) maxSim = v;
+      }
+      const score = lambda * relevance(c) - (1 - lambda) * maxSim;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+    selected.push(remaining.splice(bestIdx, 1)[0]);
+  }
+  return selected;
+}
+
 // Full pipeline (Porrima placement): vector + FTS recall -> RRF fuse ->
-// recency-biased candidate SELECTION -> cross-encoder rerank -> floor on the
-// PURE rerank score. Recency decides which candidates earn a rerank slot; it
-// never touches the final ranking, so a stale-but-strongly-relevant memory that
-// survives into the pool still wins on pure relevance.
+// recency-biased + MMR-diversified candidate SELECTION -> cross-encoder
+// rerank -> floor on the PURE rerank score. Recency and diversity decide
+// which candidates earn a rerank slot; they never touch the final ranking, so
+// a stale-but-strongly-relevant memory that survives into the pool still wins
+// on pure relevance.
 export async function pipelineSearch(
   query: string,
   opts: { limit?: number; task?: string; floor?: number; rerankQuery?: string; exclude?: Set<string> } = {},
@@ -124,15 +222,22 @@ export async function pipelineSearch(
   // throw on a token-dense query exceeding contextSize). Isolate each leg so
   // one failing degrades to the other instead of killing the whole pipeline;
   // an unguarded ftsSearch throw would also discard a successful vector result.
+  // Leg width: Porrima's passive searchLimit tiers are 28/40/64
+  // (fast/balanced/thorough); 40 matches balanced. Widening is free at query
+  // time — vectra's queryItems scores every item and slices, and the FTS leg
+  // scans the full corpus regardless of the requested limit. Keep
+  // MACRODATA_RECALL_RERANK_POOL below the fused slate size (legK * 2) or the
+  // pool-selection stage goes vacuous and recency/MMR silently stop gating.
+  const legK = Number(process.env.MACRODATA_RECALL_LEG_K ?? 40);
   let vec: SearchResult[] = [];
   try {
-    vec = await searchMemory(query, { limit: 20, task });
+    vec = await searchMemory(query, { limit: legK, task });
   } catch (e) {
     console.warn(`[fts] vector leg failed, continuing FTS-only: ${String(e)}`);
   }
   let fts: SearchResult[] = [];
   try {
-    fts = await ftsSearch(query, 20);
+    fts = await ftsSearch(query, legK);
   } catch (e) {
     console.warn(`[fts] FTS leg failed, continuing vector-only: ${String(e)}`);
   }
@@ -210,10 +315,11 @@ export async function pipelineSearch(
   // Seed is precomputed once per candidate (not in the sort comparator) to avoid
   // redundant statSync calls.
   const pool = Number(process.env.MACRODATA_RECALL_RERANK_POOL ?? 20);
-  const candidates = [...fused.values()]
-    .map((x) => { const rec = recency(lastAccessed(x.item)); return { item: x.item, rrf: x.rrf, rec, w: x.rrf * rec }; })
-    .sort((a, b) => b.w - a.w)
-    .slice(0, pool);
+  const lambda = Number(process.env.MACRODATA_RECALL_MMR_LAMBDA ?? 0.55);
+  const slate = [...fused.values()]
+    .map((x) => { const rec = recency(lastAccessed(x.item)); return { item: x.item, rrf: x.rrf, rec, w: x.rrf * rec, vector: contentVec?.get(x.item.content) }; })
+    .sort((a, b) => b.w - a.w);
+  const candidates = mmrSelect(slate, pool, lambda);
 
   // Rerank the pool; the PURE cross-encoder score is the final score. Carry the
   // per-stage diagnostics (rrf recall score, recency factor) through UNCHANGED so

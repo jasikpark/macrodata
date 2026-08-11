@@ -1,0 +1,7 @@
+---
+"macrodata": patch
+---
+
+Widen ambient recall legs from 20 to 40 candidates per leg and add MMR diversification to the rerank-pool selection. The two changes are one mechanism: wider legs raise the density of near-duplicates in the fused slate (adjacent journal days restating the same fact, an entity section and the journal entry that seeded it), and MMR is the counterweight that keeps the fixed 20-slot rerank pool from filling with restatements of its own top hit. Selection is greedy over `λ·relevance − (1−λ)·maxSim(candidate, picked)` with λ=0.55, matching Porrima's passive-recall composition: a single pre-rerank MMR pass over recency-adjusted scores, with relevance min-max normalized within the slate so the λ blend isn't dead against raw RRF magnitudes (~1/60).
+
+Similarity is true vector cosine, not token overlap: the FTS corpus is built from the same vectra `listItems()` pass that carries every candidate's embedding, so a content→vector map covers both legs for free, and paraphrase redundancy — the same fact reworded, invisible to Jaccard — is what actually pollutes the pool. Jaccard over tokens remains only as a degraded fallback for candidates missing a vector. Widening is free at query time (vectra scores every item regardless; the FTS leg scans the full corpus), and the cross-encoder still sees exactly 20 candidates, so rerank latency — the pipeline's real bottleneck — is unchanged. New knobs: `MACRODATA_RECALL_LEG_K` (default 40) and `MACRODATA_RECALL_MMR_LAMBDA` (default 0.55; ≥1 degenerates to plain top-k).
