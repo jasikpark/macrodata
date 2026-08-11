@@ -235,18 +235,17 @@ async function main(): Promise<void> {
       return Number.isNaN(d) ? "evergreen" : d < 1 ? "<1d ago" : `${Math.round(d)}d ago`;
     };
     const halfLife = Number(process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 30);
-    // CLEAN block → model (additionalContext): final score + age only, no diagnostics.
-    const block =
-      "<macrodata-recall>\n" +
-      chunks.map((h) => `- (${h.score.toFixed(2)} · seen ${ageLabel(h.timestamp)}) ${srcLabel(h)}\n  ${h.content.replace(/\s+/g, " ").slice(0, 220)}`).join("\n") +
-      "\n</macrodata-recall>";
-    // DEBUG block → human (systemMessage): per-STAGE numbers so calibration isn't judged
-    // on the conflated final. rerank = final cross-encoder; rrf = fused recall score
+    // One row format for BOTH surfaces (model additionalContext + human
+    // systemMessage): per-STAGE numbers so neither reader judges calibration on
+    // the conflated final. rerank = final cross-encoder; rrf = fused recall score
     // (pre-rerank); rec = recency factor (0-1, pre-rerank selection only); "seen" =
-    // effective last_accessed age that rec decays from (surfacing bumps it — Porrima semantics).
-    const debugBlock = chunks.map((h) =>
-      `- rerank ${h.score.toFixed(2)} · rrf ${(h.rrf ?? 0).toFixed(3)} · rec (${(h.recency ?? 1).toFixed(2)} · seen ${ageLabel(h.timestamp)}) — ${srcLabel(h)}\n  ${h.content.replace(/\s+/g, " ").slice(0, 220)}`
-    ).join("\n");
+    // effective last_accessed age that rec decays from (surfacing bumps it —
+    // Porrima semantics). The model-facing verdict loop needs the same stage
+    // breakdown the human sees, or its journaled verdicts cite only the final score.
+    const row = (h: SearchResult) =>
+      `- rerank ${h.score.toFixed(2)} · rrf ${(h.rrf ?? 0).toFixed(3)} · rec (${(h.recency ?? 1).toFixed(2)} · seen ${ageLabel(h.timestamp)}) — ${srcLabel(h)}\n  ${h.content.replace(/\s+/g, " ").slice(0, 220)}`;
+    const block = "<macrodata-recall>\n" + chunks.map(row).join("\n") + "\n</macrodata-recall>";
+    const debugBlock = chunks.map(row).join("\n");
     // Sampled calibration prompt: on ~VERDICT_RATE of injections, ask the agent to
     // journal a usefulness verdict. Goes in additionalContext (model-facing) so the
     // agent acts on it; the human sees a marker in systemMessage. Reinstates the
