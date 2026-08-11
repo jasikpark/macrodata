@@ -79,7 +79,37 @@ describe("mmrSelect", () => {
     );
     const picked = mmrSelect(s, 2, 0.55);
     expect(picked).toHaveLength(2);
-    for (const c of picked) expect(Number.isNaN(c.w)).toBe(false);
+    // A zero range makes relevance degenerate; a NaN there would poison the
+    // greedy score and surface as a non-finite stamped penalty.
+    for (const c of picked) expect(Number.isFinite(c.mmr!.maxSim)).toBe(true);
+  });
+
+  test("empty slate and k=0 both return empty", () => {
+    expect(mmrSelect([], 5, 0.55)).toEqual([]);
+    expect(mmrSelect(slate(cand("alpha beta", 0.02), cand("gamma delta", 0.01)), 0, 0.55)).toEqual([]);
+  });
+
+  test("unsorted input: first pick is still the highest-w candidate", () => {
+    const unsorted = [
+      cand("eta theta iota", 0.01),
+      cand("alpha beta gamma", 0.03),
+      cand("delta epsilon zeta", 0.02),
+    ];
+    expect(mmrSelect(unsorted, 2, 0.55)[0].w).toBe(0.03);
+    expect(mmrSelect(unsorted, 2, 1)[0].w).toBe(0.03);
+  });
+
+  test("negative or NaN lambda clamps to pure diversity, never inverts", () => {
+    // Inverted scoring (negative lambda taken literally) would PREFER the
+    // near-duplicate over the novel candidate; the clamp must prevent that.
+    const top = cand("webclient punycode decoder tooltip ariakit hostname", 0.03);
+    const dup = cand("webclient punycode decoder tooltip ariakit hostname component", 0.028);
+    const fresh = cand("dnclient reconnect poll adaptive backoff rpc deadline", 0.012);
+    for (const lambda of [-1, Number.NaN]) {
+      const picked = mmrSelect(slate(top, dup, fresh), 2, lambda);
+      expect(picked[0].item.content).toBe(top.item.content);
+      expect(picked[1].item.content).toBe(fresh.item.content);
+    }
   });
 
   test("greedy picks are stamped with pick order and maxSim; bypass path stamps nothing", () => {

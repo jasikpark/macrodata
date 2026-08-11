@@ -16,6 +16,22 @@ import { searchMemory, resetIndexCache, type SearchResult } from "./indexer.ts";
 import { loadAccessOverlay, memKey } from "./access.ts";
 import { rankContext } from "./models.ts";
 
+// All env knobs parse through here: bare Number("") is 0 and Number("typo") is
+// NaN, and a NaN pool size makes mmrSelect return [] on every query — ambient
+// recall dying silently in the long-lived worker with nothing in the logs.
+// Out-of-range values keep the default and squeak per read (squeaky-gate: a
+// misconfiguration should announce itself until fixed, not degrade quietly).
+export function envNum(name: string, fallback: number, min: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < min) {
+    console.warn(`[fts] ${name}="${raw}" invalid (need a finite number >= ${min}); using ${fallback}`);
+    return fallback;
+  }
+  return n;
+}
+
 const STOP = new Set(
   "the a an is are was were be by of to in on for and or but with that this it as at from how do does did what why which when who whose into over under not no yes can could would should i we you they them their our your my me".split(" "),
 );
@@ -40,8 +56,9 @@ let idf: Map<string, number> | null = null;
 // content -> embedding, for MMR's similarity leg. Built from the same
 // listItems() pass as the corpus (every candidate from EITHER leg lives in the
 // index, so this one map covers both — searchMemory discards vectors and the
-// FTS leg never had them). ~20MB at 2.4k items x 1024 dims: trivial next to
-// the loaded GGUFs in the long-lived worker.
+// FTS leg never had them). ~20MB at 2.4k items x 1024 dims — a second copy of
+// the vectors the cached LocalIndex already holds in memory, so ~40MB combined:
+// still trivial next to the loaded GGUFs in the long-lived worker.
 let contentVec: Map<string, number[]> | null = null;
 
 // Staleness gate for the long-lived worker: the FTS corpus is built FROM the
@@ -70,7 +87,9 @@ async function buildCorpus(): Promise<void> {
   corpus = items.map((it) => {
     const m = it.metadata as Record<string, unknown>;
     const content = (m.content as string) ?? "";
-    if (it.vector?.length) contentVec!.set(content, it.vector);
+    // Skip empty content: distinct empty items would collapse onto the "" key
+    // and hand each other's vectors out.
+    if (content && it.vector?.length) contentVec!.set(content, it.vector);
     const tf = new Map<string, number>();
     for (const t of terms(content)) tf.set(t, (tf.get(t) ?? 0) + 1);
     return { content, source: m.source as string, section: m.section as string | undefined, type: m.type as string, timestamp: m.timestamp as string | undefined, tf };
@@ -158,21 +177,34 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 // would let the (1-lambda) similarity term swamp relevance at any lambda,
 // making lambda a dead knob. (Min-max pins the slate's top to 1 and its last
 // to 0 — the weakest candidate competes on novelty alone, which is the
-// intent.) Expects `slate` sorted by w descending; lambda >= 1 degenerates to
-// plain top-k (same short-circuit as Porrima).
+// intent.) Input order doesn't matter; lambda >= 1 degenerates to plain top-k
+// (same short-circuit as Porrima).
 export function mmrSelect(slate: PoolCandidate[], k: number, lambda: number): PoolCandidate[] {
-  if (slate.length <= k || lambda >= 1) return slate.slice(0, k);
-  const wMax = slate[0].w;
-  const wMin = slate[slate.length - 1].w;
+  if (slate.length <= k) return slate.slice(0, k);
+  if (lambda >= 1) return [...slate].sort((a, b) => b.w - a.w).slice(0, k);
+  // NaN or negative lambda would corrupt or INVERT the scoring (a negative
+  // relevance weight rewards redundancy); clamp to pure-diversity instead.
+  if (!(lambda >= 0)) lambda = 0;
+  let wMax = -Infinity, wMin = Infinity;
+  for (const c of slate) {
+    if (c.w > wMax) wMax = c.w;
+    if (c.w < wMin) wMin = c.w;
+  }
   const range = wMax - wMin;
   const relevance = (c: PoolCandidate) => (range > 0 ? (c.w - wMin) / range : 1);
   const tokens = new Map<PoolCandidate, Set<string>>(
     slate.map((c) => [c, new Set(terms(c.item.content))]),
   );
-  const sim = (a: PoolCandidate, b: PoolCandidate): number =>
-    a.vector && b.vector
-      ? cosine(a.vector, b.vector)
-      : jaccard(tokens.get(a)!, tokens.get(b)!);
+  // Cosine only for a well-formed pair: a dim-mismatched or NaN-bearing vector
+  // (possible after an embedding-model change without an index wipe) must not
+  // yield sim 0 and read as maximally novel — degrade that pair to Jaccard.
+  const sim = (a: PoolCandidate, b: PoolCandidate): number => {
+    if (a.vector && b.vector && a.vector.length === b.vector.length) {
+      const c = cosine(a.vector, b.vector);
+      if (Number.isFinite(c)) return c;
+    }
+    return jaccard(tokens.get(a)!, tokens.get(b)!);
+  };
 
   // Greedy selection: first pick is the highest-relevance candidate; each
   // later pick maximizes lambda * relevance - (1 - lambda) * maxSim against
@@ -183,7 +215,9 @@ export function mmrSelect(slate: PoolCandidate[], k: number, lambda: number): Po
   const remaining = [...slate];
   while (selected.length < k && remaining.length > 0) {
     if (selected.length === 0) {
-      selected.push(remaining.shift()!);
+      let first = 0;
+      for (let i = 1; i < remaining.length; i++) if (remaining[i].w > remaining[first].w) first = i;
+      selected.push(remaining.splice(first, 1)[0]);
       pickSim.push(0);
       continue;
     }
@@ -240,7 +274,7 @@ export async function pipelineSearch(
   // scans the full corpus regardless of the requested limit. Keep
   // MACRODATA_RECALL_RERANK_POOL below the fused slate size (legK * 2) or the
   // pool-selection stage goes vacuous and recency/MMR silently stop gating.
-  const legK = Number(process.env.MACRODATA_RECALL_LEG_K ?? 40);
+  const legK = envNum("MACRODATA_RECALL_LEG_K", 40, 1);
   let vec: SearchResult[] = [];
   try {
     vec = await searchMemory(query, { limit: legK, task });
@@ -288,7 +322,7 @@ export async function pipelineSearch(
   // created_at once and owns it. A dormant entity fades from ambient recall but
   // stays reachable via explicit search_memory. (Caveat: a move/copy can reset
   // birthtime, so it's a prior, not ground truth.)
-  const halfLifeDays = Number(process.env.MACRODATA_RECALL_HALFLIFE_DAYS ?? 30);
+  const halfLifeDays = envNum("MACRODATA_RECALL_HALFLIFE_DAYS", 30, 0.1);
   const now = Date.now();
   const entitiesDir = getEntitiesDir();
   const seedCache = new Map<string, string | undefined>();
@@ -326,8 +360,8 @@ export async function pipelineSearch(
   // recency a no-op (everyone gets reranked); tighten it to give recency bite.
   // Seed is precomputed once per candidate (not in the sort comparator) to avoid
   // redundant statSync calls.
-  const pool = Number(process.env.MACRODATA_RECALL_RERANK_POOL ?? 20);
-  const lambda = Number(process.env.MACRODATA_RECALL_MMR_LAMBDA ?? 0.55);
+  const pool = envNum("MACRODATA_RECALL_RERANK_POOL", 20, 1);
+  const lambda = envNum("MACRODATA_RECALL_MMR_LAMBDA", 0.55, 0);
   const slate = [...fused.values()]
     .map((x) => { const rec = recency(lastAccessed(x.item)); return { item: x.item, rrf: x.rrf, rec, w: x.rrf * rec, vector: contentVec?.get(x.item.content) }; })
     .sort((a, b) => b.w - a.w);
