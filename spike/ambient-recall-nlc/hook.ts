@@ -209,6 +209,8 @@ async function main(): Promise<void> {
           rerank: Number(h.score.toFixed(3)),
           rrf: h.rrf != null ? Number(h.rrf.toFixed(4)) : null,
           recency: h.recency != null ? Number(h.recency.toFixed(3)) : null,
+          mmrPick: h.mmrPick ?? null,
+          mmrSim: h.mmrSim != null ? Number(h.mmrSim.toFixed(3)) : null,
           ageDays: h.timestamp ? Math.round((Date.now() - Date.parse(h.timestamp)) / 86_400_000) : null,
         })),
         ...extra,
@@ -242,8 +244,12 @@ async function main(): Promise<void> {
     // effective last_accessed age that rec decays from (surfacing bumps it —
     // Porrima semantics). The model-facing verdict loop needs the same stage
     // breakdown the human sees, or its journaled verdicts cite only the final score.
+    // mmr segment: pick order + redundancy penalty at pick time. Omitted (not
+    // defaulted) when absent — absence means MMR was bypassed for that slate.
+    const mmrSeg = (h: SearchResult) =>
+      h.mmrPick != null ? ` · mmr (#${h.mmrPick} · sim ${(h.mmrSim ?? 0).toFixed(2)})` : "";
     const row = (h: SearchResult) =>
-      `- rerank ${h.score.toFixed(2)} · rrf ${(h.rrf ?? 0).toFixed(3)} · rec (${(h.recency ?? 1).toFixed(2)} · seen ${ageLabel(h.timestamp)}) — ${srcLabel(h)}\n  ${h.content.replace(/\s+/g, " ").slice(0, 220)}`;
+      `- rerank ${h.score.toFixed(2)} · rrf ${(h.rrf ?? 0).toFixed(3)}${mmrSeg(h)} · rec (${(h.recency ?? 1).toFixed(2)} · seen ${ageLabel(h.timestamp)}) — ${srcLabel(h)}\n  ${h.content.replace(/\s+/g, " ").slice(0, 220)}`;
     const block = "<macrodata-recall>\n" + chunks.map(row).join("\n") + "\n</macrodata-recall>";
     const debugBlock = chunks.map(row).join("\n");
     // Sampled calibration prompt: on ~VERDICT_RATE of injections, ask the agent to

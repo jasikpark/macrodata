@@ -82,6 +82,22 @@ describe("mmrSelect", () => {
     for (const c of picked) expect(Number.isNaN(c.w)).toBe(false);
   });
 
+  test("greedy picks are stamped with pick order and maxSim; bypass path stamps nothing", () => {
+    const top = { ...cand("webclient host rename fails on save", 0.03), vector: [1, 0, 0] };
+    const dup = { ...cand("webclient host rename fails on submit", 0.028), vector: [1, 0, 0] };
+    const fresh = { ...cand("dnclient reconnect poll backoff", 0.02), vector: [0, 1, 0] };
+    const junk = { ...cand("webclient host save", 0.005), vector: [0.9, 0.44, 0] };
+    const picked = mmrSelect(slate(top, dup, fresh, junk), 2, 0.55);
+    expect(picked[0].mmr).toEqual({ pick: 1, maxSim: 0 });
+    expect(picked[1].mmr?.pick).toBe(2);
+    // fresh's vector is orthogonal to top's — its recorded penalty is ~0.
+    expect(picked[1].mmr?.maxSim).toBeCloseTo(0, 5);
+    // Selection must not mutate the caller's candidates (sim keys a map by identity).
+    expect(top.mmr).toBeUndefined();
+    // Bypass paths (slate <= k, lambda >= 1) return unstamped slices.
+    for (const c of mmrSelect(slate(top, fresh), 5, 0.55)) expect(c.mmr).toBeUndefined();
+  });
+
   test("selection order is preserved (not re-sorted by w afterwards)", () => {
     // With aggressive diversity, a low-w-but-novel candidate can be picked
     // second; the returned order must reflect pick order so downstream

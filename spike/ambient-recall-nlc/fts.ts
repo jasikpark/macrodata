@@ -118,6 +118,11 @@ export interface PoolCandidate {
   rec: number;
   w: number;
   vector?: number[];
+  // Stamped by mmrSelect on the greedy path only: pick = 1-based selection
+  // order; maxSim = the redundancy penalty the candidate carried when picked
+  // (0 for the first pick). Absent = MMR was bypassed (small slate or
+  // lambda >= 1), which the diagnostics surface deliberately.
+  mmr?: { pick: number; maxSim: number };
 }
 
 // Similarity leg of MMR: cosine over the index embeddings (Porrima's metric,
@@ -174,14 +179,17 @@ export function mmrSelect(slate: PoolCandidate[], k: number, lambda: number): Po
   // the picks so far. maxSim clamps at 0 (Porrima does the same): negative
   // cosine means "very diverse", which must not become a relevance bonus.
   const selected: PoolCandidate[] = [];
+  const pickSim: number[] = [];
   const remaining = [...slate];
   while (selected.length < k && remaining.length > 0) {
     if (selected.length === 0) {
       selected.push(remaining.shift()!);
+      pickSim.push(0);
       continue;
     }
     let bestIdx = 0;
     let bestScore = -Infinity;
+    let bestMaxSim = 0;
     for (let i = 0; i < remaining.length; i++) {
       const c = remaining[i];
       let maxSim = 0;
@@ -193,11 +201,15 @@ export function mmrSelect(slate: PoolCandidate[], k: number, lambda: number): Po
       if (score > bestScore) {
         bestScore = score;
         bestIdx = i;
+        bestMaxSim = maxSim;
       }
     }
     selected.push(remaining.splice(bestIdx, 1)[0]);
+    pickSim.push(bestMaxSim);
   }
-  return selected;
+  // Copies, stamped after the loop: `sim` keys the Jaccard token map by object
+  // identity, so the originals must flow through selection untouched.
+  return selected.map((c, i) => ({ ...c, mmr: { pick: i + 1, maxSim: pickSim[i] } }));
 }
 
 // Full pipeline (Porrima placement): vector + FTS recall -> RRF fuse ->
@@ -327,7 +339,7 @@ export async function pipelineSearch(
   // final. Stamp effective last_accessed so the age label shows the real age.
   const scores = await rerank(rerankQuery || query, candidates.map((c) => c.item.content));
   return candidates
-    .map((c, i) => ({ ...c.item, score: scores[i], rrf: c.rrf, recency: c.rec, timestamp: lastAccessed(c.item) }))
+    .map((c, i) => ({ ...c.item, score: scores[i], rrf: c.rrf, recency: c.rec, mmrPick: c.mmr?.pick, mmrSim: c.mmr?.maxSim, timestamp: lastAccessed(c.item) }))
     .filter((c) => c.score >= floor)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
