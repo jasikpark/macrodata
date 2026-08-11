@@ -34,6 +34,7 @@ export interface SearchResult {
   // Per-stage diagnostics (carried through for calibration; not used in ranking):
   rrf?: number; // RRF-fused recall score (vector+FTS), pre-recency, pre-rerank
   recency?: number; // recency decay factor (0-1) applied for candidate SELECTION only
+  wRank?: number; // 1-based rank in the pre-MMR w-sorted slate; wRank > pool size = MMR created this slot
   mmrPick?: number; // 1-based MMR selection order; absent = MMR bypassed (small slate / lambda>=1)
   mmrSim?: number; // redundancy penalty (max cosine/Jaccard vs earlier picks) at pick time; 0 for the first pick
 }

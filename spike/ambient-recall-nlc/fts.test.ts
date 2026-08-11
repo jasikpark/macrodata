@@ -128,6 +128,23 @@ describe("mmrSelect", () => {
     for (const c of mmrSelect(slate(top, fresh), 5, 0.55)) expect(c.mmr).toBeUndefined();
   });
 
+  test("wRank rides through selection and marks the displaced-in slot", () => {
+    // pipelineSearch stamps wRank on the sorted slate before mmrSelect; the
+    // greedy path's stamped copies must carry it. The novel-but-weak candidate
+    // that MMR admits shows wRank > k — the "MMR created this slot" signature
+    // the calibration A/B keys on.
+    const top = cand("webclient punycode decoder tooltip ariakit hostname", 0.030);
+    const dup = cand("webclient punycode decoder tooltip ariakit hostname component", 0.028);
+    const fresh = cand("dnclient reconnect poll adaptive backoff rpc deadline", 0.012);
+    const junk = cand("webclient punycode tooltip", 0.005);
+    const s = slate(top, dup, fresh, junk);
+    s.forEach((c, i) => { c.wRank = i + 1; });
+    const picked = mmrSelect(s, 2, 0.55);
+    expect(picked[0].wRank).toBe(1);
+    expect(picked[1].item.content).toBe(fresh.item.content);
+    expect(picked[1].wRank).toBe(3); // > k=2: plain top-2 would have cut it
+  });
+
   test("selection order is preserved (not re-sorted by w afterwards)", () => {
     // With aggressive diversity, a low-w-but-novel candidate can be picked
     // second; the returned order must reflect pick order so downstream

@@ -137,6 +137,12 @@ export interface PoolCandidate {
   rec: number;
   w: number;
   vector?: number[];
+  // 1-based rank in the w-sorted slate, stamped by pipelineSearch BEFORE MMR
+  // runs: the counterfactual "plain top-k by score" position. wRank > pool
+  // size means MMR created this candidate's rerank slot (it displaced a
+  // higher-w near-duplicate); without it, pick order alone can't distinguish
+  // a penalized-but-strong candidate from a genuinely displaced-in one.
+  wRank?: number;
   // Stamped by mmrSelect on the greedy path only: pick = 1-based selection
   // order; maxSim = the redundancy penalty the candidate carried when picked
   // (0 for the first pick). Absent = MMR was bypassed (small slate or
@@ -363,8 +369,9 @@ export async function pipelineSearch(
   const pool = envNum("MACRODATA_RECALL_RERANK_POOL", 20, 1);
   const lambda = envNum("MACRODATA_RECALL_MMR_LAMBDA", 0.55, 0);
   const slate = [...fused.values()]
-    .map((x) => { const rec = recency(lastAccessed(x.item)); return { item: x.item, rrf: x.rrf, rec, w: x.rrf * rec, vector: contentVec?.get(x.item.content) }; })
+    .map((x) => { const rec = recency(lastAccessed(x.item)); return { item: x.item, rrf: x.rrf, rec, w: x.rrf * rec, vector: contentVec?.get(x.item.content) } as PoolCandidate; })
     .sort((a, b) => b.w - a.w);
+  slate.forEach((c, i) => { c.wRank = i + 1; });
   const candidates = mmrSelect(slate, pool, lambda);
 
   // Rerank the pool; the PURE cross-encoder score is the final score. Carry the
@@ -373,7 +380,7 @@ export async function pipelineSearch(
   // final. Stamp effective last_accessed so the age label shows the real age.
   const scores = await rerank(rerankQuery || query, candidates.map((c) => c.item.content));
   return candidates
-    .map((c, i) => ({ ...c.item, score: scores[i], rrf: c.rrf, recency: c.rec, mmrPick: c.mmr?.pick, mmrSim: c.mmr?.maxSim, timestamp: lastAccessed(c.item) }))
+    .map((c, i) => ({ ...c.item, score: scores[i], rrf: c.rrf, recency: c.rec, wRank: c.wRank, mmrPick: c.mmr?.pick, mmrSim: c.mmr?.maxSim, timestamp: lastAccessed(c.item) }))
     .filter((c) => c.score >= floor)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);

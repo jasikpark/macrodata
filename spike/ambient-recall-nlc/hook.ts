@@ -209,6 +209,7 @@ async function main(): Promise<void> {
           rerank: Number(h.score.toFixed(3)),
           rrf: h.rrf != null ? Number(h.rrf.toFixed(4)) : null,
           recency: h.recency != null ? Number(h.recency.toFixed(3)) : null,
+          wRank: h.wRank ?? null,
           mmrPick: h.mmrPick ?? null,
           mmrSim: h.mmrSim != null ? Number(h.mmrSim.toFixed(3)) : null,
           ageDays: h.timestamp ? Math.round((Date.now() - Date.parse(h.timestamp)) / 86_400_000) : null,
@@ -249,8 +250,10 @@ async function main(): Promise<void> {
     // An absent stage value renders as "?" (unknown — e.g. a version-skewed
     // inbox), never as a fabricated 0/1 that reads as a measured score.
     const fmt = (v: number | undefined, digits: number) => (v != null ? v.toFixed(digits) : "?");
+    // w# = pre-MMR rank by retrieval+recency weight — the counterfactual
+    // plain-top-k position. w# above the pool size = MMR created this slot.
     const mmrSeg = (h: SearchResult) =>
-      h.mmrPick != null ? ` · mmr (#${h.mmrPick} · sim ${fmt(h.mmrSim, 2)})` : "";
+      h.mmrPick != null ? ` · mmr (#${h.mmrPick} · w#${h.wRank ?? "?"} · sim ${fmt(h.mmrSim, 2)})` : "";
     // Raw content can quote the literal closing tag (the corpus holds web pages
     // and transcripts); escape it so a hit can't terminate the model-facing
     // block early and pass itself off as post-recall context.
