@@ -35,6 +35,12 @@ const DIR = import.meta.dir;
 const FLOOR = Number(process.env.MACRODATA_RECALL_FLOOR ?? 0.5);
 const LIMIT = Number(process.env.MACRODATA_RECALL_LIMIT ?? 3);
 const REQ_RE = /^\.recall-request-(.+)\.json$/;
+const SWEEP_DEBOUNCE_MS = 50;
+const SWEEP_INTERVAL_MS = 5_000;
+// The protocol is latest-wins, so a request this old belongs to a turn the agent
+// has moved past (or a session that ended): serving it spends a ~5s rerank to
+// write an inbox nobody will ever drain.
+const MAX_REQ_AGE_MS = Number(process.env.MACRODATA_RECALL_MAX_REQ_AGE_MS ?? 10 * 60_000);
 
 // NDJSON to stdout (the supervisor redirects it to .worker.log), so the log is
 // jq-able and every record carries its own timestamp — the log is the primary
@@ -154,6 +160,13 @@ function ingest(sid: string): void {
     ingestLog.warn("request dropped: search missing or under 8 chars", { sid, searchChars: req.search?.length ?? 0 });
     return;
   }
+  const ageMs = req.ts ? Date.now() - Date.parse(req.ts) : 0;
+  if (ageMs > MAX_REQ_AGE_MS) {
+    // Consumed above, so a stale request costs one line and never re-enters the
+    // sweep — info, not warning: dropping it is the correct outcome.
+    ingestLog.info("request dropped: stale", { sid, ageMs });
+    return;
+  }
   pending.set(sid, req);
   // A queued request that never reaches its start line is the drain-wedge
   // signature (an earlier pipeline's await never settled, so `running` never
@@ -166,13 +179,26 @@ function ingest(sid: string): void {
 // until recall actually fires; the mailbox protocol already tolerates a late
 // first hit. Do not add eager preload here.
 // Initial sweep (pick up requests written before the worker started), then watch.
-for (const f of readdirSync(DIR)) {
-  const m = f.match(REQ_RE);
-  if (m) ingest(m[1]);
+function sweep(): void {
+  for (const f of readdirSync(DIR)) {
+    const m = f.match(REQ_RE);
+    if (m) ingest(m[1]);
+  }
 }
-watch(DIR, (_event, filename) => {
-  if (!filename) return;
-  const m = String(filename).match(REQ_RE);
-  if (m) ingest(m[1]);
+sweep();
+// Sweep on ANY event in the dir and ignore the reported filename. The hook
+// publishes atomically (write `<path>.<pid>.tmp`, rename into place), and Bun
+// 1.3.14's fs.watch on macOS reports only the tmp name for that pair — the final
+// name is never delivered, so a filename matched against REQ_RE never fires for a
+// real request. Measured 2026-08-13: fresh and 250-entry dirs, same- and
+// cross-process writers, fresh and overwritten targets, 0/6 final-name events;
+// the tmp write is the only reliable signal that a request arrived.
+let pendingSweep: ReturnType<typeof setTimeout> | null = null;
+watch(DIR, () => {
+  if (pendingSweep) return;
+  pendingSweep = setTimeout(() => { pendingSweep = null; sweep(); }, SWEEP_DEBOUNCE_MS);
 });
+// Backstop for a dropped or coalesced FSEvents batch, which would otherwise
+// leave a request unread until the next process start.
+setInterval(sweep, SWEEP_INTERVAL_MS);
 workerLog.info("watching for recall requests", { dir: DIR, floor: FLOOR, limit: LIMIT });
