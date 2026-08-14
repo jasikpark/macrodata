@@ -18,5 +18,5 @@ already serves that state root. A claim whose process is gone is taken over rath
 than obeyed — the hook stops a stale-version worker with SIGKILL, which never gets to
 clean up after itself. A reboot restarts the PID space from the bottom, where a
 surviving claim can name an unrelated live process and mute recall for good, so the
-hook clears any claim whose holder is not one of the workers `ps` just reported for
-that root.
+hook reads the holder's own command line and clears the claim unless that process is
+itself a worker.

@@ -76,13 +76,25 @@ kill_verified() {
 }
 
 # Reap a space-separated pid list; echoes back the ones still alive afterward.
+# Anything non-numeric is dropped rather than passed on: the list is built from
+# `ps` output, and an unquoted word reaching `kill` would first be glob-expanded
+# against the current directory.
 reap() {
     local pid survivors=""
     # shellcheck disable=SC2086
     for pid in $1; do
+        case "$pid" in ''|*[!0-9]*) continue ;; esac
         kill_verified "$pid" || survivors="$survivors $pid"
     done
     printf '%s' "$survivors"
+}
+
+# An announcement is injected into the model's context, so it arrives tagged like
+# every other injected block. Bare prose there is indistinguishable from something
+# the user wrote, which is the one reading that makes a worker warning actionable
+# by the wrong party.
+recall_announce() {
+    printf '<macrodata-recall-status>\n%s\n</macrodata-recall-status>\n' "$1"
 }
 
 is_daemon_running() {
@@ -155,8 +167,10 @@ start_daemon() {
 
     local BUN="bun"
     mkdir -p "$STATE_ROOT"
-    # Daemon writes its own PID file; we don't write it here.
-    MACRODATA_ROOT="$STATE_ROOT" nohup "$BUN" run "$DAEMON" >> "$LOGFILE" 2>&1 &
+    # Daemon writes its own PID file; we don't write it here. stdin goes to
+    # /dev/null because nohup redirects only stdout and stderr, and this process
+    # outlives the hook whose stdin is the harness's session pipe.
+    MACRODATA_ROOT="$STATE_ROOT" nohup "$BUN" run "$DAEMON" </dev/null >> "$LOGFILE" 2>&1 &
 
     # Wait briefly for the daemon to write its PID file (up to 2 seconds).
     local attempts=0
@@ -227,39 +241,72 @@ ensure_recall_worker() {
     if ! mkdir -p "$RECALL_LOGDIR" 2>/dev/null; then
         # Nothing else reports this, and the symptom is otherwise indistinguishable
         # from "recall found nothing."
-        [ "$voice" = announce ] && echo "macrodata-recall: cannot create $RECALL_LOGDIR; ambient recall is NOT running"
+        [ "$voice" = announce ] && recall_announce "macrodata-recall: cannot create $RECALL_LOGDIR; ambient recall is NOT running"
         return 0
     fi
 
-    # Snapshot first, filter second: a `ps | grep` pipeline can match its own grep,
-    # but a grep that starts after ps has exited cannot appear in ps's output.
-    # The sentinel and root are matched as one adjacent pair so that a checkout
-    # living inside some other root can't be mistaken for a worker serving it.
+    # Matching happens in-shell, with no `grep` in the pipeline, because a grep
+    # for this pattern carries the pattern in its OWN argv: a second session's
+    # grep, alive for ~10ms inside the ~85ms this snapshot takes, lands in the
+    # table and reads back as a worker. Filtering after `ps` exits only rules out
+    # our own grep, never anyone else's.
+    #
+    # The sentinel-root pair must also END the command. It is the last argv the
+    # spawn passes, and an unanchored match would let root `/x/mem` claim, and
+    # then reap, the worker serving `/x/mem-work`.
     local snapshot pid cmd mine="" stale="" foreign="" survived
-    snapshot="$(ps -ww -eo pid=,command= 2>/dev/null || true)"
+    # Only this user's processes are candidates: a state root lives in one home
+    # directory, so a worker for it always belongs to its owner, and everything
+    # else on a shared machine is something this pass could classify but never
+    # signal. `-U` selects by real uid on both BSD and GNU ps, where `-u` means a
+    # format shorthand to one of them.
+    #
+    # An unreadable process table is not an empty one. Treating a failed `ps` as
+    # "nothing is running" would clear a live claim and spawn a competitor on
+    # every prompt, none of them visible to the next pass either.
+    if ! snapshot="$(ps -ww -U "$(id -u)" -o pid=,command= 2>/dev/null)" || [ -z "$snapshot" ]; then
+        recall_log "worker: ps returned nothing -> skipping this pass"
+        return 0
+    fi
     while read -r pid cmd; do
+        case "$pid" in ''|*[!0-9]*) continue ;; esac
+        case "$cmd" in *"$RECALL_SENTINEL $STATE_ROOT") ;; *) continue ;; esac
         case "$cmd" in
             *"$RECALL_WORKER"*) mine="$mine $pid" ;;
             */plugins/cache/*src/recall/worker.ts*) stale="$stale $pid" ;;
-            *) foreign="$foreign $pid" ;;
+            # Positive evidence only. A catch-all here would classify any process
+            # that merely mentions the sentinel — a wrapper shell, an editor, a
+            # `ps` pipeline of our own — as a hand-started worker, and the branch
+            # below then declines to start the real one.
+            *worker.ts*) foreign="$foreign $pid" ;;
         esac
-    done < <(printf '%s\n' "$snapshot" | grep -F -- "$RECALL_SENTINEL $STATE_ROOT")
+    done <<< "$snapshot"
 
     # The worker claims worker.pid so a burst of spawns settles on one survivor,
     # and SIGKILL — how a stale version is reaped — leaves that claim behind. A
     # PID outliving its file is harmless (the next worker takes a dead claim
     # over), but a REBOOT restarts the PID space from the bottom, and a claim
     # naming some unrelated system process reads as live forever: every worker
-    # stands down and recall is dead with nothing to see. `ps` already knows
-    # which PIDs are workers for this root, so a claim held by a PID that is not
-    # one of them is not a claim. Safe against the fresh-spawn window because a
-    # worker appears in `ps` when bun execs, well before it writes the file.
-    local held
+    # stands down and recall is dead with nothing to see.
+    #
+    # The holder is re-read here rather than looked up in the snapshot above.
+    # Asking about one PID now has no staleness window worth the name, while
+    # snapshot membership answers a question about the past — and every way a
+    # live worker can be absent from that snapshot ends with this block deleting
+    # a healthy mutex and the spawn below racing a competitor into the hole.
+    local held holder
     if [ -f "$RECALL_PIDFILE" ] && held="$(tr -d '[:space:]' < "$RECALL_PIDFILE" 2>/dev/null)" && [ -n "$held" ]; then
-        case " $mine $stale $foreign " in
-            *" $held "*) ;;
-            *) recall_log "worker: claim held by pid $held, which is no worker of ours -> clear"
-               rm -f "$RECALL_PIDFILE" ;;
+        case "$held" in
+            *[!0-9]*)
+                recall_log "worker: claim file holds a non-pid -> clear"
+                rm -f "$RECALL_PIDFILE" ;;
+            *)
+                holder="$(ps -ww -p "$held" -o command= 2>/dev/null || true)"
+                case "$holder" in
+                    *"$RECALL_SENTINEL"*) ;;
+                    *) recall_log "worker: claim held by pid $held, not a worker -> clear"
+                       rm -f "$RECALL_PIDFILE" ;;
+                esac ;;
         esac
     fi
 
@@ -272,12 +319,17 @@ ensure_recall_worker() {
     fi
 
     if [ -n "$foreign" ]; then
-        recall_log "worker: hand-started worker(s)$foreign up -> left alone; $RECALL_WORKER is not serving recall"
         # Announced rather than passed over in silence: that worker, not the
         # installed release, is answering recall, and from the outside a worker
         # serving code the release does not contain looks exactly like a healthy
-        # one.
-        [ "$voice" = announce ] && echo "macrodata-recall: recall is served by a hand-started worker (pid${foreign}), not the installed plugin"
+        # one. Both the log line and the echo are session-start only — a working
+        # dev checkout is a steady state, and a line per prompt would bury the
+        # entries that record an actual decision under the one case guaranteed to
+        # repeat on every message for days.
+        if [ "$voice" = announce ]; then
+            recall_log "worker: hand-started worker(s)$foreign up -> left alone; $RECALL_WORKER is not serving recall"
+            recall_announce "macrodata-recall: recall is served by a hand-started worker (pid${foreign}), not the installed plugin"
+        fi
         return 0
     fi
 
@@ -297,8 +349,21 @@ ensure_recall_worker() {
         return 0
     fi
 
+    # A missing source is otherwise a silent per-prompt loop: bun exits with a
+    # stack trace into worker.log while this function logs a start that never
+    # happened. Reachable mid-upgrade, when the previous version's cache dir is
+    # removed under a session still running its code.
+    if [ ! -f "$RECALL_WORKER" ]; then
+        recall_log "worker: source missing at $RECALL_WORKER -> not starting"
+        [ "$voice" = announce ] && recall_announce "macrodata-recall: worker source is missing; ambient recall is NOT running"
+        return 0
+    fi
+
+    # stdin is closed explicitly: nohup redirects stdout and stderr but leaves
+    # stdin alone, so the worker would hold the harness's session pipe open for
+    # its whole life — and prompt-submit reads that same pipe after this returns.
     recall_log "worker: down -> starting"
-    ( cd "$PLUGIN_ROOT" && nohup bun run "$RECALL_WORKER" "$RECALL_SENTINEL" "$STATE_ROOT" >> "$RECALL_LOGDIR/worker.log" 2>&1 & )
+    ( cd "$PLUGIN_ROOT" && nohup bun run "$RECALL_WORKER" "$RECALL_SENTINEL" "$STATE_ROOT" </dev/null >> "$RECALL_LOGDIR/worker.log" 2>&1 & )
 }
 
 inject_pending_context() {
