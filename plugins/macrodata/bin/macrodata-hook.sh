@@ -56,6 +56,10 @@ IDENTITY="$STATE_ROOT/state/identity.md"
 # beside the source: the plugin installs into a per-version cache dir, so a
 # source-relative log would be orphaned by every release.
 RECALL_LOGDIR="$STATE_ROOT/.recall"
+# Written by the worker itself (getWorkerPidPath in src/recall/config.ts), which
+# claims it exclusively so a burst of spawns settles on one survivor. Liveness is
+# still decided by `ps` here, never by this file.
+RECALL_PIDFILE="$RECALL_LOGDIR/worker.pid"
 
 # SIGTERM, then SIGKILL, then confirm. Nonzero if the process outlived both: an
 # unverified reap logs a success while the old process keeps doing its job.
@@ -240,6 +244,24 @@ ensure_recall_worker() {
             *) foreign="$foreign $pid" ;;
         esac
     done < <(printf '%s\n' "$snapshot" | grep -F -- "$RECALL_SENTINEL $STATE_ROOT")
+
+    # The worker claims worker.pid so a burst of spawns settles on one survivor,
+    # and SIGKILL — how a stale version is reaped — leaves that claim behind. A
+    # PID outliving its file is harmless (the next worker takes a dead claim
+    # over), but a REBOOT restarts the PID space from the bottom, and a claim
+    # naming some unrelated system process reads as live forever: every worker
+    # stands down and recall is dead with nothing to see. `ps` already knows
+    # which PIDs are workers for this root, so a claim held by a PID that is not
+    # one of them is not a claim. Safe against the fresh-spawn window because a
+    # worker appears in `ps` when bun execs, well before it writes the file.
+    local held
+    if [ -f "$RECALL_PIDFILE" ] && held="$(tr -d '[:space:]' < "$RECALL_PIDFILE" 2>/dev/null)" && [ -n "$held" ]; then
+        case " $mine $stale $foreign " in
+            *" $held "*) ;;
+            *) recall_log "worker: claim held by pid $held, which is no worker of ours -> clear"
+               rm -f "$RECALL_PIDFILE" ;;
+        esac
+    fi
 
     # A worker from another plugin version runs code no live session asked for, so
     # it goes regardless of what else is up.

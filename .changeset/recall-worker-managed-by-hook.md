@@ -16,4 +16,7 @@ worker-less window and spawn into it together, so the worker now claims
 `.recall/worker.pid` before it can load a model and stands down if another process
 already serves that state root. A claim whose process is gone is taken over rather
 than obeyed — the hook stops a stale-version worker with SIGKILL, which never gets to
-clean up after itself.
+clean up after itself. A reboot restarts the PID space from the bottom, where a
+surviving claim can name an unrelated live process and mute recall for good, so the
+hook clears any claim whose holder is not one of the workers `ps` just reported for
+that root.

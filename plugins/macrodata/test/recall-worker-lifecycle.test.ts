@@ -15,7 +15,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { spawnSync } from "child_process";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import {
   createTestContext,
@@ -48,6 +48,15 @@ async function waitGone(pid: number, ms = 6000): Promise<boolean> {
   return !alive(pid);
 }
 
+async function waitFor(pred: () => boolean, ms = 10000): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (pred()) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return pred();
+}
+
 async function waitForWorker(root: string, ms = 10000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
@@ -78,6 +87,16 @@ const runWorkerPass = (root: string) => runHook(root, "recall-worker");
 function recallLog(root: string): string {
   const f = join(root, ".recall", "supervisor.log");
   return existsSync(f) ? readFileSync(f, "utf-8") : "";
+}
+
+/** The worker's own single-instance claim, which the hook only ever invalidates. */
+const claimPath = (root: string) => join(root, ".recall", "worker.pid");
+function readClaim(root: string): string {
+  return existsSync(claimPath(root)) ? readFileSync(claimPath(root), "utf-8").trim() : "";
+}
+function seedClaim(root: string, pid: number) {
+  mkdirSync(join(root, ".recall"), { recursive: true });
+  writeFileSync(claimPath(root), `${pid}\n`);
 }
 
 describe("recall worker version lifecycle", () => {
@@ -155,6 +174,36 @@ describe("recall worker version lifecycle", () => {
     expect(await waitGone(drop as number)).toBe(true);
     expect(alive(keep as number)).toBe(true);
     expect(recallLog(ctx.root)).toContain(`keep ${keep}`);
+  });
+
+  // The worker stands down when another process holds the claim, so a claim the
+  // hook fails to invalidate is a permanent, silent recall outage rather than a
+  // noisy one. Both directions are pinned: clearing too eagerly costs the
+  // single-instance guarantee, clearing too rarely costs recall entirely.
+  test("clears a claim held by a non-worker, so a PID reused after a reboot can't mute recall", async () => {
+    // The test process: alive, and definitively not a worker for this root —
+    // the same shape as a claim that outlived a reboot onto a recycled PID.
+    seedClaim(ctx.root, process.pid);
+
+    runWorkerPass(ctx.root);
+
+    const fresh = await waitForWorker(ctx.root);
+    expect(fresh.length).toBe(1);
+    // Taking the slot is only possible because the hook cleared the impostor
+    // first; otherwise the worker reads a live holder and exits.
+    expect(await waitFor(() => readClaim(ctx.root) === String(fresh[0]?.pid))).toBe(true);
+    expect(recallLog(ctx.root)).toContain(`claim held by pid ${process.pid}`);
+    // Long enough that a worker which stands down reports as a failed assertion
+    // rather than as a test timeout, which reads like flake.
+  }, 30000);
+
+  test("leaves a claim held by a live worker alone", async () => {
+    const dev = await spawnFakeWorker(devCmd(ctx.root), ctx.root);
+    seedClaim(ctx.root, dev);
+
+    runWorkerPass(ctx.root);
+
+    expect(readClaim(ctx.root)).toBe(String(dev));
   });
 
   test("starts a worker when none is running", async () => {
