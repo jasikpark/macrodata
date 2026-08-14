@@ -181,6 +181,9 @@ signal_daemon_reload() {
     esac
 }
 
+# supervisor.log keeps its name though recall-supervisor.sh is gone: this is the
+# primary forensic record for recall-liveness incidents, and a rename would split
+# the history across two files at the exact moment someone is reading back.
 recall_log() { echo "[$(date '+%F %T')] $*" >> "$RECALL_LOGDIR/supervisor.log"; }
 
 # Converge on EXACTLY ONE running ambient-recall worker, then return. The worker

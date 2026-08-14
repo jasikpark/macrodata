@@ -10,3 +10,10 @@ a session happened to open, and until then a freshly installed release kept serv
 recall from the old cached code. The daemon already converged on every prompt; the
 worker now does too, through the same verified-kill path. Per-prompt passes stay silent
 unless they act, so neither the model's context nor the log gets a line per message.
+
+Converging on every prompt also means concurrent sessions can observe the same
+worker-less window and spawn into it together, so the worker now claims
+`.recall/worker.pid` before it can load a model and stands down if another process
+already serves that state root. A claim whose process is gone is taken over rather
+than obeyed — the hook stops a stale-version worker with SIGKILL, which never gets to
+clean up after itself.
