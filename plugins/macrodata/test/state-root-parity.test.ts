@@ -37,6 +37,13 @@ function bothRoots(extraEnv: Record<string, string> = {}) {
 
   const sh = spawnSync("bash", [HOOK, "print-root"], { encoding: "utf-8", env });
   const ts = spawnSync("bun", ["run", PRINT_ROOT], { encoding: "utf-8", env });
+  // A resolver that died prints nothing, and two dead resolvers agree on nothing
+  // perfectly. Pin the exit status so a crash reads as a crash rather than parity.
+  expect({ sh: sh.status, ts: ts.status, err: (sh.stderr ?? "") + (ts.stderr ?? "") }).toEqual({
+    sh: 0,
+    ts: 0,
+    err: "",
+  });
   return { sh: (sh.stdout ?? "").trim(), ts: (ts.stdout ?? "").trim() };
 }
 

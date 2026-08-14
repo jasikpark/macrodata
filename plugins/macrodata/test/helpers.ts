@@ -211,11 +211,17 @@ export function addReminder(
 export const RECALL_SENTINEL = "--macrodata-recall-worker";
 export const RECALL_WORKER = join(dirname(import.meta.dir), "src", "recall", "worker.ts");
 
-/** Every process whose argv claims to be a recall worker for `root`. */
+/**
+ * Every process whose argv claims to be a recall worker for `root`.
+ *
+ * Matched at the END of the command, exactly as macrodata-hook.sh does: the root
+ * is the last argv the spawn passes, and a substring match would let `/x/mem`
+ * count the worker serving `/x/mem-work` as its own.
+ */
 export function recallWorkersFor(root: string): { pid: number; cmd: string }[] {
   const out = execSync("ps -ww -eo pid=,command=", { encoding: "utf-8" });
   return out.split("\n").flatMap((line) => {
-    if (!line.includes(`${RECALL_SENTINEL} ${root}`)) return [];
+    if (!line.endsWith(`${RECALL_SENTINEL} ${root}`)) return [];
     const m = line.trim().match(/^(\d+)\s+(.*)$/);
     return m ? [{ pid: Number(m[1]), cmd: m[2] }] : [];
   });
@@ -231,6 +237,11 @@ export function recallWorkersFor(root: string): { pid: number; cmd: string }[] {
  * test. A child would linger as a zombie until Bun reaps it, `kill -0` reports a
  * zombie as alive, and a blocking spawnSync stops Bun from reaping — so an owned
  * fake makes a successful kill look like a failed one.
+ *
+ * `body` arrives on stdin rather than as arguments, because `exec -a` only sets
+ * argv[0]: any argument would land after the state root and cost the fake the one
+ * property that identifies it, since both the hook and `recallWorkersFor` require
+ * the root to be the LAST thing in the command.
  */
 export async function spawnFakeRecallWorker(
   fakeCmd: string,
@@ -238,7 +249,10 @@ export async function spawnFakeRecallWorker(
   body = "sleep 30"
 ): Promise<number> {
   const before = new Set(recallWorkersFor(root).map((w) => w.pid));
-  spawnSync("bash", ["-c", `(exec -a "${fakeCmd}" ${body}) &`], { stdio: "ignore" });
+  const script = JSON.stringify(body);
+  spawnSync("bash", ["-c", `(printf '%s\\n' ${script} | exec -a "${fakeCmd}" bash) &`], {
+    stdio: "ignore",
+  });
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const found = recallWorkersFor(root).filter((w) => !before.has(w.pid));
@@ -266,6 +280,32 @@ export function killRecallWorkers(root: string) {
   for (const w of recallWorkersFor(root)) {
     try {
       process.kill(w.pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+  sweepProcessesNaming(root);
+}
+
+/**
+ * SIGKILL every process that mentions `root` anywhere in its command, whatever
+ * shape its argv takes.
+ *
+ * Deliberately a coarser predicate than `recallWorkersFor`: a cleanup that shares
+ * its matcher with the spawns it cleans up leaks every process the matcher gets
+ * wrong, and leaks it silently, since the same blind spot hides the survivors from
+ * the assertions too. A worker holds the embed and rerank models, so a leaked one
+ * costs about a gigabyte until the machine reboots. Safe only because callers own
+ * a freshly created temp root that nothing else on the machine names.
+ */
+export function sweepProcessesNaming(root: string) {
+  const out = execSync("ps -ww -eo pid=,command=", { encoding: "utf-8" });
+  for (const line of out.split("\n")) {
+    if (!line.includes(root)) continue;
+    const pid = Number(line.trim().match(/^(\d+)\s/)?.[1]);
+    if (!pid || pid === process.pid || pid === process.ppid) continue;
+    try {
+      process.kill(pid, "SIGKILL");
     } catch {
       /* already gone */
     }

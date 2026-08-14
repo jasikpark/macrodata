@@ -24,7 +24,15 @@ const WORKER = join(PLUGIN_ROOT, "src", "recall", "worker.ts");
 let root: string;
 let spawned: ChildProcess[] = [];
 
-/** A worker exactly as the hook starts one, argv sentinel included. */
+/**
+ * A worker exactly as the hook starts one, argv sentinel included.
+ *
+ * `MACRODATA_ROOT` is the one deliberate difference: the hook passes the root as
+ * argv only, as a `ps` label, and lets the worker resolve its own root — which
+ * here would be whichever store this machine really uses, so the test would claim
+ * the slot of the worker serving it. The argv root is pinned to the same value so
+ * the label cannot drift from the store under test.
+ */
 function startWorker(): ChildProcess {
   const p = spawn("bun", ["run", WORKER, "--macrodata-recall-worker", root], {
     cwd: PLUGIN_ROOT,

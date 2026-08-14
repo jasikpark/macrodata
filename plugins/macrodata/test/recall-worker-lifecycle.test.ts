@@ -15,7 +15,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { spawnSync } from "child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import {
   createTestContext,
@@ -67,9 +67,15 @@ async function waitForWorker(root: string, ms = 10000) {
   return workersFor(root).filter((w) => w.cmd.includes(WORKER));
 }
 
-/** A fake worker that traps SIGTERM: only the SIGKILL escalation can stop it. */
+/**
+ * A fake worker that traps SIGTERM: only the SIGKILL escalation can stop it.
+ *
+ * The trap must be set by the process whose pid this returns, not by a child of
+ * it — a nested shell would take the trap out of the signal's path and leave a
+ * wedge that dies on the first SIGTERM, which is the one thing it must not do.
+ */
 function spawnWedgedWorker(fakeCmd: string, root: string): Promise<number> {
-  return spawnFakeWorker(fakeCmd, root, `bash -c 'trap "" TERM; while :; do sleep 1; done'`);
+  return spawnFakeWorker(fakeCmd, root, `trap "" TERM; while :; do sleep 1; done`);
 }
 
 function runHook(root: string, arg: string) {
@@ -145,6 +151,12 @@ describe("recall worker version lifecycle", () => {
   test("escalates to SIGKILL for a stale worker that ignores SIGTERM", async () => {
     const wedge = await spawnWedgedWorker(staleCmd(ctx.root), ctx.root);
 
+    // Prove the wedge is wedged first. kill_verified logs nothing when it
+    // escalates, so a fake that quietly answers SIGTERM would satisfy every
+    // assertion below while testing none of the escalation.
+    process.kill(wedge, "SIGTERM");
+    expect(await waitFor(() => !alive(wedge), 500)).toBe(false);
+
     runWorkerPass(ctx.root);
 
     expect(await waitGone(wedge)).toBe(true);
@@ -175,6 +187,28 @@ describe("recall worker version lifecycle", () => {
     expect(alive(keep as number)).toBe(true);
     expect(recallLog(ctx.root)).toContain(`keep ${keep}`);
   });
+
+  // Sentinel and root are matched at the END of the command, because every state
+  // root is a prefix of its own siblings: under a substring match the worker
+  // serving `<root>-work` reads as this root's own, so a pass would skip the spawn
+  // it owes and, on a version mismatch, reap a worker belonging to another store.
+  test("ignores the worker of a root this one is only a prefix of", async () => {
+    const sibling = `${ctx.root}-work`;
+    mkdirSync(sibling, { recursive: true });
+    const neighbor = await spawnFakeWorker(mineCmd(sibling), sibling);
+
+    try {
+      runWorkerPass(ctx.root);
+
+      const fresh = await waitForWorker(ctx.root);
+      expect(fresh.length).toBe(1);
+      expect(fresh[0]?.pid).not.toBe(neighbor);
+      expect(alive(neighbor)).toBe(true);
+    } finally {
+      killRecallWorkers(sibling);
+      rmSync(sibling, { recursive: true, force: true });
+    }
+  }, 30000);
 
   // The worker stands down when another process holds the claim, so a claim the
   // hook fails to invalidate is a permanent, silent recall outage rather than a
