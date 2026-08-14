@@ -4,9 +4,10 @@
  * Provides isolated test environments with temp directories
  */
 
+import { execSync, spawnSync } from "child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 
 export interface TestContext {
   /** Root directory for this test (set as MACRODATA_ROOT) */
@@ -204,4 +205,69 @@ export function addReminder(
     join(ctx.remindersDir, `${id}.json`),
     JSON.stringify(reminder, null, 2)
   );
+}
+
+/** Path of the recall worker macrodata-hook.sh would spawn, and its ps marker. */
+export const RECALL_SENTINEL = "--macrodata-recall-worker";
+export const RECALL_WORKER = join(dirname(import.meta.dir), "src", "recall", "worker.ts");
+
+/** Every process whose argv claims to be a recall worker for `root`. */
+export function recallWorkersFor(root: string): { pid: number; cmd: string }[] {
+  const out = execSync("ps -ww -eo pid=,command=", { encoding: "utf-8" });
+  return out.split("\n").flatMap((line) => {
+    if (!line.includes(`${RECALL_SENTINEL} ${root}`)) return [];
+    const m = line.trim().match(/^(\d+)\s+(.*)$/);
+    return m ? [{ pid: Number(m[1]), cmd: m[2] }] : [];
+  });
+}
+
+/**
+ * A long-lived process whose argv is `fakeCmd` — `exec -a` sets argv[0], which is
+ * what `ps -o command=` reports, so macrodata-hook.sh classifies it by that
+ * spoofed source path without a real worker ever starting.
+ *
+ * Backgrounded inside a shell that then exits, so the fake is an orphan like a
+ * real worker (whose spawning hook shell is long gone) rather than a child of the
+ * test. A child would linger as a zombie until Bun reaps it, `kill -0` reports a
+ * zombie as alive, and a blocking spawnSync stops Bun from reaping — so an owned
+ * fake makes a successful kill look like a failed one.
+ */
+export async function spawnFakeRecallWorker(
+  fakeCmd: string,
+  root: string,
+  body = "sleep 30"
+): Promise<number> {
+  const before = new Set(recallWorkersFor(root).map((w) => w.pid));
+  spawnSync("bash", ["-c", `(exec -a "${fakeCmd}" ${body}) &`], { stdio: "ignore" });
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const found = recallWorkersFor(root).filter((w) => !before.has(w.pid));
+    if (found.length === 1) return found[0]?.pid as number;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`fake worker never appeared in ps: ${fakeCmd}`);
+}
+
+/**
+ * Stand a fake worker of THIS version in front of the hook, so its per-prompt
+ * convergence pass finds one up and returns without spawning. Suites that test
+ * something other than worker supervision want this: a real spawn loads the embed
+ * and rerank models, and the hook runs on every event they exercise.
+ */
+export function seedHealthyRecallWorker(ctx: TestContext): Promise<number> {
+  return spawnFakeRecallWorker(
+    `bun run ${RECALL_WORKER} ${RECALL_SENTINEL} ${ctx.root}`,
+    ctx.root
+  );
+}
+
+/** SIGKILL anything claiming `root`, fake or real. Unique roots keep this local. */
+export function killRecallWorkers(root: string) {
+  for (const w of recallWorkersFor(root)) {
+    try {
+      process.kill(w.pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
 }
