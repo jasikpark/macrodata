@@ -20,17 +20,16 @@
 #   3. anywhere else (a dev checkout)  -> a human started it deliberately, and
 #      SessionStart fires on resume and compact as well as startup, so reaping
 #      it would kill a debug worker mid-session. Leave it, spawn no competitor.
-# Case 3 is announced instead of passed over in silence: that worker, not the
-# installed release, is answering recall, and from the outside a worker serving
-# code the release does not contain looks exactly like a healthy one.
+# Case 3 announces itself on stdout: that worker, not the installed release, is
+# answering recall, and from the outside a worker serving code the release does
+# not contain looks exactly like a healthy one.
 #
 # Spawned directly via nohup (no shell wrapper) so one logical process = one PID,
 # which keeps the reap honest. Case 2 is reaped whole; if case 1 somehow has
 # several, the lowest PID stays and the rest go — one source path means
-# byte-identical code, so the choice among them is arbitrary. Kills are verified
-# and escalated, because a reap that only *sends* SIGTERM logs a success while
-# the old worker keeps draining the mailbox. Detached procs persist after this
-# script + the session exit.
+# byte-identical code, so the choice among them is arbitrary. Detached procs
+# persist after this script + the session exit.
+#
 # Logs go under the state root's .recall/ beside the rest of the runtime state,
 # NOT beside the source: the plugin installs into a per-version cache dir, so a
 # source-relative log would be orphaned by every release. Silent on stdout while
@@ -58,8 +57,8 @@ if ! mkdir -p "$LOGDIR" 2>/dev/null; then
 fi
 log() { echo "[$(date '+%F %T')] $*" >> "$LOGDIR/supervisor.log"; }
 
-# SIGTERM, then SIGKILL, then confirm. Nonzero if the process outlived both, so
-# no caller can report a reap it did not actually get.
+# SIGTERM, then SIGKILL, then confirm. Nonzero if the process outlived both: an
+# unverified reap logs a success while the old worker keeps draining the mailbox.
 kill_verified() {
   local pid=$1 n=0
   kill "$pid" 2>/dev/null
