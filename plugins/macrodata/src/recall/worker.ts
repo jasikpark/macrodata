@@ -75,8 +75,14 @@ const workerLog = getLogger(["recall", "worker"]);   // process lifecycle
 const ingestLog = getLogger(["recall", "ingest"]);   // mailbox protocol: watch, consume, queue
 const pipelineLog = getLogger(["recall", "pipeline"]); // the rerank run itself
 
+const errnoOf = (e: unknown): string =>
+  typeof e === "object" && e !== null && "code" in e ? String((e as { code: unknown }).code) : "";
+
+// EPERM means the process exists and belongs to someone else — alive, and the
+// one answer a mutex must never round down to "gone", since that steals a claim
+// from a process still holding it.
 const alive = (pid: number): boolean => {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try { process.kill(pid, 0); return true; } catch (e) { return errnoOf(e) === "EPERM"; }
 };
 
 /**
@@ -99,7 +105,16 @@ function claimWorkerSlot(): void {
     try {
       writeFileSync(pidPath, `${process.pid}\n`, { flag: "wx" });
       return;
-    } catch {
+    } catch (e) {
+      // Only EEXIST means "someone else got here first". A permission or space
+      // failure reaching the contention path below would end at the warn at the
+      // bottom, and every session on this machine would then start a worker of
+      // its own — the mutex silently gone at exactly the moment the state root
+      // is already unwell.
+      if (errnoOf(e) !== "EEXIST") {
+        workerLog.error("cannot write the worker slot, exiting", { pidPath, err: errnoOf(e) });
+        process.exit(1);
+      }
       let holder = 0;
       // Gone between the failed create and this read — another loser cleared a
       // stale claim, so retry into the race it just opened.
