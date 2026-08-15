@@ -102,4 +102,23 @@ describe("state root: bash ladder matches getStateRoot()", () => {
     expect(sh).toBe(join(home, ".config", "macrodata"));
     expect(ts).toBe(sh);
   });
+
+  // A root that isn't a string is the rung where the two resolvers diverge for
+  // free: `jq -r` renders any JSON value as text, so shell would take `123` as a
+  // path, while TypeScript hands the same value to join() and throws — a hook
+  // crash on one side and a wrong root on the other, from one typo.
+  for (const [label, value] of [
+    ["a number", 123],
+    ["a boolean", true],
+    ["an object", { path: "/nope" }],
+    ["an array", ["/nope"]],
+    ["null", null],
+  ] as const) {
+    test(`a root that is ${label} falls back`, () => {
+      writeConfig(JSON.stringify({ root: value }));
+      const { sh, ts } = bothRoots();
+      expect(sh).toBe(join(home, ".config", "macrodata"));
+      expect(ts).toBe(sh);
+    });
+  }
 });

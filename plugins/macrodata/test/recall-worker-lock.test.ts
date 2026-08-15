@@ -13,7 +13,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, utimesSync } from "fs";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -128,6 +128,44 @@ describe("recall worker single-instance claim", () => {
 
     expect(await waitFor(() => readPidFile() === String(w.pid))).toBe(true);
     expect(gone(w)).toBe(false);
+  }, 30000);
+
+  // Only `request-` files are consumed by the protocol; an inbox nobody drained
+  // and the two per-session baselines are left behind by every session that ends,
+  // forever, and the worker's 5s sweep reads the whole directory each time.
+  test("sweeps mailbox files left by sessions that have ended, and keeps live ones", async () => {
+    const mailbox = join(root, ".recall", "mailbox");
+    mkdirSync(mailbox, { recursive: true });
+    const old = new Date(Date.now() - 8 * 24 * 60 * 60_000);
+    const orphans = ["inbox-gone.json", "exclude-gone.json", "injected-gone.json", "request-gone.json.1234.tmp"];
+    for (const f of orphans) {
+      writeFileSync(join(mailbox, f), "{}");
+      utimesSync(join(mailbox, f), old, old);
+    }
+    // A live session's file: same name shape, current mtime. The hook rewrites
+    // its baselines on every fire, so mtime is the whole difference between a
+    // session that ended and one still going.
+    writeFileSync(join(mailbox, "inbox-live.json"), "{}");
+
+    startWorker();
+
+    expect(await waitFor(() => orphans.every((f) => !existsSync(join(mailbox, f))))).toBe(true);
+    expect(existsSync(join(mailbox, "inbox-live.json"))).toBe(true);
+  }, 30000);
+
+  // Nothing else consumes a request file, so one the worker cannot parse is found
+  // again by every 5s sweep for the life of the process — and the only trim on
+  // worker.log runs on the spawn path, which a healthy worker never reaches.
+  test("quarantines a request file it cannot parse instead of re-reading it forever", async () => {
+    const mailbox = join(root, ".recall", "mailbox");
+    mkdirSync(mailbox, { recursive: true });
+    const bad = join(mailbox, "request-abc.json");
+    writeFileSync(bad, '{"search": "truncated mid-w');
+
+    startWorker();
+
+    expect(await waitFor(() => existsSync(`${bad}.bad`))).toBe(true);
+    expect(existsSync(bad)).toBe(false);
   }, 30000);
 
   test("SIGTERM releases the claim", async () => {

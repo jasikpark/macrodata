@@ -41,7 +41,11 @@ CONFIG_FILE="$DEFAULT_ROOT/config.json"
 if [ -n "$MACRODATA_ROOT" ]; then
     STATE_ROOT="$MACRODATA_ROOT"
 elif [ -f "$CONFIG_FILE" ]; then
-    STATE_ROOT=$(jq -r '.root // empty' "$CONFIG_FILE" 2>/dev/null)
+    # Type-checked, not just present: `-r` renders a number, a bool, or a whole
+    # object as text, and a root of `123` would resolve here while the TypeScript
+    # resolver hands the same value to path.join() and throws. The two must agree
+    # on every config a person can write, so both require a string.
+    STATE_ROOT=$(jq -r 'if (.root | type) == "string" then .root else empty end' "$CONFIG_FILE" 2>/dev/null)
     STATE_ROOT="${STATE_ROOT:-$DEFAULT_ROOT}"
 else
     STATE_ROOT="$DEFAULT_ROOT"
@@ -61,6 +65,39 @@ RECALL_LOGDIR="$STATE_ROOT/.recall"
 # claims it exclusively so a burst of spawns settles on one survivor. Liveness is
 # still decided by `ps` here, never by this file.
 RECALL_PIDFILE="$RECALL_LOGDIR/worker.pid"
+# Consecutive spawns that left no worker, and when the last one was. A worker
+# that dies during startup leaves the next pass looking exactly like a first
+# start, so a count is the only evidence that one ever failed.
+#
+# Counted rather than timed. Reaching the spawn below means no worker was found,
+# so an entry that survives to be incremented is a spawn that produced nothing —
+# regardless of whether the passes were seconds or hours apart. A window between
+# attempts would instead measure how fast the human types: at any real prompt
+# cadence every gap exceeds it, and the detector never fires for the one person
+# it exists for.
+RECALL_SPAWN_STAMP="$RECALL_LOGDIR/last-spawn"
+# Two in a row, because a single failure is also what a reap-then-respawn and a
+# lost spawn race look like, and both of those are healthy by the next pass.
+RECALL_SPAWN_FAIL_COUNT=2
+
+# Is this command line a recall worker serving THIS state root?
+#
+# The sentinel-root pair must END the command: it is the last argv the spawn
+# passes, and an unanchored match would let root `/x/mem` claim, and then reap,
+# the worker serving `/x/mem-work`.
+#
+# One predicate rather than the pattern written at each call site. Two call sites
+# ask this question — the `ps` classifier and the pidfile-claim guard — and they
+# ask it about the same thing for opposite purposes, so a guard that accepts more
+# than the classifier counts hands this root's claim to another root's worker:
+# the claim then survives every pass, no worker for this root can ever take it,
+# and recall is dead in a state that cannot self-heal.
+is_recall_worker_argv() {
+    case "$1" in
+        *"$RECALL_SENTINEL $STATE_ROOT") return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 # Close every fd above stderr before exec'ing a long-lived background process.
 # bun's spawnSync (which invokes this hook) may open internal pipe fds at
@@ -109,6 +146,38 @@ reap() {
 # by the wrong party.
 recall_announce() {
     printf '<macrodata-recall-status>\n%s\n</macrodata-recall-status>\n' "$1"
+}
+
+# Keep the tail of an append-only recall log, in place.
+#
+# These files are the forensic record for a liveness incident, and the incident
+# that fills them is the one being read back: a per-prompt failure loop writes a
+# line or a stack trace per message, so unbounded they bury themselves. Truncated
+# rather than rotated to a `.1` sibling — this gets read by hand, mid-incident,
+# and a rotation puts half the story in a file nobody thinks to open.
+RECALL_LOG_MAX_BYTES=1048576
+RECALL_LOG_KEEP_LINES=2000
+trim_log() {
+    local f="$1" size
+    [ -f "$f" ] || return 0
+    size="$(wc -c < "$f" 2>/dev/null || echo 0)"
+    [ "${size:-0}" -gt "$RECALL_LOG_MAX_BYTES" ] || return 0
+    # PID in the scratch name, like atomicWrite's: every session on the machine
+    # runs this against the same log, and a shared scratch path is O_TRUNC — one
+    # trimmer would publish another's half-written copy over the log.
+    local tmp="$f.$$.trim"
+    if ! tail -n "$RECALL_LOG_KEEP_LINES" "$f" > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        return 0
+    fi
+    # Copied back rather than renamed into place. The worker holds this file open
+    # with `>>` for its whole life, and a rename swaps the inode out from under
+    # that fd: the worker keeps writing, to a file now unlinked, and its log goes
+    # silent for the rest of the process — during the per-prompt failure loop
+    # that is the only realistic way the file got this big. Appends racing the
+    # copy are lost instead, which is a few lines rather than all of them.
+    cat "$tmp" > "$f" 2>/dev/null
+    rm -f "$tmp"
 }
 
 is_daemon_running() {
@@ -216,7 +285,10 @@ signal_daemon_reload() {
 # supervisor.log keeps its name though recall-supervisor.sh is gone: this is the
 # primary forensic record for recall-liveness incidents, and a rename would split
 # the history across two files at the exact moment someone is reading back.
-recall_log() { echo "[$(date '+%F %T')] $*" >> "$RECALL_LOGDIR/supervisor.log"; }
+recall_log() {
+    echo "[$(date '+%F %T')] $*" >> "$RECALL_LOGDIR/supervisor.log"
+    trim_log "$RECALL_LOGDIR/supervisor.log"
+}
 
 # Converge on EXACTLY ONE running ambient-recall worker, then return. The worker
 # (src/recall/worker.ts) drains request-* and writes inbox-*, owning the embed and
@@ -264,10 +336,6 @@ ensure_recall_worker() {
     # grep, alive for ~10ms inside the ~85ms this snapshot takes, lands in the
     # table and reads back as a worker. Filtering after `ps` exits only rules out
     # our own grep, never anyone else's.
-    #
-    # The sentinel-root pair must also END the command. It is the last argv the
-    # spawn passes, and an unanchored match would let root `/x/mem` claim, and
-    # then reap, the worker serving `/x/mem-work`.
     local snapshot pid cmd mine="" stale="" foreign="" survived
     # Only this user's processes are candidates: a state root lives in one home
     # directory, so a worker for it always belongs to its owner, and everything
@@ -284,7 +352,7 @@ ensure_recall_worker() {
     fi
     while read -r pid cmd; do
         case "$pid" in ''|*[!0-9]*) continue ;; esac
-        case "$cmd" in *"$RECALL_SENTINEL $STATE_ROOT") ;; *) continue ;; esac
+        is_recall_worker_argv "$cmd" || continue
         case "$cmd" in
             *"$RECALL_WORKER"*) mine="$mine $pid" ;;
             */plugins/cache/*src/recall/worker.ts*) stale="$stale $pid" ;;
@@ -316,11 +384,19 @@ ensure_recall_worker() {
                 rm -f "$RECALL_PIDFILE" ;;
             *)
                 holder="$(ps -ww -p "$held" -o command= 2>/dev/null || true)"
-                case "$holder" in
-                    *"$RECALL_SENTINEL"*) ;;
-                    *) recall_log "worker: claim held by pid $held, not a worker -> clear"
-                       rm -f "$RECALL_PIDFILE" ;;
-                esac ;;
+                # Re-read immediately before the unlink, because the `ps` above
+                # forks — a window measured in milliseconds, but the one this
+                # block runs in. A worker that claims the file inside it (the
+                # post-reap race this whole path exists for) would otherwise have
+                # its live mutex deleted on the strength of a verdict about the
+                # PID it replaced, and the next pass then starts a second worker
+                # against the same mailbox. worker.ts's own unlink is
+                # content-checked for exactly this reason; so is this one.
+                if ! is_recall_worker_argv "$holder" &&
+                   [ "$(tr -d '[:space:]' < "$RECALL_PIDFILE" 2>/dev/null)" = "$held" ]; then
+                    recall_log "worker: claim held by pid $held, not a worker for this root -> clear"
+                    rm -f "$RECALL_PIDFILE"
+                fi ;;
         esac
     fi
 
@@ -333,6 +409,19 @@ ensure_recall_worker() {
     fi
 
     if [ -n "$foreign" ]; then
+        # A hand-started worker is never reaped — someone is debugging with it,
+        # and this runs on every prompt. The INSTALLED ones still are: every
+        # worker on a root drains the same mailbox, so an installed worker
+        # alongside a hand-started one makes each request a race between two
+        # copies of the code, decided per request and invisible either way. That
+        # is also the state the announcement below would otherwise describe
+        # wrongly, in the one message whose whole job is to say which code is
+        # answering recall.
+        if [ -n "$mine" ]; then
+            recall_log "worker: hand-started worker(s)$foreign up -> reap installed$mine so one worker drains the mailbox"
+            survived="$(reap "$mine")"
+            [ -n "$survived" ] && recall_log "worker: reap FAILED, survived SIGKILL:$survived"
+        fi
         # Announced rather than passed over in silence: that worker, not the
         # installed release, is answering recall, and from the outside a worker
         # serving code the release does not contain looks exactly like a healthy
@@ -348,6 +437,10 @@ ensure_recall_worker() {
     fi
 
     if [ -n "$mine" ]; then
+        # A worker is up, so every spawn the counter remembers did its job. This
+        # is the only reset: without it the count is cumulative rather than
+        # consecutive, and one bad afternoon warns forever.
+        rm -f "$RECALL_SPAWN_STAMP"
         local ordered keep extras
         # shellcheck disable=SC2086
         ordered="$(printf '%s\n' $mine | sort -n)"
@@ -372,6 +465,43 @@ ensure_recall_worker() {
         [ "$voice" = announce ] && recall_announce "macrodata-recall: worker source is missing; ambient recall is NOT running"
         return 0
     fi
+
+    # A spawn is fire-and-forget — nothing here waits to see whether it lived —
+    # so a worker that dies during startup writes the same log line as a healthy
+    # first start and gets retried once per prompt forever. `bun` off PATH, a
+    # native module broken by an OS update, ENOSPC and OOM all look like this.
+    # Two consecutive passes needing a spawn, seconds apart, is the signature:
+    # the previous one did not survive its own startup.
+    # Guarded rather than left to `2>/dev/null` on the read: a redirect from a
+    # missing file is the SHELL's error, reported before the command's own stderr
+    # is redirected anywhere. Unguarded, every first-ever spawn on a fresh state
+    # root writes a "No such file" line to the hook's stderr.
+    local fails=0 since="" now age
+    now="$(date +%s)"
+    if [ -f "$RECALL_SPAWN_STAMP" ]; then
+        read -r fails since < "$RECALL_SPAWN_STAMP" 2>/dev/null || true
+    fi
+    # Both fields are re-validated rather than trusted: this file survives
+    # crashes and downgrades, so it can hold anything an older version wrote.
+    case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
+    case "$since" in *[!0-9]*) since="" ;; esac
+    fails=$((fails + 1))
+    printf '%s %s\n' "$fails" "$now" > "$RECALL_SPAWN_STAMP"
+    if [ "$fails" -ge "$RECALL_SPAWN_FAIL_COUNT" ]; then
+        age=""
+        [ -n "$since" ] && age=" (last $((now - since))s ago)"
+        recall_log "worker: $fails consecutive starts left no worker$age -> startup is failing; see worker.log"
+        # Announce-only, like every other steady-state line: a failing spawn
+        # repeats per prompt, and a warning on every message is how the next
+        # real warning gets ignored. The log carries every occurrence.
+        [ "$voice" = announce ] && recall_announce "macrodata-recall: the worker is failing to start; ambient recall is NOT running (see $RECALL_LOGDIR/worker.log)"
+    fi
+
+    # Trimmed here because a spawn is the only moment no worker holds this file.
+    # Under the failure loop above it grows by a stack trace per prompt; the
+    # newest is the one that matches the code now installed, and the older
+    # copies of the same trace are what would push it out of reach.
+    trim_log "$RECALL_LOGDIR/worker.log"
 
     # The subshell closes all inherited fds above stderr (see close_inherited_fds)
     # before exec'ing the worker, so it can't hold bun's spawnSync pipe open.

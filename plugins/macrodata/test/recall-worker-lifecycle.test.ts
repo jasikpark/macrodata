@@ -240,11 +240,105 @@ describe("recall worker version lifecycle", () => {
     expect(readClaim(ctx.root)).toBe(String(dev));
   });
 
-  test("starts a worker when none is running", async () => {
-    runWorkerPass(ctx.root);
+  // The unsurvivable version of the case above: the holder IS a worker, just not
+  // this root's. A guard that asks "is the holder a worker?" instead of "is the
+  // holder a worker for THIS root?" leaves the claim standing, every worker this
+  // root spawns stands down against it, and no later pass can ever undo that —
+  // the holder stays alive and keeps answering the looser question.
+  test("clears a claim held by a live worker serving a different root", async () => {
+    const sibling = `${ctx.root}-work`;
+    mkdirSync(sibling, { recursive: true });
+    const neighbor = await spawnFakeWorker(mineCmd(sibling), sibling);
+    seedClaim(ctx.root, neighbor);
+
+    try {
+      runWorkerPass(ctx.root);
+
+      const fresh = await waitForWorker(ctx.root);
+      expect(fresh.length).toBe(1);
+      expect(await waitFor(() => readClaim(ctx.root) === String(fresh[0]?.pid))).toBe(true);
+      expect(alive(neighbor)).toBe(true);
+    } finally {
+      killRecallWorkers(sibling);
+      rmSync(sibling, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  // Coexistence is the one state the hand-started-worker policy must not leave
+  // running: both workers drain the same mailbox, so each request is served by
+  // whichever copy of the code wins the race, decided per request and invisible
+  // from either log. The announcement below also states the installed plugin is
+  // not serving recall, which is only true once this reap has happened.
+  test("reaps installed workers when a hand-started one is up, and keeps the hand-started one", async () => {
+    const dev = await spawnFakeWorker(devCmd(ctx.root), ctx.root);
+    const installed = await spawnFakeWorker(mineCmd(ctx.root), ctx.root);
+
+    const { stdout } = runWorkerPass(ctx.root);
+
+    expect(await waitGone(installed)).toBe(true);
+    expect(alive(dev)).toBe(true);
+    expect(stdout).toContain("hand-started worker");
+    expect(recallLog(ctx.root)).toContain("reap installed");
+    expect(recallLog(ctx.root)).not.toContain("reap FAILED");
+  });
+
+  test("starts a worker when none is running, silently on stderr", async () => {
+    const { stderr } = runWorkerPass(ctx.root);
 
     expect((await waitForWorker(ctx.root)).length).toBe(1);
     expect(recallLog(ctx.root)).toContain("down -> starting");
+    // A first spawn reads files that only a previous spawn creates. Shell
+    // reports a redirect from a missing file itself, before the command's own
+    // stderr goes anywhere, so this is the assertion that keeps a first-ever
+    // start on a fresh root from writing an error nobody can act on.
+    expect(stderr).toBe("");
+  });
+
+  // The breadcrumb for the one failure a fire-and-forget spawn cannot otherwise
+  // show: `bun` off PATH, a native module broken by an OS update, ENOSPC. Each
+  // pass logs an ordinary "down -> starting" and retries forever, so the only
+  // evidence is a count of attempts that produced nothing.
+  //
+  // The gap is hours, deliberately. A detector keyed on how recent the previous
+  // attempt was measures how fast the human types, not whether the worker starts:
+  // it fires under a test driving passes back to back and never fires for someone
+  // sending a message every few minutes — the only person it exists for.
+  const stampPath = (root: string) => join(root, ".recall", "last-spawn");
+  const seedSpawnStamp = (root: string, fails: number, agoSec: number) => {
+    mkdirSync(join(root, ".recall"), { recursive: true });
+    writeFileSync(stampPath(root), `${fails} ${Math.floor(Date.now() / 1000) - agoSec}\n`);
+  };
+
+  test("names a spawn that did not survive its own startup, however long ago it was", async () => {
+    seedSpawnStamp(ctx.root, 1, 6 * 60 * 60);
+
+    const { stdout } = runWorkerPass(ctx.root);
+
+    expect(recallLog(ctx.root)).toContain("consecutive starts left no worker");
+    expect(stdout).toContain("failing to start");
+  });
+
+  // One failed spawn is also what a reap-then-respawn and a lost spawn race look
+  // like, and both are healthy by the next pass. Warning on the first would put a
+  // permanent notice in front of the model for an event that resolves itself.
+  test("stays quiet about a single spawn that left no worker", async () => {
+    const { stdout } = runWorkerPass(ctx.root);
+
+    expect(await waitForWorker(ctx.root)).toHaveLength(1);
+    expect(recallLog(ctx.root)).not.toContain("startup is failing");
+    expect(stdout).not.toContain("failing to start");
+  });
+
+  // Without this the count is cumulative rather than consecutive: every root that
+  // ever lost a spawn would warn on every prompt for the rest of its life.
+  test("forgets past failed spawns once a worker is up", async () => {
+    seedSpawnStamp(ctx.root, 9, 60);
+    const worker = await spawnFakeWorker(mineCmd(ctx.root), ctx.root);
+
+    runWorkerPass(ctx.root);
+
+    expect(existsSync(stampPath(ctx.root))).toBe(false);
+    expect(alive(worker)).toBe(true);
   });
 
   // The reason the worker is managed from macrodata-hook.sh at all: SessionStart
