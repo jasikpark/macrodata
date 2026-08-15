@@ -28,7 +28,10 @@ export function getStateRoot(): string {
   if (existsSync(configPath)) {
     try {
       const config = JSON.parse(readFileSync(configPath, "utf-8"));
-      if (config.root) return config.root;
+      // A non-string `root` falls through to the default rather than reaching
+      // join(), which throws on one — and this runs inside hooks, where a throw
+      // is a hard failure with no state root to log it against.
+      if (typeof config.root === "string" && config.root) return config.root;
     } catch {
       // Ignore parse errors
     }

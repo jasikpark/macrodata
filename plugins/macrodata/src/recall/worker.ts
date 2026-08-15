@@ -37,9 +37,11 @@
  * before it can load a model.
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, mkdirSync, watch } from "fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, mkdirSync, statSync, watch } from "fs";
+import { join } from "path";
 import { configure, getConsoleSink, getLogger, jsonLinesFormatter } from "@logtape/logtape";
 import { envNum, pipelineSearch } from "./fts.ts";
+import { WEDGED, withDeadline } from "./deadline.ts";
 import { getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath } from "./config.ts";
 
 // Created before the watch below: fs.watch throws on a missing directory, and on
@@ -58,6 +60,29 @@ const SWEEP_INTERVAL_MS = 5_000;
 // and a non-numeric value to NaN (guard silently off) — and hook.ts already
 // parses this env family through envNum, so the two processes must agree.
 const MAX_REQ_AGE_MS = envNum("MACRODATA_RECALL_MAX_REQ_AGE_MS", 10 * 60_000, 1);
+// A pipeline whose await never settles is worse than a dead worker: `running`
+// never clears, so every later request is queued and dropped, while this process
+// stays in `ps` holding the claim — the hook reads it as healthy and
+// claimWorkerSlot() makes any replacement stand down. Nothing outside this
+// process can observe that state, so nothing outside it can end it.
+//
+// Two budgets, because the first run is a different job from the rest. It may
+// download ~1.2GB of GGUFs (models.ts resolves `hf:` URIs on first use), while a
+// warm rerank is ~5s. A single budget generous enough for that download leaves a
+// real wedge undetected for as long as it takes; one tight enough to catch a
+// wedge turns a slow first download into a restart loop that never finishes it.
+const WEDGE_COLD_MS = envNum("MACRODATA_RECALL_WEDGE_COLD_MS", 20 * 60_000, 1_000);
+const WEDGE_WARM_MS = envNum("MACRODATA_RECALL_WEDGE_WARM_MS", 2 * 60_000, 1_000);
+// Files the protocol leaves behind rather than consumes: an inbox nobody drained,
+// the two per-session baselines, and the scratch that a SIGKILL mid-write strands
+// (`.tmp` from atomicWrite, `.claim` from the hook's inbox drain, `.bad` from a
+// quarantine). The TTL is generous because the baselines are rewritten only on a
+// fire that gets far enough to have something to record — an early bail rewrites
+// neither — so a live session's mtime can lag its last message by a long way, and
+// culling one costs it the dedupe state that keeps recall from repeating itself.
+const ORPHAN_TTL_MS = envNum("MACRODATA_RECALL_ORPHAN_TTL_MS", 7 * 24 * 60 * 60_000, 60_000);
+const ORPHAN_SWEEP_MS = 60 * 60_000;
+const ORPHAN_RE = /^(?:inbox|exclude|injected)-.+\.json$|\.(?:tmp|claim|bad)$/;
 
 // NDJSON to stdout (the hook redirects it to .recall/worker.log), so the log is
 // jq-able and every record carries its own timestamp — the log is the primary
@@ -115,15 +140,25 @@ function claimWorkerSlot(): void {
         workerLog.error("cannot write the worker slot, exiting", { pidPath, err: errnoOf(e) });
         process.exit(1);
       }
-      let holder = 0;
+      let raw: string;
       // Gone between the failed create and this read — another loser cleared a
       // stale claim, so retry into the race it just opened.
-      try { holder = Number(readFileSync(pidPath, "utf-8").trim()); } catch { continue; }
+      try { raw = readFileSync(pidPath, "utf-8").trim(); } catch { continue; }
+      const holder = Number(raw);
       if (holder && holder !== process.pid && alive(holder)) {
         workerLog.info("another worker already serves this root, exiting", { holder, pidPath });
         process.exit(0);
       }
-      try { unlinkSync(pidPath); } catch { /* a peer cleared the same stale claim */ }
+      // Delete only the claim just read, not whatever is there now. Two losers
+      // reading the same dead holder is the ordinary post-upgrade case, and an
+      // unconditional unlink lets the second one remove the fresh claim the
+      // first just won — leaving both running on one mailbox. Re-reading is not
+      // a compare-and-swap (POSIX offers none for unlink) and the window
+      // survives; it is narrowed from "the whole takeover" to two adjacent
+      // syscalls.
+      try {
+        if (readFileSync(pidPath, "utf-8").trim() === raw) unlinkSync(pidPath);
+      } catch { /* a peer cleared the same stale claim */ }
     }
   }
   // Three collisions without a live holder means something is churning the file
@@ -172,6 +207,10 @@ function atomicWrite(path: string, data: string): void {
 // the agent has already moved past.
 const pending = new Map<string, Request>();
 let running = false;
+// Whether a pipeline has already completed in this process, which is what
+// separates the two wedge budgets: models.ts memoizes the loaded models on the
+// PENDING promise, so only the first run can pay for a download.
+let modelsWarm = false;
 
 async function runPipeline(req: Request): Promise<void> {
   const exclude = loadExclude(req.sid);
@@ -182,15 +221,33 @@ async function runPipeline(req: Request): Promise<void> {
   // matching end), not merely inferable from a consumed request that
   // produced nothing.
   l.info("pipeline start", { searchChars: req.search.length, excludeSize: exclude.size });
-  let hits: Awaited<ReturnType<typeof pipelineSearch>>;
+  const budget = modelsWarm ? WEDGE_WARM_MS : WEDGE_COLD_MS;
+  let hits: Awaited<ReturnType<typeof pipelineSearch>> | typeof WEDGED;
   try {
-    hits = await pipelineSearch(req.search, {
+    hits = await withDeadline(pipelineSearch(req.search, {
       limit: LIMIT, floor: FLOOR, rerankQuery: req.rerankQuery, exclude,
-    });
+    }), budget);
   } catch (e) {
     l.error("pipeline error", { error: String(e) });
     return;
   }
+  if (hits === WEDGED) {
+    // Exit rather than skip this request. models.ts memoizes the pending load
+    // promise and only drops it on rejection, so a load that never settles is
+    // handed to every later request too — staying alive means every future
+    // request wedges behind the same promise, and this process would keep the
+    // claim that stops the hook from replacing it. Dying is what lets the next
+    // convergence pass spawn a worker that can serve.
+    l.error("pipeline exceeded its budget, exiting so the hook can restart it", {
+      budgetMs: budget, warm: modelsWarm, ms: Date.now() - t0,
+    });
+    process.exit(1);
+  }
+  // A hit is proof the models loaded; an empty result is not. `rerank()` returns
+  // early on an empty candidate pool, so a run that found nothing may never have
+  // asked for the reranker — and calling that warm would put the next run, the
+  // one that actually downloads it, on the two-minute budget.
+  if (hits.length > 0) modelsWarm = true;
   const ms = Date.now() - t0;
   if (hits.length > 0) {
     // Stamp timing so the hook can render the span: requestedAt (when the hook
@@ -239,7 +296,15 @@ function ingest(sid: string): void {
   if (!existsSync(p)) return;
   let req: Request;
   try { req = { ...JSON.parse(readFileSync(p, "utf-8")), sid }; }
-  catch (e) { ingestLog.warn("skipping malformed request file", { sid, error: String(e) }); return; }
+  catch (e) {
+    // Moved aside, not left in place. Nothing else consumes a request file, so
+    // one that cannot be parsed is found again by every 5s sweep for the life of
+    // the worker — a warn line every five seconds, into a log whose only trim
+    // runs on the spawn path, which a healthy worker never reaches.
+    ingestLog.warn("quarantining malformed request file", { sid, error: String(e) });
+    try { renameSync(p, `${p}.bad`); } catch { try { unlinkSync(p); } catch { /* already gone */ } }
+    return;
+  }
   try { unlinkSync(p); } catch {} // consume; latest-wins handled by the map
   if (!req.search || req.search.length < 8) {
     // The request file is already consumed at this point — dropping without a
@@ -269,8 +334,8 @@ function ingest(sid: string): void {
 function sweep(): void {
   // A transient readdir failure (EMFILE under fd pressure, EACCES, ENOENT) must
   // degrade to one missed sweep — unguarded it would throw inside a timer
-  // callback and kill the worker, which nothing restarts until the next
-  // SessionStart. The interval retries in 5s anyway.
+  // callback and kill the worker. The interval retries in 5s anyway, which is
+  // sooner than the hook's next convergence pass would notice the process gone.
   let files: string[];
   try { files = readdirSync(DIR); }
   catch (e) { ingestLog.warn("sweep skipped: readdir failed", { error: String(e) }); return; }
@@ -280,6 +345,49 @@ function sweep(): void {
   }
 }
 sweep();
+
+/**
+ * Delete mailbox files belonging to sessions that have ended.
+ *
+ * Only `request-` files are consumed by the protocol. Everything else is left
+ * where it lands: an inbox the hook never drained (the session ended between the
+ * rerank and the next fire), the two per-session baselines, and the scratch a
+ * SIGKILL stranded mid-write. One session is a handful of files, so nothing here
+ * is ever noticed — and nothing here is ever cleaned up either, so the mailbox
+ * grows for the life of the state root and the 5s sweep's readdir pays for all of
+ * it.
+ *
+ * Deliberately not in that sweep: this stats every entry, and the hot path runs
+ * 720× an hour.
+ *
+ * The TTL is what makes an unsynchronized delete safe against a session the
+ * worker cannot see, and it is set long because mtime is a floor on a session's
+ * age, not a measure of it: the baselines are rewritten only by a fire with
+ * something to record, so a session that has gone a week without one still holds
+ * files this will not touch. Culling a live session's baselines is survivable
+ * either way — it re-shows chunks that session has already been given, rather
+ * than losing anything.
+ */
+function sweepOrphans(): void {
+  let files: string[];
+  try { files = readdirSync(DIR); }
+  catch (e) { ingestLog.warn("orphan sweep skipped: readdir failed", { error: String(e) }); return; }
+  const cutoff = Date.now() - ORPHAN_TTL_MS;
+  let removed = 0;
+  for (const f of files) {
+    if (!ORPHAN_RE.test(f)) continue;
+    const p = join(DIR, f);
+    try {
+      if (statSync(p).mtimeMs >= cutoff) continue;
+      unlinkSync(p);
+      removed++;
+    } catch { /* raced with a hook writing or draining the same file */ }
+  }
+  if (removed > 0) ingestLog.info("swept orphaned mailbox files", { removed, ttlMs: ORPHAN_TTL_MS });
+}
+sweepOrphans();
+setInterval(sweepOrphans, ORPHAN_SWEEP_MS);
+
 // Sweep on ANY event in the dir and ignore the reported filename. The hook
 // publishes atomically (write `<path>.<pid>.tmp`, rename into place), and Bun
 // 1.3.14's fs.watch on macOS reports only the tmp name for that pair — the final
