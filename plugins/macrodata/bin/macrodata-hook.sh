@@ -52,6 +52,7 @@ PENDING_CONTEXT="$STATE_ROOT/.pending-context"
 PENDING_REMINDERS_DIR="$STATE_ROOT/.pending-reminders"
 LOGFILE="$STATE_ROOT/.daemon.log"
 IDENTITY="$STATE_ROOT/state/identity.md"
+FLAGS="$STATE_ROOT/state/flags.md"
 # Recall logs live under the state root beside the rest of the runtime state, NOT
 # beside the source: the plugin installs into a per-version cache dir, so a
 # source-relative log would be orphaned by every release.
@@ -373,6 +374,33 @@ inject_pending_context() {
     fi
 }
 
+# Session-start preamble is weak: a model with flags in its prefix still answers
+# the prompt instead of relaying them. An instruction injected adjacent to the
+# user's prompt is followed far more reliably, so remind there — once per
+# session per 🔴-section state (a global once-per-change marker gets consumed
+# by whichever session fires first, silencing every other session).
+# $1 is the session id from the hook's stdin JSON, may be empty.
+inject_red_flag_reminder() {
+    [ -s "$FLAGS" ] || return 0
+    local red_section
+    red_section=$(awk '/^## /{inred = /^## 🔴/} inred' "$FLAGS" \
+        | sed 's/<\/macrodata/\&lt;\/macrodata/g; s/<macrodata/\&lt;macrodata/g')
+    printf '%s' "$red_section" | grep -q '^- ' || return 0
+    local hash
+    hash=$(printf '%s' "$red_section" | md5 -q 2>/dev/null || printf '%s' "$red_section" | md5sum | cut -d' ' -f1)
+    local key="${1:-global}:$hash"
+    local seen="$STATE_ROOT/.flags-surfaced"
+    grep -qxF "$key" "$seen" 2>/dev/null && return 0
+    echo "$key" >> "$seen"
+    tail -n 200 "$seen" > "$seen.tmp" && mv "$seen.tmp" "$seen"
+    cat <<EOF
+<macrodata-red-flags>
+Unresolved 🔴 flags the user has not yet been shown. Relay these at the start of your reply — one line each — before addressing their prompt:
+$red_section
+</macrodata-red-flags>
+EOF
+}
+
 # Drain fired scheduled tasks. The daemon writes one file per firing into
 # .pending-reminders/. We claim each by renaming it before reading: rename(2)
 # can move a given source only once, so when several sessions drain at the
@@ -447,6 +475,7 @@ case "$1" in
         fi
         inject_pending_context
         inject_reminders "$SESSION_ID"
+        inject_red_flag_reminder "$SESSION_ID"
         ;;
     recall-worker)
         # Standalone lever: converge the worker without touching the daemon.

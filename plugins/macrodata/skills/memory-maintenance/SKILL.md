@@ -35,6 +35,11 @@ Use these to inform state file updates.
 
 ### 3. State File Updates
 
+State files are injected into every session start. Each has a character cap enforced
+by the daemon (4KB delta) and the compose hook (~9K session start). Compact toward
+the cap — detail that won't fit belongs in an entity or journal entry, linked from
+the state file with a `[[wikilink]]`.
+
 Review each state file and update if needed:
 
 **today.md**
@@ -52,6 +57,16 @@ Review each state file and update if needed:
 - Communication style insights?
 - Only update if genuinely new information
 
+### 3b. Flags Review
+
+Read `state/flags.md`:
+- Clear any 🔴 items that have been resolved (confirmed by checking the source)
+- Demote 🔴 → 🟡 if the urgency has passed but it still needs watching
+- Promote 🟡 → 🔴 if a watched item has worsened or recurred
+- Add new flags discovered during distillation that the user needs to see
+
+Route: user-facing items → flags.md; detail/evidence → journal.
+
 ### 4. Entity Updates
 
 Review `entities/people/` and `entities/projects/`:
@@ -60,7 +75,19 @@ Review `entities/people/` and `entities/projects/`:
 - New projects to create files for? Give each a `description:` frontmatter (one-line summary of what it *is*)
 - Backfill `description:` frontmatter on any entity files still missing one (the files manifest nudges for these)
 
-### 5. Prune Stale Info
+### 5. Compact State to Budget
+
+Each state file has a character budget. Check sizes:
+```bash
+wc -c ~/.config/macrodata/state/today.md ~/.config/macrodata/state/workspace.md ~/.config/macrodata/state/human.md ~/.config/macrodata/state/identity.md
+```
+
+Target: each file under its injection cap (~9000 chars for session start).
+If a file is over budget, distill — move detail to an entity linked via `[[wikilink]]`
+or to the journal. The daemon's 4KB delta cap truncates mid-session updates to
+over-budget files with a `[…truncated]` warning.
+
+### 6. Prune Stale Info
 
 Look for outdated information:
 - Completed todos still listed as active
@@ -70,7 +97,7 @@ Look for outdated information:
 
 Remove or archive as appropriate.
 
-### 6. Index Maintenance
+### 7. Index Maintenance
 
 Check if indexes need rebuilding:
 ```
@@ -84,7 +111,7 @@ manage_index(target="memory", action="rebuild")
 manage_index(target="conversations", action="update")
 ```
 
-### 7. Journal Summary
+### 8. Journal Summary
 
 Write a brief maintenance journal entry:
 

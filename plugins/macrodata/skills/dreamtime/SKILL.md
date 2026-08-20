@@ -65,6 +65,10 @@ Review workspace.md and recent context:
 - Questions raised but not answered?
 - Ideas mentioned but not explored?
 
+Route findings by audience:
+- Items the **user** needs to see → `state/flags.md` (the cross-session surface channel)
+- Detail, evidence, your own notes → journal
+
 Update workspace.md open threads section.
 
 ### Project Connections
@@ -114,6 +118,7 @@ Update relevant files directly:
 - identity.md - role/values refinements
 - human.md - new understanding
 - workspace.md - open threads
+- flags.md - items the user needs to see cross-session (🔴 unresolved / 🟡 watch)
 - topics/ - new or updated topics (give each entity a `description:` frontmatter)
 - entities/ - project/people updates (add or preserve a `description:` frontmatter — a one-line summary of what the file is)
 - journal - learnings, observations, ideas
