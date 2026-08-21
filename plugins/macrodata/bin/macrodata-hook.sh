@@ -49,10 +49,10 @@ fi
 
 PIDFILE="$STATE_ROOT/.daemon.pid"
 PENDING_CONTEXT="$STATE_ROOT/.pending-context"
-PENDING_REMINDERS_DIR="$STATE_ROOT/.pending-reminders"
 LOGFILE="$STATE_ROOT/.daemon.log"
 IDENTITY="$STATE_ROOT/state/identity.md"
 FLAGS="$STATE_ROOT/state/flags.md"
+REMINDERS="$STATE_ROOT/state/reminders.md"
 # Recall logs live under the state root beside the rest of the runtime state, NOT
 # beside the source: the plugin installs into a per-version cache dir, so a
 # source-relative log would be orphaned by every release.
@@ -414,32 +414,31 @@ $red_section
 EOF
 }
 
-# Drain fired scheduled tasks. The daemon writes one file per firing into
-# .pending-reminders/. We claim each by renaming it before reading: rename(2)
-# can move a given source only once, so when several sessions drain at the
-# same moment exactly one wins each file and the losers' mv fails silently —
-# no scheduled run gets grabbed twice. The claimed name carries the session
-# id so the daemon log / a curious human can see who took it.
-inject_reminders() {
-    [ -d "$PENDING_REMINDERS_DIR" ] || return
-    # session_id is external input (harness stdin JSON) and lands in a filename
-    # below, so strip it to a safe charset before use.
-    local session_id
-    session_id=$(printf '%s' "${1:-}" | tr -cd 'A-Za-z0-9_-')
-    [ -n "$session_id" ] || session_id="unknown"
-    local f base claimed
-    for f in "$PENDING_REMINDERS_DIR"/*; do
-        [ -e "$f" ] || continue            # no matches: glob stays literal
-        base=$(basename "$f")
-        case "$base" in
-            .*|*.claimed.*) continue ;;    # tmp writes and already-claimed leftovers
-        esac
-        claimed="$f.claimed.$session_id.$$"
-        if mv "$f" "$claimed" 2>/dev/null; then
-            cat "$claimed"
-            rm -f "$claimed"
-        fi
-    done
+# Same prompt-adjacent relay as inject_red_flag_reminder, for fired notify
+# reminders. The daemon upserts one line per schedule into state/reminders.md;
+# every session sees the file, and a reminder is cleared by the model removing
+# its line once it's been relayed and addressed — deduping here is only about
+# not repeating the nudge while the section is unchanged.
+# $1 is the session id from the hook's stdin JSON, may be empty.
+inject_reminder_relay() {
+    [ -s "$REMINDERS" ] || return 0
+    local section
+    section=$(awk '/^## /{inrem = /^## ⏰/} inrem' "$REMINDERS" \
+        | sed 's/<\/macrodata/\&lt;\/macrodata/g; s/<macrodata/\&lt;macrodata/g')
+    printf '%s' "$section" | grep -q '^- ' || return 0
+    local hash
+    hash=$(printf '%s' "$section" | md5 -q 2>/dev/null || printf '%s' "$section" | md5sum | cut -d' ' -f1)
+    local key="${1:-global}:$hash"
+    local seen="$STATE_ROOT/.reminders-surfaced"
+    grep -qxF "$key" "$seen" 2>/dev/null && return 0
+    echo "$key" >> "$seen"
+    tail -n 200 "$seen" > "$seen.tmp" && mv "$seen.tmp" "$seen"
+    cat <<EOF
+<macrodata-reminders>
+Fired reminders the user may not have seen. Relay each inline at the start of your reply, with its fired-at time. If one fired hours ago, acknowledge the staleness ("this fired at HH:MM") instead of nudging as if fresh. Once a reminder has been relayed and addressed, remove its line from state/reminders.md with the Edit tool:
+$section
+</macrodata-reminders>
+EOF
 }
 
 inject_first_run() {
@@ -487,7 +486,7 @@ case "$1" in
             SESSION_ID=$(jq -r '.session_id // empty' 2>/dev/null)
         fi
         inject_pending_context
-        inject_reminders "$SESSION_ID"
+        inject_reminder_relay "$SESSION_ID"
         inject_red_flag_reminder "$SESSION_ID"
         ;;
     recall-worker)
