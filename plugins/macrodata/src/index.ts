@@ -90,7 +90,7 @@ interface Schedule {
   payload: string;
   agent?: "opencode" | "claude"; // Which agent CLI to trigger
   model?: string; // Optional model override (e.g., "anthropic/claude-opus-4-6")
-  delivery?: "session" | "headless"; // How a fired job runs (default: session)
+  delivery?: "notify" | "headless" | "session"; // How a fired job runs (default: notify; "session" is legacy, fires as notify)
   createdAt: string;
 }
 
@@ -395,7 +395,7 @@ server.tool(
     // No quotes/spaces/angle brackets — keeps it safe inside the reminder's
     // model="..." attribute; the daemon maps it to a known Agent-tool alias.
     model: z.string().regex(/^[A-Za-z0-9/_.-]{1,64}$/, "model must be 1-64 chars of [A-Za-z0-9/_.-]").optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-6' for deep thinking tasks). Omitting it — or passing an unrecognized value — defaults to haiku."),
-    delivery: z.enum(["session", "headless"]).optional().describe("How the fired job runs; pick by intent — both modes are first-class. 'session' (default): queue a reminder drained into your next active session as a background subagent — use when a human should see or act on the result. 'headless': spawn a detached `claude --print` on the tick that runs on schedule with no session open — use when the job should just run on its own. Headless runs unsupervised (and no-ops while the machine is asleep — e.g. a laptop on battery), so give it a payload you trust to run without review — that's a constraint to design around, not a reason to avoid it."),
+    delivery: z.enum(["notify", "headless"]).default("notify").describe("Pick by intent — both modes are first-class. 'notify' (default): a nudge meant to reach the human — the daemon posts a macOS notification at fire time and surfaces the reminder in active sessions via state/reminders.md; no model runs. Write the payload as a message to the user. 'headless': an unattended job — the daemon spawns a detached `claude --print` on the tick, with no session open. Write the payload as instructions to an agent. Headless runs unsupervised (and no-ops while the machine is asleep — e.g. a laptop on battery), so give it a payload you trust to run without review — that's a constraint to design around, not a reason to avoid it."),
   },
   async ({ type, id, expression, description, payload, model, delivery }) => {
     // Reject sub-2-minute cron cadences: macrodata has no use for them, and a
