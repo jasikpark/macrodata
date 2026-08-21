@@ -40,10 +40,11 @@ const BUDGETS: Record<string, Budget> = {};
 // standing instructions into a section (e.g. flags surface directive).
 const SUFFIXES: Record<string, string> = {
   "flags.md": "\n\nIf the 🔴 section above has items, surface them to the user at the start of your first reply — one line each — before addressing their prompt. Flags only reach the user when said out loud.",
+  "reminders.md": "\n\nIf the ⏰ section above has items, relay them to the user at the start of your first reply with their fired-at times; once addressed, remove the line from state/reminders.md with the Edit tool.",
 };
 
 // Files that emit nothing at all when absent or empty (no wrapper tag).
-const SILENT_WHEN_EMPTY = new Set(["flags.md"]);
+const SILENT_WHEN_EMPTY = new Set(["flags.md", "reminders.md"]);
 
 const arg = process.argv[2];
 if (!arg) {
