@@ -79,6 +79,45 @@ export function safeId(id: string): string {
 }
 
 /**
+ * The only shape a schedule id may take: one filename-safe token. An id is the
+ * `<id>.json` filename under reminders/ and an unquoted XML attribute when the
+ * schedule fires, so every path that deletes by id refuses anything outside
+ * this set instead of joining it — `join(remindersDir, "../../.claude/settings")`
+ * names a file the caller was never allowed to touch. safeId() is the lossy
+ * repair for display keys; this is the strict gate in front of the filesystem.
+ */
+export const SAFE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function isSafeId(id: string): boolean {
+  return SAFE_ID_RE.test(id);
+}
+
+/**
+ * Why a one-shot expression can't be armed, or null if it can. `new Date` turns
+ * an unparseable string into NaN, which is not "in the future" and so reads as
+ * already expired: the schedule tool would report success and the daemon would
+ * delete the file on its next load. A past date is refused for the same reason.
+ */
+export function onceExpressionError(expression: string, now: Date = new Date()): string | null {
+  const t = new Date(expression).getTime();
+  if (Number.isNaN(t)) return `"${expression}" is not a valid date — use an ISO datetime like 2026-01-31T10:00:00`;
+  if (t <= now.getTime()) return `${expression} is already in the past`;
+  return null;
+}
+
+/**
+ * Body text for a macOS notification. It lands inside an osascript string
+ * literal, so quotes and backslashes go; control characters go too, because a
+ * NUL byte makes child_process.spawn throw synchronously (ERR_INVALID_ARG_VALUE)
+ * and from a cron callback that exception is fatal to the daemon. Non-string
+ * input (a schedule with neither description nor payload) becomes "".
+ */
+export function notificationText(text: unknown): string {
+  if (typeof text !== "string") return "";
+  return text.replace(/[\u0000-\u001f\u007f"\\]/g, "").slice(0, 200);
+}
+
+/**
  * Neutralize macrodata block openers/closers in free text so an untrusted
  * payload can't close the <macrodata-reminders> wrapper its entry line is
  * injected through, or forge a sibling block. Mirrors the USER_INFO

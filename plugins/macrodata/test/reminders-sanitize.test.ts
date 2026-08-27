@@ -21,6 +21,10 @@ import {
   cronTooFrequent,
   DEFAULT_MODEL,
   REMINDERS_HEADING,
+  isSafeId,
+  SAFE_ID_RE,
+  onceExpressionError,
+  notificationText,
 } from "../src/reminders";
 
 describe("safeId", () => {
@@ -259,5 +263,94 @@ describe("upsertReminderLine", () => {
     const out = upsertReminderLine(existing, entry("passwd", "second"), "passwd");
     expect(out.match(/- \[passwd\]/g)).toHaveLength(1);
     expect(out).toContain("second");
+  });
+});
+
+describe("isSafeId", () => {
+  test("accepts plain filename-safe tokens", () => {
+    expect(isSafeId("daily-standup")).toBe(true);
+    expect(isSafeId("x")).toBe(true);
+    expect(isSafeId("a".repeat(64))).toBe(true);
+  });
+
+  test("rejects traversal, separators, empty and oversized ids", () => {
+    expect(isSafeId("")).toBe(false);
+    expect(isSafeId("../victim")).toBe(false);
+    expect(isSafeId("..")).toBe(false);
+    expect(isSafeId("a/b")).toBe(false);
+    expect(isSafeId("a\\b")).toBe(false);
+    expect(isSafeId("has space")).toBe(false);
+    expect(isSafeId("a".repeat(65))).toBe(false);
+  });
+
+  test("property: a safe id never contains a path separator or dot", () => {
+    fc.assert(
+      fc.property(fc.string(), (id) => {
+        if (!isSafeId(id)) return true;
+        return !/[\\/.]/.test(id) && id.length >= 1 && id.length <= 64;
+      }),
+    );
+  });
+
+  test("property: safeId output always passes isSafeId (repair lands inside the gate)", () => {
+    fc.assert(
+      fc.property(fc.string(), (id) => {
+        expect(SAFE_ID_RE.test(safeId(id))).toBe(true);
+      }),
+    );
+  });
+});
+
+describe("onceExpressionError", () => {
+  const now = new Date("2026-08-27T12:00:00Z");
+
+  test("null for a parseable future date", () => {
+    expect(onceExpressionError("2026-08-27T12:00:01Z", now)).toBeNull();
+    expect(onceExpressionError("2027-01-31T10:00:00", now)).toBeNull();
+  });
+
+  test("names the bad input for an unparseable date", () => {
+    const reason = onceExpressionError("not-a-date", now);
+    expect(reason).toContain('"not-a-date" is not a valid date');
+    expect(reason).toContain("2026-01-31T10:00:00");
+  });
+
+  test("a past or present date is refused", () => {
+    expect(onceExpressionError("2026-08-27T11:59:59Z", now)).toContain("already in the past");
+    expect(onceExpressionError("2026-08-27T12:00:00Z", now)).toContain("already in the past");
+  });
+
+  test("property: never null for arbitrary non-date strings", () => {
+    fc.assert(
+      fc.property(fc.string(), (s) => {
+        // Strings Date can parse are legitimately accepted; everything else must be refused.
+        if (Number.isNaN(new Date(s).getTime())) {
+          expect(onceExpressionError(s, now)).not.toBeNull();
+        }
+      }),
+    );
+  });
+});
+
+describe("notificationText", () => {
+  test("strips osascript string-literal breakers and control characters", () => {
+    expect(notificationText('say "hi" \\ done')).toBe("say hi  done");
+    expect(notificationText("a\u0000b\nc\td\u007fe")).toBe("abcde");
+  });
+
+  test("non-string input becomes empty (schedule with neither description nor payload)", () => {
+    expect(notificationText(undefined)).toBe("");
+    expect(notificationText(null)).toBe("");
+    expect(notificationText(42)).toBe("");
+  });
+
+  test("property: output never contains NUL, quotes, backslashes, or control chars, and is at most 200 chars", () => {
+    fc.assert(
+      fc.property(fc.string({ unit: "binary" }), (s) => {
+        const out = notificationText(s);
+        expect(/[\u0000-\u001f\u007f"\\]/.test(out)).toBe(false);
+        expect(out.length).toBeLessThanOrEqual(200);
+      }),
+    );
   });
 });
