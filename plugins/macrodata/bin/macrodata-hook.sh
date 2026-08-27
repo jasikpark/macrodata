@@ -387,6 +387,31 @@ inject_pending_context() {
     fi
 }
 
+# Claude Code collects a hook's whole stdout against one 10,000-UTF-16-unit cap
+# and, past it, replaces everything with a 2,000-char preview plus a file path —
+# so an unbounded relay silently erases itself and every sibling block. Both
+# relays below share the prompt-submit budget with pending context, so each
+# keeps whole lines up to RELAY_BUDGET_BYTES (a byte count is an upper bound on
+# UTF-16 units, so LC_ALL=C byte lengths never under-count) and names what it
+# dropped. $1 = byte budget, $2 = the state file to read for the rest; section
+# on stdin.
+RELAY_BUDGET_BYTES=2500
+budget_section() {
+    LC_ALL=C awk -v max="$1" -v file="$2" '
+        !dropped && total + length($0) + 1 <= max { total += length($0) + 1; print; next }
+        { dropped++ }
+        END { if (dropped) printf "… %d more line(s) not shown; read %s\n", dropped, file }
+    '
+}
+
+# Record that a relay was emitted for this session+section, after the emit —
+# the file is a dedup log, not a delivery receipt, and keeping it short bounds
+# the grep on every prompt. $1 = seen file, $2 = key.
+mark_surfaced() {
+    echo "$2" >> "$1"
+    tail -n 200 "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+
 # Session-start preamble is weak: a model with flags in its prefix still answers
 # the prompt instead of relaying them. An instruction injected adjacent to the
 # user's prompt is followed far more reliably, so remind there — once per
@@ -404,41 +429,42 @@ inject_red_flag_reminder() {
     local key="${1:-global}:$hash"
     local seen="$STATE_ROOT/.flags-surfaced"
     grep -qxF "$key" "$seen" 2>/dev/null && return 0
-    echo "$key" >> "$seen"
-    tail -n 200 "$seen" > "$seen.tmp" && mv "$seen.tmp" "$seen"
     cat <<EOF
 <macrodata-red-flags>
 Unresolved 🔴 flags the user has not yet been shown. Relay these at the start of your reply — one line each — before addressing their prompt:
-$red_section
+$(printf '%s\n' "$red_section" | budget_section "$RELAY_BUDGET_BYTES" state/flags.md)
 </macrodata-red-flags>
 EOF
+    mark_surfaced "$seen" "$key"
 }
 
 # Same prompt-adjacent relay as inject_red_flag_reminder, for fired notify
 # reminders. The daemon upserts one line per schedule into state/reminders.md;
 # every session sees the file, and a reminder is cleared by the model removing
 # its line once it's been relayed and addressed — deduping here is only about
-# not repeating the nudge while the section is unchanged.
+# not repeating the nudge while the entries are unchanged. The entry lines are
+# the unit, not the heading: a hand-trimmed file that lost its "## ⏰" line
+# still relays. The dedup key hashes every entry, budgeted or not, so a fire
+# past the visible cut still re-arms the nudge.
 # $1 is the session id from the hook's stdin JSON, may be empty.
 inject_reminder_relay() {
     [ -s "$REMINDERS" ] || return 0
     local section
-    section=$(awk '/^## /{inrem = /^## ⏰/} inrem' "$REMINDERS" \
+    section=$(grep '^- ' "$REMINDERS" \
         | sed 's/<\/macrodata/\&lt;\/macrodata/g; s/<macrodata/\&lt;macrodata/g')
-    printf '%s' "$section" | grep -q '^- ' || return 0
+    [ -n "$section" ] || return 0
     local hash
     hash=$(printf '%s' "$section" | md5 -q 2>/dev/null || printf '%s' "$section" | md5sum | cut -d' ' -f1)
     local key="${1:-global}:$hash"
     local seen="$STATE_ROOT/.reminders-surfaced"
     grep -qxF "$key" "$seen" 2>/dev/null && return 0
-    echo "$key" >> "$seen"
-    tail -n 200 "$seen" > "$seen.tmp" && mv "$seen.tmp" "$seen"
     cat <<EOF
 <macrodata-reminders>
 Fired reminders the user may not have seen. Relay each inline at the start of your reply, with its fired-at time. If one fired hours ago, acknowledge the staleness ("this fired at HH:MM") instead of nudging as if fresh. Once a reminder has been relayed and addressed, remove its line from state/reminders.md with the Edit tool:
-$section
+$(printf '%s\n' "$section" | budget_section "$RELAY_BUDGET_BYTES" state/reminders.md)
 </macrodata-reminders>
 EOF
+    mark_surfaced "$seen" "$key"
 }
 
 inject_first_run() {

@@ -192,6 +192,61 @@ describe("hook script", () => {
       expect(output.match(/<\/macrodata-reminders>/g)).toHaveLength(1);
       expect(output).not.toContain("<macrodata-update>");
     });
+
+    test("entry lines relay even when the file has lost its heading", () => {
+      writeRemindersFile("- [lunch] fired 2026-08-21 12:30 — Go eat\n");
+
+      const output = runHook(ctx, "prompt-submit", SESSION);
+      expect(output).toContain("<macrodata-reminders>");
+      expect(output).toContain("- [lunch] fired 2026-08-21 12:30 — Go eat");
+    });
+
+    test("an oversized section is cut to whole lines under the relay budget, with a marker", () => {
+      const entryLine = (i: number, when = "12:30") => `- [r${i}] fired 2026-08-21 ${when} — ${"x".repeat(60)}`;
+      const lines = Array.from({ length: 200 }, (_, i) => entryLine(i));
+      writeRemindersFile(`## ⏰ Reminders\n${lines.join("\n")}\n`);
+
+      const output = runHook(ctx, "prompt-submit", SESSION);
+      const body = output.match(/<macrodata-reminders>\n([\s\S]*)\n<\/macrodata-reminders>/)?.[1] ?? "";
+      const kept = body.split("\n").filter((l) => l.startsWith("- ["));
+      // Well under the 10k-unit hook stdout cap, leaving room for sibling blocks.
+      expect(output.length).toBeLessThan(4000);
+      expect(kept.length).toBeGreaterThan(0);
+      expect(kept.length).toBeLessThan(200);
+      expect(kept[0]).toBe(entryLine(0));
+      // Whole lines only — no entry is cut mid-payload.
+      expect(kept.every((l) => l.endsWith("x".repeat(60)))).toBe(true);
+      expect(body).toContain(`… ${200 - kept.length} more line(s) not shown; read state/reminders.md`);
+
+      // The dedup key covers every entry, so a re-fire past the cut re-arms.
+      lines[199] = entryLine(199, "13:30");
+      writeRemindersFile(`## ⏰ Reminders\n${lines.join("\n")}\n`);
+      expect(runHook(ctx, "prompt-submit", SESSION)).toContain("<macrodata-reminders>");
+    });
+  });
+
+  describe("prompt-submit red-flag relay", () => {
+    const SESSION = JSON.stringify({ session_id: "sess-1" });
+
+    test("an oversized 🔴 section is cut to whole lines under the relay budget, with a marker", () => {
+      const flag = (i: number) => `- flag ${i}: ${"y".repeat(60)}`;
+      const red = Array.from({ length: 200 }, (_, i) => flag(i));
+      writeFileSync(
+        join(ctx.stateDir, "flags.md"),
+        `# Flags\n\n## 🔴 Red\n${red.join("\n")}\n\n## 🟡 Yellow\n- not relayed\n`
+      );
+
+      const output = runHook(ctx, "prompt-submit", SESSION);
+      const body = output.match(/<macrodata-red-flags>\n([\s\S]*)\n<\/macrodata-red-flags>/)?.[1] ?? "";
+      const kept = body.split("\n").filter((l) => l.startsWith("- flag"));
+      expect(output.length).toBeLessThan(4000);
+      expect(kept.length).toBeGreaterThan(0);
+      expect(kept.length).toBeLessThan(200);
+      expect(kept[0]).toBe(flag(0));
+      expect(kept.every((l) => l.endsWith("y".repeat(60)))).toBe(true);
+      expect(body).toContain("more line(s) not shown; read state/flags.md");
+      expect(body).not.toContain("not relayed");
+    });
   });
 
   describe("daemon version lifecycle (GH #12)", () => {
