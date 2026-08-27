@@ -165,13 +165,15 @@ export function formatReminderEntry(s: ReminderInput, firedAt: Date): string {
 /**
  * Upsert an entry line into reminders.md content: replace an existing line for
  * the same schedule id (a re-fired reminder that was never addressed updates
- * in place rather than stacking), else append under the ⏰ heading. `existing`
- * of null models a missing file — the heading is created.
+ * in place rather than stacking), else append. The ⏰ heading is asserted
+ * whenever it is missing — for a null `existing` (no file yet) and for a file
+ * that lost it to hand-editing. Consumers key on the `- ` entry lines, not the
+ * heading, so this is for the human reading the file, not for delivery.
  */
 export function upsertReminderLine(existing: string | null, entry: string, id: string): string {
   const marker = `- [${safeId(id)}] `;
-  const base = existing?.trimEnd() || REMINDERS_HEADING;
-  const lines = base.split("\n");
+  const lines = (existing?.trimEnd() || REMINDERS_HEADING).split("\n");
+  if (!lines.some((l) => l.startsWith(REMINDERS_HEADING))) lines.unshift(REMINDERS_HEADING);
   const at = lines.findIndex((l) => l.startsWith(marker));
   if (at >= 0) {
     lines[at] = entry;

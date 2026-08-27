@@ -66,6 +66,14 @@ shipping the sharded hooks
       expect(out).toContain("- [lunch] fired 2026-08-21 12:30 — Go eat");
       expect(out).toContain("remove the line from state/reminders.md");
     });
+
+    test("reminders.md is silent with a heading but no entries, and relays entries without a heading", () => {
+      writeState(ctx, "reminders.md", "## ⏰ Reminders\n");
+      expect(compose(ctx, "reminders.md")).toBe("");
+
+      writeState(ctx, "reminders.md", "- [lunch] fired 2026-08-21 12:30 — Go eat");
+      expect(compose(ctx, "reminders.md")).toContain("- [lunch] fired 2026-08-21 12:30 — Go eat");
+    });
   });
 
   describe("truncation", () => {

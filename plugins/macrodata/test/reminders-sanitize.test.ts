@@ -264,6 +264,11 @@ describe("upsertReminderLine", () => {
     expect(out.match(/- \[passwd\]/g)).toHaveLength(1);
     expect(out).toContain("second");
   });
+
+  test("re-asserts the heading on a file that lost it", () => {
+    const out = upsertReminderLine(`${entry("lunch", "Go eat")}\n`, entry("retro", "weekly retro"), "retro");
+    expect(out).toBe(`${REMINDERS_HEADING}\n${entry("lunch", "Go eat")}\n${entry("retro", "weekly retro")}\n`);
+  });
 });
 
 describe("isSafeId", () => {
