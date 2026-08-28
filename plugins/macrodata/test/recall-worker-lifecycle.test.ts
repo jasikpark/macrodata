@@ -304,9 +304,12 @@ describe("recall worker version lifecycle", () => {
   // it fires under a test driving passes back to back and never fires for someone
   // sending a message every few minutes — the only person it exists for.
   const stampPath = (root: string) => join(root, ".recall", "last-spawn");
+  /** One line per recorded start, oldest first — the shape appends produce. */
   const seedSpawnStamp = (root: string, fails: number, agoSec: number) => {
     mkdirSync(join(root, ".recall"), { recursive: true });
-    writeFileSync(stampPath(root), `${fails} ${Math.floor(Date.now() / 1000) - agoSec}\n`);
+    const first = Math.floor(Date.now() / 1000) - agoSec;
+    const lines = Array.from({ length: fails }, (_, i) => String(first + i));
+    writeFileSync(stampPath(root), `${lines.join("\n")}\n`);
   };
 
   test("names a spawn that did not survive its own startup, however long ago it was", async () => {
@@ -314,8 +317,52 @@ describe("recall worker version lifecycle", () => {
 
     const { stdout } = runWorkerPass(ctx.root);
 
-    expect(recallLog(ctx.root)).toContain("consecutive starts left no worker");
+    // The count is this pass's start plus the one already recorded, and the age
+    // is measured from the OLDEST — a report that dated the trouble from the
+    // most recent attempt would call a root that has been failing since morning
+    // a few seconds old, on every prompt.
+    expect(recallLog(ctx.root)).toContain("worker: 2 consecutive starts left no worker (first 216");
     expect(stdout).toContain("failing to start");
+  });
+
+  test("counts starts by line, so a burst of passes cannot collapse into one", () => {
+    seedSpawnStamp(ctx.root, 4, 300);
+
+    runWorkerPass(ctx.root);
+
+    // A count read, incremented and written back loses concurrent passes — and
+    // concurrent passes are the signature this exists to report, since a root
+    // whose worker will not start has every open session spawning on every
+    // prompt. Appending makes the file the count.
+    expect(readFileSync(stampPath(ctx.root), "utf-8").trim().split("\n")).toHaveLength(5);
+    expect(recallLog(ctx.root)).toContain("worker: 5 consecutive starts left no worker");
+  });
+
+  // The stamp outlives crashes, downgrades and half-writes, so it can hold
+  // anything: a previous version's "2 1750000000" counter line, a truncated
+  // number, a leading zero that shell arithmetic reads as octal and errors on.
+  // None of that may cost the pass its spawn or put a line on the hook's stderr.
+  test("a stamp written by something else does not stop the worker starting", async () => {
+    mkdirSync(join(ctx.root, ".recall"), { recursive: true });
+    writeFileSync(stampPath(ctx.root), "2 1750000000\n08\nnot-a-number\n");
+
+    const { stderr } = runWorkerPass(ctx.root);
+
+    expect(stderr).toBe("");
+    expect(await waitForWorker(ctx.root)).toHaveLength(1);
+  });
+
+  // The hook appends before every spawn and can only clear the stamp on a LATER
+  // pass that finds a worker, so a start that succeeds has to retire its own
+  // line. Otherwise a root that recovers keeps its count — and warns — until
+  // someone happens to send another prompt.
+  test("a worker that comes up clears the failed-start ledger itself", async () => {
+    seedSpawnStamp(ctx.root, 2, 60);
+
+    runWorkerPass(ctx.root);
+
+    expect(await waitForWorker(ctx.root)).toHaveLength(1);
+    expect(await waitFor(() => !existsSync(stampPath(ctx.root)))).toBe(true);
   });
 
   // One failed spawn is also what a reap-then-respawn and a lost spawn race look

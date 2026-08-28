@@ -13,7 +13,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, utimesSync } from "fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, utimesSync } from "fs";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -153,6 +153,10 @@ describe("recall worker single-instance claim", () => {
     expect(existsSync(join(mailbox, "inbox-live.json"))).toBe(true);
   }, 30000);
 
+  /** Quarantined requests, whose names carry a timestamp to stay distinct. */
+  const quarantinesIn = (mailbox: string) =>
+    readdirSync(mailbox).filter((f) => f.startsWith("request-") && f.endsWith(".bad"));
+
   // Nothing else consumes a request file, so one the worker cannot parse is found
   // again by every 5s sweep for the life of the process — and the only trim on
   // worker.log runs on the spawn path, which a healthy worker never reaches.
@@ -164,8 +168,36 @@ describe("recall worker single-instance claim", () => {
 
     startWorker();
 
-    expect(await waitFor(() => existsSync(`${bad}.bad`))).toBe(true);
+    expect(await waitFor(() => quarantinesIn(mailbox).length === 1)).toBe(true);
     expect(existsSync(bad)).toBe(false);
+  }, 30000);
+
+  // The name a quarantine lands under carries a timestamp because the request
+  // name does not identify the content: the hook reuses `request-<sid>.json` for
+  // every prompt in a session, so a fixed `.bad` destination means the second
+  // unparseable request of a session silently overwrites the first — and a
+  // quarantine exists to be read afterwards.
+  test("keeps each quarantined request rather than overwriting the last", async () => {
+    const mailbox = join(root, ".recall", "mailbox");
+    mkdirSync(mailbox, { recursive: true });
+    const bad = join(mailbox, "request-abc.json");
+
+    writeFileSync(bad, '{"search": "first truncated mid-w');
+    startWorker();
+    expect(await waitFor(() => quarantinesIn(mailbox).length === 1)).toBe(true);
+
+    writeFileSync(bad, '{"search": "second truncated mid-w');
+    expect(await waitFor(() => quarantinesIn(mailbox).length === 2)).toBe(true);
+
+    // Both bodies still readable is the property; two distinct names is only how
+    // it is achieved.
+    const bodies = quarantinesIn(mailbox)
+      .map((f) => readFileSync(join(mailbox, f), "utf-8"))
+      .sort();
+    expect(bodies).toEqual([
+      '{"search": "first truncated mid-w',
+      '{"search": "second truncated mid-w',
+    ]);
   }, 30000);
 
   test("SIGTERM releases the claim", async () => {

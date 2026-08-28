@@ -38,18 +38,66 @@ RECALL_SENTINEL="--macrodata-recall-worker"
 # State root (MACRODATA_ROOT > config.json > default)
 DEFAULT_ROOT="$HOME/.config/macrodata"
 CONFIG_FILE="$DEFAULT_ROOT/config.json"
+
+# One directory, one spelling of it.
+#
+# The root string is this hook's IDENTITY for a worker: it is passed in the
+# worker's argv, and every later pass decides "is that worker mine?" by comparing
+# that argv tail against this variable. Storage, meanwhile, resolves through the
+# kernel, which folds `/a/root/` into `/a/root` and (on macOS) `/tmp` into
+# `/private/tmp`. Two spellings of one directory are therefore one mailbox and
+# one pidfile but two identities: each session reads the other's claim as a
+# foreign root's, deletes a live pidfile, and starts a second ~1.2GB worker on
+# the same store. Canonicalizing at the resolver is what keeps the two meanings
+# of "the same root" from drifting apart. Mirrored by getStateRoot() in
+# src/config.ts, which every other entry point resolves through.
+#
+# Nonzero, printing nothing, for a root no worker could be managed under.
+canonicalize_root() {
+    local p="$1"
+    # A control character makes the root unusable, not merely unusual: `ps`
+    # renders a newline as `\012` and `read -r` splits the table on it, so the
+    # argv comparison can never match again. The worker is then invisible to the
+    # pass that spawned it, and a new one starts per prompt, without bound.
+    case "$p" in
+        ''|*[[:cntrl:]]*) return 1 ;;
+    esac
+    while :; do
+        case "$p" in
+            /) break ;;
+            */) p="${p%/}" ;;
+            *) break ;;
+        esac
+    done
+    [ -n "$p" ] || return 1
+    # -P resolves symlinks, so /tmp and /private/tmp arrive as one string. A root
+    # that does not exist yet has nothing to resolve and keeps its written form;
+    # the pass that creates it canonicalizes from then on.
+    if [ -d "$p" ]; then
+        p="$(cd -P "$p" 2>/dev/null && pwd -P)" || return 1
+        [ -n "$p" ] || return 1
+    fi
+    printf '%s' "$p"
+}
+
+STATE_ROOT=""
 if [ -n "$MACRODATA_ROOT" ]; then
-    STATE_ROOT="$MACRODATA_ROOT"
+    STATE_ROOT="$(canonicalize_root "$MACRODATA_ROOT")" || STATE_ROOT=""
 elif [ -f "$CONFIG_FILE" ]; then
     # Type-checked, not just present: `-r` renders a number, a bool, or a whole
     # object as text, and a root of `123` would resolve here while the TypeScript
     # resolver hands the same value to path.join() and throws. The two must agree
-    # on every config a person can write, so both require a string.
-    STATE_ROOT=$(jq -r 'if (.root | type) == "string" then .root else empty end' "$CONFIG_FILE" 2>/dev/null)
-    STATE_ROOT="${STATE_ROOT:-$DEFAULT_ROOT}"
-else
-    STATE_ROOT="$DEFAULT_ROOT"
+    # on every config a person can write, so both require a string — and then
+    # both require that string to be a usable path.
+    # jq drops a control-charactered root rather than handing it to command
+    # substitution, which silently deletes NUL bytes and (bash >= 4.4) warns on
+    # stderr while doing it — a squeak on every prompt, and a root the shell and
+    # getStateRoot() would then disagree about, since only one of them saw the NUL.
+    CONFIGURED_ROOT=$(jq -r 'if (.root | type) == "string" and ((.root | explode | map(. < 32 or . == 127) | any) | not) then .root else empty end' "$CONFIG_FILE" 2>/dev/null)
+    [ -n "$CONFIGURED_ROOT" ] && { STATE_ROOT="$(canonicalize_root "$CONFIGURED_ROOT")" || STATE_ROOT=""; }
 fi
+[ -n "$STATE_ROOT" ] || STATE_ROOT="$(canonicalize_root "$DEFAULT_ROOT")" || STATE_ROOT="$DEFAULT_ROOT"
+[ -n "$STATE_ROOT" ] || STATE_ROOT="$DEFAULT_ROOT"
 
 PIDFILE="$STATE_ROOT/.daemon.pid"
 PENDING_CONTEXT="$STATE_ROOT/.pending-context"
@@ -112,6 +160,22 @@ close_inherited_fds() {
     done
 }
 
+# What can actually be said about a PID: 0 alive, 1 definitely gone, 2 unknown.
+#
+# `kill -0` fails for two unrelated reasons and the difference decides whether a
+# process may be written off: ESRCH means gone, EPERM means alive and owned by
+# someone else. Reading the second as the first reports a successful reap of a
+# process that is still running, and clears a claim still held. worker.ts's
+# alive() draws the same distinction.
+pid_state() {
+    local err
+    err="$(kill -0 "$1" 2>&1)" && return 0
+    case "$err" in
+        *[Nn]"o such process"*) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
 # SIGTERM, then SIGKILL, then confirm. Nonzero if the process outlived both: an
 # unverified reap logs a success while the old process keeps doing its job.
 kill_verified() {
@@ -123,7 +187,22 @@ kill_verified() {
         n=0
         while [ "$n" -lt 20 ] && kill -0 "$pid" 2>/dev/null; do sleep 0.1; n=$((n + 1)); done
     fi
-    ! kill -0 "$pid" 2>/dev/null
+    # Only a positive "gone" counts as reaped. Anything else — still alive, or a
+    # state this shell cannot determine — is reported as a survivor, because the
+    # caller's next move is to log a failed reap and leave the process alone.
+    pid_state "$pid"
+    [ "$?" -eq 1 ]
+}
+
+# Delete the worker claim, but only while it still names the PID the decision was
+# made about. The `ps` that produced that decision forks, and a worker claiming
+# the file inside that window — the post-reap race this whole path exists for —
+# would otherwise lose a live mutex to a verdict about the PID it replaced. The
+# re-read narrows the window to the two adjacent syscalls below; it does not
+# close it, and nothing available to a shell script does. worker.ts's own unlink
+# is content-checked for the same reason and with the same caveat.
+claim_clear() {
+    [ "$(tr -d '[:space:]' < "$RECALL_PIDFILE" 2>/dev/null)" = "$1" ] && rm -f "$RECALL_PIDFILE"
 }
 
 # Reap a space-separated pid list; echoes back the ones still alive afterward.
@@ -135,9 +214,35 @@ reap() {
     # shellcheck disable=SC2086
     for pid in $1; do
         case "$pid" in ''|*[!0-9]*) continue ;; esac
+        # Re-read the argv immediately before the kill rather than trusting the
+        # `ps` snapshot this list was built from. Reaping is slow — up to 4s per
+        # pid across the two escalations — so by the time a later pid comes up,
+        # its snapshot entry may describe a process that has already exited and
+        # had its number reissued, and the kill would land on whatever holds the
+        # number now. A worker that left on its own is simply gone, not a
+        # survivor.
+        is_recall_worker_argv "$(ps -ww -p "$pid" -o command= 2>/dev/null || true)" || continue
         kill_verified "$pid" || survivors="$survivors $pid"
     done
     printf '%s' "$survivors"
+}
+
+# Neutralize macrodata tag-openers in text about to be injected into the model's
+# context.
+#
+# Everything this script injects is wrapped in a <macrodata-*> block, and content
+# carrying a closing tag ends its wrapper early: the rest then lands as a sibling
+# of the harness's own blocks, indistinguishable from something the harness said.
+# The content is attacker-reachable at every call site — a git or GECOS name, a
+# state root set by a checked-in .envrc, a memory file.
+#
+# Filtered with sed rather than ${var//}: from bash 5.2 an unescaped `&` in a
+# replacement expands to the text that matched, so `&lt;` reproduces the very tag
+# it was meant to defuse, while the `\&` that fixes that is a literal backslash
+# in the bash 3.2 macOS ships as /bin/bash. No one replacement word is correct on
+# both, and this script runs on both.
+neutralize_tags() {
+    sed 's/<\/macrodata/\&lt;\/macrodata/g; s/<macrodata/\&lt;macrodata/g'
 }
 
 # An announcement is injected into the model's context, so it arrives tagged like
@@ -145,7 +250,11 @@ reap() {
 # the user wrote, which is the one reading that makes a worker warning actionable
 # by the wrong party.
 recall_announce() {
-    printf '<macrodata-recall-status>\n%s\n</macrodata-recall-status>\n' "$1"
+    # Neutralized like every other injected block: these messages interpolate the
+    # state root, which is attacker-reachable wherever config.json or the
+    # environment is.
+    printf '<macrodata-recall-status>\n%s\n</macrodata-recall-status>\n' \
+        "$(printf '%s' "$1" | neutralize_tags)"
 }
 
 # Keep the tail of an append-only recall log, in place.
@@ -156,27 +265,43 @@ recall_announce() {
 # rather than rotated to a `.1` sibling — this gets read by hand, mid-incident,
 # and a rotation puts half the story in a file nobody thinks to open.
 RECALL_LOG_MAX_BYTES=1048576
-RECALL_LOG_KEEP_LINES=2000
+# Both ends of the trim are measured in bytes. Triggering on a size and cutting
+# on a line count are two different measurements, and a log of wide records
+# satisfies the second while staying above the first: 2MB across 100 NDJSON lines
+# keeps every line, removes nothing, and rewrites a multi-megabyte file on every
+# call for as long as the file lives. Bytes on both ends means one trim is enough.
+RECALL_LOG_KEEP_BYTES=524288
 trim_log() {
-    local f="$1" size
+    local f="$1" size tmp
     [ -f "$f" ] || return 0
-    size="$(wc -c < "$f" 2>/dev/null || echo 0)"
-    [ "${size:-0}" -gt "$RECALL_LOG_MAX_BYTES" ] || return 0
+    size="$(wc -c < "$f" 2>/dev/null | tr -d '[:space:]')"
+    case "$size" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$size" -gt "$RECALL_LOG_MAX_BYTES" ] || return 0
     # PID in the scratch name, like atomicWrite's: every session on the machine
     # runs this against the same log, and a shared scratch path is O_TRUNC — one
     # trimmer would publish another's half-written copy over the log.
-    local tmp="$f.$$.trim"
-    if ! tail -n "$RECALL_LOG_KEEP_LINES" "$f" > "$tmp" 2>/dev/null; then
-        rm -f "$tmp"
-        return 0
-    fi
-    # Copied back rather than renamed into place. The worker holds this file open
-    # with `>>` for its whole life, and a rename swaps the inode out from under
-    # that fd: the worker keeps writing, to a file now unlinked, and its log goes
-    # silent for the rest of the process — during the per-prompt failure loop
-    # that is the only realistic way the file got this big. Appends racing the
-    # copy are lost instead, which is a few lines rather than all of them.
-    cat "$tmp" > "$f" 2>/dev/null
+    tmp="$f.$$.trim"
+    # The work runs in a subshell for two reasons. Its EXIT trap removes the
+    # scratch file if the hook is killed mid-trim, where a trap set directly in
+    # this function would replace the script's own. And the redirections are
+    # inside it: a failing `> "$tmp"` is the SHELL's error, printed before any
+    # command's own 2>/dev/null applies, and this function runs on every log
+    # line, so on a root that has become unwritable that message would reach the
+    # user once per write.
+    (
+        trap 'rm -f "$tmp"' EXIT HUP INT TERM
+        # The first line is a fragment after a byte-bounded cut; dropping it
+        # keeps every record in the file whole.
+        tail -c "$RECALL_LOG_KEEP_BYTES" "$f" | sed '1d' > "$tmp" || exit 0
+        # Copied back rather than renamed into place. The worker holds this file
+        # open with `>>` for its whole life, and a rename swaps the inode out
+        # from under that fd: the worker keeps writing, to a file now unlinked,
+        # and its log goes silent for the rest of the process — during the
+        # per-prompt failure loop that is the only realistic way the file got
+        # this big. Appends racing the copy are lost instead, which is a few
+        # lines rather than all of them.
+        cat "$tmp" > "$f"
+    ) 2>/dev/null
     rm -f "$tmp"
 }
 
@@ -286,7 +411,12 @@ signal_daemon_reload() {
 # primary forensic record for recall-liveness incidents, and a rename would split
 # the history across two files at the exact moment someone is reading back.
 recall_log() {
-    echo "[$(date '+%F %T')] $*" >> "$RECALL_LOGDIR/supervisor.log"
+    # The 2> comes first so it is in place before the append is attempted: a
+    # redirect that fails is reported by the SHELL, and on a state root that has
+    # become unwritable that message would otherwise reach the user's terminal
+    # once per log line, on every prompt, describing a condition they cannot act
+    # on from there.
+    echo "[$(date '+%F %T')] $*" 2>/dev/null >> "$RECALL_LOGDIR/supervisor.log"
     trim_log "$RECALL_LOGDIR/supervisor.log"
 }
 
@@ -330,6 +460,15 @@ ensure_recall_worker() {
         [ "$voice" = announce ] && recall_announce "macrodata-recall: cannot create $RECALL_LOGDIR; ambient recall is NOT running"
         return 0
     fi
+
+    # Both recall logs are bounded on every pass, not on the spawn path. The
+    # worker fills worker.log for as long as it lives, so a trim that only runs
+    # where a worker is being started is a trim that a healthy root never
+    # reaches — and the run that fills the file fastest, a worker looping on a
+    # request it cannot serve, is one where a spawn never happens. trim_log is
+    # a no-op below the size trigger and safe against the worker's open append
+    # fd, so calling it here costs a stat.
+    trim_log "$RECALL_LOGDIR/worker.log"
 
     # Matching happens in-shell, with no `grep` in the pipeline, because a grep
     # for this pattern carries the pattern in its OWN argv: a second session's
@@ -383,20 +522,25 @@ ensure_recall_worker() {
                 recall_log "worker: claim file holds a non-pid -> clear"
                 rm -f "$RECALL_PIDFILE" ;;
             *)
-                holder="$(ps -ww -p "$held" -o command= 2>/dev/null || true)"
-                # Re-read immediately before the unlink, because the `ps` above
-                # forks — a window measured in milliseconds, but the one this
-                # block runs in. A worker that claims the file inside it (the
-                # post-reap race this whole path exists for) would otherwise have
-                # its live mutex deleted on the strength of a verdict about the
-                # PID it replaced, and the next pass then starts a second worker
-                # against the same mailbox. worker.ts's own unlink is
-                # content-checked for exactly this reason; so is this one.
-                if ! is_recall_worker_argv "$holder" &&
-                   [ "$(tr -d '[:space:]' < "$RECALL_PIDFILE" 2>/dev/null)" = "$held" ]; then
-                    recall_log "worker: claim held by pid $held, not a worker for this root -> clear"
-                    rm -f "$RECALL_PIDFILE"
-                fi ;;
+                # Three answers, not two. Only a positive verdict justifies
+                # deleting another process's mutex: an unreadable process table,
+                # a `ps` that could not fork, or a holder owned by another user
+                # all mean this pass does not know, and "does not know" leaves
+                # the claim standing for the next one. Reading any of them as
+                # "dead" clears a live claim and puts a second worker on the
+                # mailbox.
+                pid_state "$held"
+                case "$?" in
+                    1)
+                        claim_clear "$held" &&
+                            recall_log "worker: claim held by dead pid $held -> cleared" ;;
+                    0)
+                        if holder="$(ps -ww -p "$held" -o command= 2>/dev/null)" &&
+                           [ -n "$holder" ] && ! is_recall_worker_argv "$holder"; then
+                            claim_clear "$held" &&
+                                recall_log "worker: claim held by pid $held, not a worker for this root -> cleared"
+                        fi ;;
+                esac ;;
         esac
     fi
 
@@ -429,6 +573,12 @@ ensure_recall_worker() {
         # dev checkout is a steady state, and a line per prompt would bury the
         # entries that record an actual decision under the one case guaranteed to
         # repeat on every message for days.
+        # A hand-started worker is a worker: recall is being served, so no spawn
+        # is owed and the failed-spawn count has nothing left to describe.
+        # Returning without this reset leaves whatever the count was frozen
+        # across the whole debugging session, to be spent on the first pass after
+        # the dev worker goes away.
+        rm -f "$RECALL_SPAWN_STAMP"
         if [ "$voice" = announce ]; then
             recall_log "worker: hand-started worker(s)$foreign up -> left alone; $RECALL_WORKER is not serving recall"
             recall_announce "macrodata-recall: recall is served by a hand-started worker (pid${foreign}), not the installed plugin"
@@ -476,32 +626,38 @@ ensure_recall_worker() {
     # missing file is the SHELL's error, reported before the command's own stderr
     # is redirected anywhere. Unguarded, every first-ever spawn on a fresh state
     # root writes a "No such file" line to the hook's stderr.
-    local fails=0 since="" now age
+    local spawns=0 first="" now age
     now="$(date +%s)"
     if [ -f "$RECALL_SPAWN_STAMP" ]; then
-        read -r fails since < "$RECALL_SPAWN_STAMP" 2>/dev/null || true
+        # One line per spawn, counted — not a number read, incremented, and
+        # written back. Several sessions reaching this line together is not an
+        # edge case, it IS the signature the count exists to report: a root whose
+        # worker will not start has every open session spawning on every prompt.
+        # A read-modify-write loses exactly that case (both read 1, both store 2,
+        # the count reads healthy forever), while a short append under O_APPEND
+        # cannot lose a peer's.
+        spawns="$(wc -l < "$RECALL_SPAWN_STAMP" 2>/dev/null | tr -d '[:space:]')"
+        first="$(head -1 "$RECALL_SPAWN_STAMP" 2>/dev/null)"
     fi
-    # Both fields are re-validated rather than trusted: this file survives
-    # crashes and downgrades, so it can hold anything an older version wrote.
-    case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
-    case "$since" in *[!0-9]*) since="" ;; esac
-    fails=$((fails + 1))
-    printf '%s %s\n' "$fails" "$now" > "$RECALL_SPAWN_STAMP"
-    if [ "$fails" -ge "$RECALL_SPAWN_FAIL_COUNT" ]; then
+    # Re-validated rather than trusted: this file survives crashes and
+    # downgrades, so it can hold anything an older version wrote.
+    case "$spawns" in ''|*[!0-9]*) spawns=0 ;; esac
+    case "$first" in ''|*[!0-9]*) first="" ;; esac
+    # Counted only once the append is on disk, and base 10 explicitly — a stamp
+    # left half-written can hold a leading zero, and arithmetic on one is octal,
+    # which errors out and freezes the counter at the value it already had.
+    if printf '%s\n' "$now" >> "$RECALL_SPAWN_STAMP" 2>/dev/null; then
+        spawns=$((10#$spawns + 1))
+    fi
+    if [ "$spawns" -ge "$RECALL_SPAWN_FAIL_COUNT" ]; then
         age=""
-        [ -n "$since" ] && age=" (last $((now - since))s ago)"
-        recall_log "worker: $fails consecutive starts left no worker$age -> startup is failing; see worker.log"
+        [ -n "$first" ] && age=" (first $((now - first))s ago)"
+        recall_log "worker: $spawns consecutive starts left no worker$age -> startup is failing; see worker.log"
         # Announce-only, like every other steady-state line: a failing spawn
         # repeats per prompt, and a warning on every message is how the next
         # real warning gets ignored. The log carries every occurrence.
         [ "$voice" = announce ] && recall_announce "macrodata-recall: the worker is failing to start; ambient recall is NOT running (see $RECALL_LOGDIR/worker.log)"
     fi
-
-    # Trimmed here because a spawn is the only moment no worker holds this file.
-    # Under the failure loop above it grows by a stack trace per prompt; the
-    # newest is the one that matches the code now installed, and the older
-    # copies of the same trace are what would push it out of reach.
-    trim_log "$RECALL_LOGDIR/worker.log"
 
     # The subshell closes all inherited fds above stderr (see close_inherited_fds)
     # before exec'ing the worker, so it can't hold bun's spawnSync pipe open.
@@ -551,8 +707,7 @@ mark_surfaced() {
 inject_red_flag_reminder() {
     [ -s "$FLAGS" ] || return 0
     local red_section
-    red_section=$(awk '/^## /{inred = /^## 🔴/} inred' "$FLAGS" \
-        | sed 's/<\/macrodata/\&lt;\/macrodata/g; s/<macrodata/\&lt;macrodata/g')
+    red_section=$(awk '/^## /{inred = /^## 🔴/} inred' "$FLAGS" | neutralize_tags)
     printf '%s' "$red_section" | grep -q '^- ' || return 0
     local hash
     hash=$(printf '%s' "$red_section" | md5 -q 2>/dev/null || printf '%s' "$red_section" | md5sum | cut -d' ' -f1)
@@ -581,7 +736,7 @@ inject_reminder_relay() {
     [ -s "$REMINDERS" ] || return 0
     local section
     section=$(grep '^- ' "$REMINDERS" \
-        | sed 's/<\/macrodata/\&lt;\/macrodata/g; s/<macrodata/\&lt;macrodata/g')
+        | neutralize_tags)
     [ -n "$section" ] || return 0
     local hash
     hash=$(printf '%s' "$section" | md5 -q 2>/dev/null || printf '%s' "$section" | md5sum | cut -d' ' -f1)
@@ -606,13 +761,11 @@ inject_first_run() {
     local USER_INFO
     USER_INFO=$("$SCRIPT_DIR/detect-user.sh" 2>/dev/null || echo '{}')
 
-    # Neutralize macrodata tag-openers in the detected-user JSON: a hostile
-    # git/GECOS name (e.g. user.name containing "</macrodata-detected-user>")
-    # would otherwise close the wrapper early or forge a sibling block. The
-    # deeper fix (proper JSON escaping at the detect-user.sh source) is tracked
-    # as a follow-up.
-    USER_INFO="${USER_INFO//<\/macrodata/&lt;/macrodata}"
-    USER_INFO="${USER_INFO//<macrodata/&lt;macrodata}"
+    # A hostile git/GECOS name (user.name containing "</macrodata-detected-user>")
+    # would otherwise close the wrapper early or forge a sibling block. The deeper
+    # fix (proper JSON escaping at the detect-user.sh source) is tracked as a
+    # follow-up.
+    USER_INFO="$(printf '%s' "$USER_INFO" | neutralize_tags)"
 
     echo "<macrodata>
 <macrodata-first-run state-root=\"$STATE_ROOT\">

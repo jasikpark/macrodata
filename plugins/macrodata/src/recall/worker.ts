@@ -41,8 +41,9 @@ import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdi
 import { join } from "path";
 import { configure, getConsoleSink, getLogger, jsonLinesFormatter } from "@logtape/logtape";
 import { envNum, pipelineSearch } from "./fts.ts";
-import { WEDGED, withDeadline } from "./deadline.ts";
-import { getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath } from "./config.ts";
+import { TIMER_MAX_MS, WEDGED, withDeadline } from "./deadline.ts";
+import { getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath, getSpawnStampPath } from "./config.ts";
+import { modelsLoaded } from "./models.ts";
 
 // Created before the watch below: fs.watch throws on a missing directory, and on
 // a fresh state root nothing has written the mailbox yet.
@@ -59,7 +60,7 @@ const SWEEP_INTERVAL_MS = 5_000;
 // envNum, not bare Number(): "" would parse to 0 (drop every request as stale)
 // and a non-numeric value to NaN (guard silently off) — and hook.ts already
 // parses this env family through envNum, so the two processes must agree.
-const MAX_REQ_AGE_MS = envNum("MACRODATA_RECALL_MAX_REQ_AGE_MS", 10 * 60_000, 1);
+const MAX_REQ_AGE_MS = envNum("MACRODATA_RECALL_MAX_REQ_AGE_MS", 10 * 60_000, 1, TIMER_MAX_MS);
 // A pipeline whose await never settles is worse than a dead worker: `running`
 // never clears, so every later request is queued and dropped, while this process
 // stays in `ps` holding the claim — the hook reads it as healthy and
@@ -71,21 +72,24 @@ const MAX_REQ_AGE_MS = envNum("MACRODATA_RECALL_MAX_REQ_AGE_MS", 10 * 60_000, 1)
 // warm rerank is ~5s. A single budget generous enough for that download leaves a
 // real wedge undetected for as long as it takes; one tight enough to catch a
 // wedge turns a slow first download into a restart loop that never finishes it.
-const WEDGE_COLD_MS = envNum("MACRODATA_RECALL_WEDGE_COLD_MS", 20 * 60_000, 1_000);
-const WEDGE_WARM_MS = envNum("MACRODATA_RECALL_WEDGE_WARM_MS", 2 * 60_000, 1_000);
+const WEDGE_COLD_MS = envNum("MACRODATA_RECALL_WEDGE_COLD_MS", 20 * 60_000, 1_000, TIMER_MAX_MS);
+const WEDGE_WARM_MS = envNum("MACRODATA_RECALL_WEDGE_WARM_MS", 2 * 60_000, 1_000, TIMER_MAX_MS);
 // Files the protocol leaves behind rather than consumes: an inbox nobody drained,
 // the two per-session baselines, and the scratch that a SIGKILL mid-write strands
 // (`.tmp` from atomicWrite, `.claim` from the hook's inbox drain, `.bad` from a
-// quarantine). The TTL is generous because the baselines are rewritten only on a
+// quarantine, `.trim` from the hook's log rotation). The TTL is generous because the baselines are rewritten only on a
 // fire that gets far enough to have something to record — an early bail rewrites
 // neither — so a live session's mtime can lag its last message by a long way, and
 // culling one costs it the dedupe state that keeps recall from repeating itself.
-const ORPHAN_TTL_MS = envNum("MACRODATA_RECALL_ORPHAN_TTL_MS", 7 * 24 * 60 * 60_000, 60_000);
+const ORPHAN_TTL_MS = envNum("MACRODATA_RECALL_ORPHAN_TTL_MS", 7 * 24 * 60 * 60_000, 60_000, TIMER_MAX_MS);
 const ORPHAN_SWEEP_MS = 60 * 60_000;
-const ORPHAN_RE = /^(?:inbox|exclude|injected)-.+\.json$|\.(?:tmp|claim|bad)$/;
+const ORPHAN_RE = /^(?:inbox|exclude|injected)-.+\.json$|\.(?:tmp|claim|bad|trim)$/;
 
 // NDJSON to stdout (the hook redirects it to .recall/worker.log), so the log is
-// jq-able and every record carries its own timestamp — the log is the primary
+// jq-able line by line and every record carries its own timestamp. Only what
+// goes through logtape is NDJSON — a crash trace or a library's console.warn
+// reaches the same file through the shell redirection, so a reader must tolerate
+// non-JSON lines rather than assume the file parses whole — the log is the primary
 // forensic record for liveness incidents, and protocol-file mtimes vanish as
 // the worker consumes them. Level boundary: warning = degraded but proceeding
 // (a request or result lost, worker healthy); error = operation abandoned.
@@ -166,6 +170,12 @@ function claimWorkerSlot(): void {
   workerLog.warn("could not claim the worker slot, starting anyway", { pidPath });
 }
 claimWorkerSlot();
+// Past this line a worker serves this root, so every start the hook recorded
+// while none did is answered. Clearing here rather than at first request is what
+// makes the hook's count mean "starts that left no worker": a worker that comes
+// up healthy and then sits idle all day is not a failing install, and a count
+// that never resets reports one on the next restart.
+try { unlinkSync(getSpawnStampPath()); } catch { /* no failed starts recorded */ }
 // Only ever removes OUR claim — the content check is what keeps the losing half
 // of a spawn burst from deleting the winner's pidfile on its way out.
 process.on("exit", () => {
@@ -207,11 +217,6 @@ function atomicWrite(path: string, data: string): void {
 // the agent has already moved past.
 const pending = new Map<string, Request>();
 let running = false;
-// Whether a pipeline has already completed in this process, which is what
-// separates the two wedge budgets: models.ts memoizes the loaded models on the
-// PENDING promise, so only the first run can pay for a download.
-let modelsWarm = false;
-
 async function runPipeline(req: Request): Promise<void> {
   const exclude = loadExclude(req.sid);
   const l = pipelineLog.with({ sid: req.sid });
@@ -221,7 +226,14 @@ async function runPipeline(req: Request): Promise<void> {
   // matching end), not merely inferable from a consumed request that
   // produced nothing.
   l.info("pipeline start", { searchChars: req.search.length, excludeSize: exclude.size });
-  const budget = modelsWarm ? WEDGE_WARM_MS : WEDGE_COLD_MS;
+  // Ask the models whether they are loaded rather than inferring it from past
+  // results: a run that returns nothing may never have reached the reranker
+  // (rerank() returns early on an empty candidate pool), and a load that is
+  // still downloading has produced no results at all. Both look identical from
+  // here, and both would put the run that actually pays for the download on the
+  // two-minute budget.
+  const warm = modelsLoaded();
+  const budget = warm ? WEDGE_WARM_MS : WEDGE_COLD_MS;
   let hits: Awaited<ReturnType<typeof pipelineSearch>> | typeof WEDGED;
   try {
     hits = await withDeadline(pipelineSearch(req.search, {
@@ -239,15 +251,10 @@ async function runPipeline(req: Request): Promise<void> {
     // claim that stops the hook from replacing it. Dying is what lets the next
     // convergence pass spawn a worker that can serve.
     l.error("pipeline exceeded its budget, exiting so the hook can restart it", {
-      budgetMs: budget, warm: modelsWarm, ms: Date.now() - t0,
+      budgetMs: budget, warm, ms: Date.now() - t0,
     });
     process.exit(1);
   }
-  // A hit is proof the models loaded; an empty result is not. `rerank()` returns
-  // early on an empty candidate pool, so a run that found nothing may never have
-  // asked for the reranker — and calling that warm would put the next run, the
-  // one that actually downloads it, on the two-minute budget.
-  if (hits.length > 0) modelsWarm = true;
   const ms = Date.now() - t0;
   if (hits.length > 0) {
     // Stamp timing so the hook can render the span: requestedAt (when the hook
@@ -291,6 +298,9 @@ async function drain(): Promise<void> {
   }
 }
 
+// Distinguishes quarantines within the same millisecond; see the rename below.
+let quarantineSeq = 0;
+
 function ingest(sid: string): void {
   const p = reqPath(sid);
   if (!existsSync(p)) return;
@@ -299,17 +309,27 @@ function ingest(sid: string): void {
   catch (e) {
     // Moved aside, not left in place. Nothing else consumes a request file, so
     // one that cannot be parsed is found again by every 5s sweep for the life of
-    // the worker — a warn line every five seconds, into a log whose only trim
-    // runs on the spawn path, which a healthy worker never reaches.
-    ingestLog.warn("quarantining malformed request file", { sid, error: String(e) });
-    try { renameSync(p, `${p}.bad`); } catch { try { unlinkSync(p); } catch { /* already gone */ } }
+    // the worker — a warn line every five seconds for as long as it sits there.
+    //
+    // The destination is unique per quarantine because the interesting case is
+    // the repeating one: a writer emitting malformed requests emits several, and
+    // a fixed name keeps only the last, discarding the evidence that it was a
+    // pattern rather than one bad write. The orphan sweep expires them.
+    const dest = `${p}.${Date.now()}-${quarantineSeq++}.bad`;
+    ingestLog.warn("quarantining malformed request file", { sid, dest, error: String(e) });
+    try { renameSync(p, dest); } catch { try { unlinkSync(p); } catch { /* already gone */ } }
     return;
   }
   try { unlinkSync(p); } catch {} // consume; latest-wins handled by the map
-  if (!req.search || req.search.length < 8) {
-    // The request file is already consumed at this point — dropping without a
-    // line means a schema-mismatched writer sees its requests vanish.
-    ingestLog.warn("request dropped: search missing or under 8 chars", { sid, searchChars: req.search?.length ?? 0 });
+  // Typed, not merely truthy: a number is truthy and has no `.length`, so
+  // `req.search.length < 8` is `undefined < 8` — false — and a JSON number sails
+  // through into pipelineSearch(), which then calls string methods on it deep in
+  // the FTS leg. The request file is already consumed at this point, so dropping
+  // without a line means a schema-mismatched writer sees its requests vanish.
+  if (typeof req.search !== "string" || req.search.length < 8) {
+    ingestLog.warn("request dropped: search is not a string of at least 8 chars", {
+      sid, searchType: typeof req.search, searchChars: typeof req.search === "string" ? req.search.length : null,
+    });
     return;
   }
   const ageMs = req.ts ? Date.now() - Date.parse(req.ts) : 0;
