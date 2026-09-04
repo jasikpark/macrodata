@@ -47,7 +47,7 @@ timestamps or run ids. UUID names make re-extracts idempotent overwrites, so
 Then for **each** extracted text file, spawn a sub-agent with the Task tool:
 
 ```
-Task(subagent_type="general-purpose", prompt=`
+Task(subagent_type="general-purpose", model="sonnet", prompt=`
 Read the conversation transcript at {clean_text_path}. It is already filtered to
 human + assistant messages only — no tool calls, tool results, or thinking blocks.
 
