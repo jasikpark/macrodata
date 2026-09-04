@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.2
+
+### Patch Changes
+
+- [#72](https://github.com/jasikpark/macrodata/pull/72) [`ab3e37f`](https://github.com/jasikpark/macrodata/commit/ab3e37f7e32b9ecf20abe87b9837e1c0f57836f1) Thanks [@jasikpark](https://github.com/jasikpark)! - The distill skill's per-transcript sub-agents now run on `sonnet` explicitly. An
+  unpinned `Task` spawn inherits the parent run's model, so a memory-maintenance schedule
+  on `opus` put every extraction worker on `opus` too. Extraction over an already-filtered
+  transcript does not need it; the parent's state-file rewrite pass is where the heavier
+  model earns its keep.
+
 ## 0.9.1
 
 ### Patch Changes
