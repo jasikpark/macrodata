@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.3
+
+### Patch Changes
+
+- [#74](https://github.com/jasikpark/macrodata/pull/74) [`04f66b5`](https://github.com/jasikpark/macrodata/commit/04f66b5d41bca5d73fd40e87709db0ef04a635bc) Thanks [@jasikpark](https://github.com/jasikpark)! - Remove the unused `@tobilu/qmd` runtime dependency. Macrodata does not import the
+  QMD SDK; it remains prior art for future index work rather than install-time code.
+
 ## 0.9.2
 
 ### Patch Changes
