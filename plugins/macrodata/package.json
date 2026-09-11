@@ -45,7 +45,6 @@
     "@modelcontextprotocol/sdk": "^1.1.0",
     "@opencode-ai/plugin": "^1.0.162",
     "@opencode-ai/sdk": "^1.1.49",
-    "@tobilu/qmd": "^2.5.1",
     "chokidar": "^4.0.3",
     "croner": "^9.0.0",
     "node-llama-cpp": "^3.19.1",
