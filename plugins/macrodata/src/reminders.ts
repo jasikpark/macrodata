@@ -12,6 +12,7 @@
  */
 
 import { Cron } from "croner";
+import { lstatSync } from "fs";
 
 export const DEFAULT_MODEL = "haiku";
 
@@ -196,4 +197,27 @@ export function upsertReminderLine(existing: string | null, entry: string, id: s
  */
 export function buildHeadlessArgs(s: ReminderInput): string[] {
   return ["--print", "--model", resolveModel(s.model), "--", s.payload];
+}
+
+/**
+ * True if `path` is itself a symlink (its own dirent, via lstat — not
+ * whatever it resolves to). This is the actual guard against a symlinked
+ * schedule file: chokidar's `followSymlinks: false` on the reminders watcher
+ * only changes chokidar's own internal traversal/re-stat bookkeeping — it
+ * still emits add/change carrying the link's own path, and it has no effect
+ * at all on a plain `readFileSync(path)`, which follows a symlink
+ * transparently regardless of that option. Callers must lstat the path
+ * themselves before reading it and refuse when this returns true — mirrors
+ * corpus.ts's `projectEntityFile` symlink refusal (lstat, not stat, so a
+ * dangling or redirecting link is caught before the target is ever opened).
+ * A path that vanished between discovery and this call (TOCTOU) is treated
+ * as "not a symlink" — the subsequent read will fail on its own and that
+ * failure is reported through the normal read-error path instead of here.
+ */
+export function isSymlinkPath(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }

@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, rea
 import { join, basename } from "path";
 import { Cron } from "croner";
 import { getStateRoot, getEntitiesDir, getJournalDir, getIndexDir, getRemindersDir } from "../src/config.js";
-import { formatReminderEntry, upsertReminderLine, buildHeadlessArgs, resolveModel, resolveDelivery, cronTooFrequent, isSafeId, notificationText } from "../src/reminders.js";
+import { formatReminderEntry, upsertReminderLine, buildHeadlessArgs, resolveModel, resolveDelivery, cronTooFrequent, isSafeId, notificationText, isSymlinkPath } from "../src/reminders.js";
 
 // The indexing modules pull in @huggingface/transformers + vectra (multi-second
 // import). Load them lazily so the daemon writes its PID file and starts
@@ -246,6 +246,24 @@ async function updateAllConversationIndexes() {
   }
 }
 
+// The one place a schedule file's bytes are read off disk. A symlink dropped
+// into remindersDir would otherwise let its fired description/payload read
+// straight through to whatever the link resolves to and land verbatim in
+// writePendingContext (the next session's injected context) — the same
+// arbitrary-file-read shape the corpus symlink refusal (projectEntityFile)
+// closes for entities. lstat, not stat, so the check inspects the link
+// itself instead of following it first; a refusal is logged and that one
+// file is skipped, everything else keeps working. Callers of this function
+// are the only sanctioned readers of a schedule file's contents — do not add
+// a second readFileSync(scheduleFile) elsewhere.
+function readScheduleFileSafely(path: string): string | null {
+  if (isSymlinkPath(path)) {
+    logError(`Refusing to read symlinked schedule file: ${path}`);
+    return null;
+  }
+  return readFileSync(path, "utf-8");
+}
+
 function loadAllSchedules(): Schedule[] {
   const remindersDir = getRemindersDir();
   const schedules: Schedule[] = [];
@@ -256,7 +274,8 @@ function loadAllSchedules(): Schedule[] {
     const files = readdirSync(remindersDir).filter(f => f.endsWith('.json'));
     for (const file of files) {
       try {
-        const content = readFileSync(join(remindersDir, file), "utf-8");
+        const content = readScheduleFileSafely(join(remindersDir, file));
+        if (content === null) continue; // symlink refusal already logged
         const schedule = JSON.parse(content) as Schedule;
         // The filename is the schedule's identity. Job keys, the reminders.md
         // line, and every delete path derive from it, so a body id such as
@@ -407,6 +426,19 @@ class MacrodataLocalDaemon {
     this.schedulesWatcher = watch(remindersDir, {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 100 },
+      // This only affects chokidar's OWN internal traversal/re-stat
+      // bookkeeping for the watch itself — it does not stop a symlinked
+      // schedule file from being read. With followSymlinks left at its
+      // default (true), the initial dir walk resolves through a symlinked
+      // schedule to watch its target instead of the link; false keeps
+      // chokidar keyed on the link path. Either way chokidar still emits
+      // add/change carrying the link's own path, and a plain
+      // readFileSync(path) on that path follows the link transparently —
+      // this option has zero effect there. The actual guard against reading
+      // through a symlinked schedule file is the lstat-based refusal in
+      // readScheduleFileSafely, used by every reader below and by
+      // loadAllSchedules.
+      followSymlinks: false,
     });
 
     this.schedulesWatcher.on("add", (path) => {
@@ -414,7 +446,9 @@ class MacrodataLocalDaemon {
       log(`Reminder added: ${basename(path)}`);
       this.reloadSchedules();
       try {
-        const schedule = JSON.parse(readFileSync(path, "utf-8")) as Schedule;
+        const content = readScheduleFileSafely(path);
+        if (content === null) return; // symlink refusal already logged
+        const schedule = JSON.parse(content) as Schedule;
         writePendingContext(`<macrodata-update type="schedule-added" id="${basename(path, ".json")}">${schedule.description}</macrodata-update>`);
       } catch {}
     });
@@ -428,7 +462,9 @@ class MacrodataLocalDaemon {
       log(`Reminder changed: ${basename(path)}`);
       this.reloadSchedules();
       try {
-        const schedule = JSON.parse(readFileSync(path, "utf-8")) as Schedule;
+        const content = readScheduleFileSafely(path);
+        if (content === null) return; // symlink refusal already logged
+        const schedule = JSON.parse(content) as Schedule;
         writePendingContext(`<macrodata-update type="schedule-updated" id="${basename(path, ".json")}">${schedule.description}</macrodata-update>`);
       } catch {}
     });
@@ -581,10 +617,14 @@ class MacrodataLocalDaemon {
     const entitiesDir = getEntitiesDir();
     const stateDir = join(stateRoot, "state");
 
-    // Watch both state files and entities
+    // Watch both state files and entities. chokidar's followSymlinks defaults
+    // to true; false here only affects its own dir-walk/re-stat bookkeeping.
+    // The actual guard against reading through a symlinked entity file is
+    // indexEntityFile's call into projectEntityFile's lstat-based refusal.
     this.watcher = watch([stateDir, entitiesDir], {
       ignoreInitial: true,
       persistent: true,
+      followSymlinks: false,
     });
 
     this.watcher.on("all", (event, path) => {

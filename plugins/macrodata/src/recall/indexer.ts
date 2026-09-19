@@ -9,20 +9,12 @@
 
 import { LocalIndex } from "vectra";
 import { join } from "path";
-import { readFileSync, readdirSync, existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { embedDocuments, embedQuery } from "./embeddings.ts";
-import { getIndexDir, getEntitiesDir, getJournalDir } from "./config.ts";
+import { getIndexDir, getJournalDir, getEntitiesDir } from "./config.ts";
+import { scanCorpus, type MemoryItem, type MemoryItemType } from "../corpus.ts";
 
-export type MemoryItemType = string;
-
-export interface MemoryItem {
-  id: string;
-  type: MemoryItemType;
-  content: string;
-  source: string;
-  section?: string;
-  timestamp?: string;
-}
+export type { MemoryItem, MemoryItemType } from "../corpus.ts";
 
 export interface SearchResult {
   content: string;
@@ -64,6 +56,15 @@ async function getIndex(): Promise<LocalIndex> {
 // and blew fp32 activation memory. Full content is still stored in metadata for
 // display/return; only the embedding input is truncated.
 const MAX_EMBED_CHARS = 2000;
+
+// A char-unit slice can split a surrogate pair, leaving a lone high surrogate
+// that serializes to U+FFFD and silently degrades the embedding. Drop a
+// trailing lone high surrogate (same guard as compose-state-file.ts).
+function dropLoneHighSurrogate(s: string): string {
+  const last = s.charCodeAt(s.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? s.slice(0, -1) : s;
+}
+
 const INDEX_BATCH = 8;
 
 async function indexItems(items: MemoryItem[]): Promise<void> {
@@ -75,7 +76,9 @@ async function indexItems(items: MemoryItem[]): Promise<void> {
   // persistence (resumable / survives a kill), bounded memory, visible progress.
   for (let i = 0; i < items.length; i += INDEX_BATCH) {
     const batch = items.slice(i, i + INDEX_BATCH);
-    const vectors = await embedDocuments(batch.map((it) => it.content.slice(0, MAX_EMBED_CHARS)));
+    const vectors = await embedDocuments(
+      batch.map((it) => dropLoneHighSurrogate(it.content.slice(0, MAX_EMBED_CHARS))),
+    );
     for (let j = 0; j < batch.length; j++) {
       const item = batch[j];
       const metadata: Record<string, string | number | boolean> = {
@@ -95,110 +98,63 @@ async function indexItems(items: MemoryItem[]): Promise<void> {
   }
 }
 
-function parseJournalForIndexing(): MemoryItem[] {
-  const items: MemoryItem[] = [];
-  const journalDir = getJournalDir();
-  if (!existsSync(journalDir)) return items;
-
-  for (const file of readdirSync(journalDir).filter((f) => f.endsWith(".jsonl"))) {
-    try {
-      const lines = readFileSync(join(journalDir, file), "utf-8").trim().split("\n").filter(Boolean);
-      for (let i = 0; i < lines.length; i++) {
-        try {
-          const entry = JSON.parse(lines[i]);
-          items.push({
-            id: `journal-${file}-${i}`,
-            type: "journal",
-            content: `[${entry.topic}] ${entry.content}`,
-            source: file,
-            timestamp: entry.timestamp,
-          });
-        } catch {
-          // skip malformed line
-        }
-      }
-    } catch {
-      // skip unreadable file
+function collectItems(): { items: MemoryItem[]; complete: boolean } {
+  const projection = scanCorpus();
+  if (!projection.complete) {
+    for (const f of projection.failures) {
+      console.log(`[macrodata-recall]projection incomplete: ${f.source}: ${f.error}`);
     }
   }
-  return items;
-}
-
-function parseEntitiesForIndexing(subdir: string, type: MemoryItemType): MemoryItem[] {
-  const items: MemoryItem[] = [];
-  const dir = join(getEntitiesDir(), subdir);
-  if (!existsSync(dir)) return items;
-
-  for (const file of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
-    try {
-      const content = readFileSync(join(dir, file), "utf-8");
-      const filename = file.replace(".md", "");
-      const sections = content.split(/^## /m);
-
-      if (sections[0].trim()) {
-        items.push({
-          id: `${type}-${filename}-preamble`,
-          type,
-          content: sections[0].trim(),
-          source: `${subdir}/${file}`,
-          section: "preamble",
-        });
-      }
-      for (let i = 1; i < sections.length; i++) {
-        const section = sections[i];
-        const firstLine = section.split("\n")[0];
-        const sectionTitle = firstLine.trim();
-        const sectionContent = section.slice(firstLine.length).trim();
-        if (sectionContent) {
-          items.push({
-            id: `${type}-${filename}-${i}`,
-            type,
-            content: `## ${sectionTitle}\n\n${sectionContent}`,
-            source: `${subdir}/${file}`,
-            section: sectionTitle,
-          });
-        }
-      }
-    } catch {
-      // skip unreadable file
-    }
-  }
-  return items;
-}
-
-// The live corpus, as ids. Scanning is cheap (file reads, no embedding), which
-// is what lets pruneOrphans run standalone in seconds.
-function collectItems(): MemoryItem[] {
-  const allItems: MemoryItem[] = [];
-
-  allItems.push(...parseJournalForIndexing());
-
-  const entitiesDir = getEntitiesDir();
-  if (existsSync(entitiesDir)) {
-    for (const dirent of readdirSync(entitiesDir, { withFileTypes: true })) {
-      if (!dirent.isDirectory() || dirent.name.startsWith(".")) continue;
-      allItems.push(...parseEntitiesForIndexing(dirent.name, dirent.name));
-    }
-  }
-
-  return allItems;
+  return { items: projection.items, complete: projection.complete };
 }
 
 // indexItems only ever upserts, so a vector outlives the journal line, section,
 // or file it came from and keeps scoring against live material forever. Nothing
 // else deletes, so the index only converges on the corpus if the ids the scan
 // no longer produces are removed here.
-export async function pruneOrphans(scanned?: MemoryItem[]): Promise<{ pruned: number; kept: number }> {
-  const items = scanned ?? collectItems();
+/**
+ * True when NEITHER corpus root exists on disk. A complete, empty projection
+ * over missing roots plus a non-empty index is far more likely a
+ * misconfigured MACRODATA_ROOT than a deliberate wipe, so it stays the one
+ * pattern pruneAgainst conservatively refuses.
+ */
+function bothCorpusRootsMissing(): boolean {
+  return !existsSync(getJournalDir()) && !existsSync(getEntitiesDir());
+}
+
+async function pruneAgainst(
+  items: MemoryItem[],
+  complete: boolean,
+): Promise<{ pruned: number; kept: number }> {
   const idx = await getIndex();
   const indexed = await idx.listItems();
 
-  // An empty scan means an unreadable or misconfigured data root far more often
-  // than a genuinely empty corpus, and pruning against it would delete every
-  // vector. Refuse rather than reconcile to zero.
-  if (items.length === 0) {
-    if (indexed.length > 0) console.log(`[macrodata-recall]prune skipped: scan found 0 items, index holds ${indexed.length}`);
+  // An incomplete projection (any source that failed to read or list) would
+  // silently read its missing items as deletions. Refuse rather than
+  // reconcile to an untruth.
+  if (!complete) {
+    if (indexed.length > 0) {
+      console.log(`[macrodata-recall]prune skipped: projection incomplete, index holds ${indexed.length}`);
+    }
     return { pruned: 0, kept: indexed.length };
+  }
+
+  // A complete projection is authoritative even when empty: an empty scan
+  // against at least one existing root means the corpus IS empty, and
+  // empties-to-zero is correct convergence after a wipe (bothCorpusRootsMissing
+  // is the one exception, above).
+  if (items.length === 0) {
+    if (indexed.length > 0) {
+      if (bothCorpusRootsMissing()) {
+        console.log(
+          `[macrodata-recall]prune skipped: journal and entities roots both missing (misconfigured root?), index holds ${indexed.length}`,
+        );
+        return { pruned: 0, kept: indexed.length };
+      }
+      for (const orphan of indexed) await idx.deleteItem(orphan.id);
+      return { pruned: indexed.length, kept: 0 };
+    }
+    return { pruned: 0, kept: 0 };
   }
 
   const live = new Set(items.map((it) => it.id));
@@ -208,14 +164,30 @@ export async function pruneOrphans(scanned?: MemoryItem[]): Promise<{ pruned: nu
   return { pruned: orphans.length, kept: indexed.length - orphans.length };
 }
 
+/**
+ * Prune index vectors the current corpus no longer produces. Called with a
+ * pre-scanned item list, the caller OWNS that list's authority (it must be a
+ * complete projection); called with no argument, the scan decides.
+ */
+export async function pruneOrphans(
+  scanned?: MemoryItem[],
+): Promise<{ pruned: number; kept: number }> {
+  if (scanned) return pruneAgainst(scanned, true);
+  const { items, complete } = collectItems();
+  return pruneAgainst(items, complete);
+}
+
 export async function rebuildIndex(): Promise<{ itemCount: number; pruned: number }> {
   const start = Date.now();
-  const allItems = collectItems();
+  const projection = collectItems();
+  const allItems = projection.items;
 
   console.log(`[macrodata-recall]embedding + indexing ${allItems.length} items (Qwen3/1024)…`);
   await indexItems(allItems);
 
-  const { pruned } = await pruneOrphans(allItems);
+  // Prune against the SAME projection just indexed: pruneAgainst needs
+  // `complete` to refuse deleting on an incomplete scan (see pruneAgainst).
+  const { pruned } = await pruneAgainst(allItems, projection.complete);
   if (pruned > 0) console.log(`[macrodata-recall]pruned ${pruned} orphaned vectors`);
 
   console.log(`[macrodata-recall]rebuild complete in ${((Date.now() - start) / 1000).toFixed(1)}s`);
