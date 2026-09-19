@@ -11,7 +11,7 @@
 
 import { describe, test, expect, beforeEach, afterEach, afterAll } from "bun:test";
 import { spawn } from "child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "fs";
 import { join, dirname } from "path";
 import {
   createTestContext,
@@ -19,6 +19,7 @@ import {
   addReminder,
   type TestContext,
 } from "./helpers";
+import { isSymlinkPath } from "../src/reminders";
 
 // Track all spawned daemon processes for cleanup, including ones whose PID
 // file never appeared — otherwise a startup slower than the poll window leaks
@@ -382,6 +383,45 @@ describe("daemon", () => {
       expect(log).toContain("Reminder noted for: nul-payload");
       expect(log).not.toContain("Firing nul-payload failed");
     });
+
+    test("refuses a symlinked schedule file dropped into reminders/ at runtime", async () => {
+      // The target lives outside reminders/, keyed by a filename that would
+      // pass loadAllSchedules' basename check if it were ever read. If the
+      // symlink refusal in readScheduleFileSafely regresses, this JSON gets
+      // read straight through and its description lands in .pending-context
+      // via the watcher's on("add") handler (writePendingContext) — an
+      // exfiltration path for any JSON-shaped file the daemon can read.
+      const secretFile = join(ctx.root, "secret.json");
+      writeFileSync(
+        secretFile,
+        JSON.stringify({
+          id: "exfiltrated",
+          type: "once",
+          expression: "2099-01-01T00:00:00Z",
+          description: "SECRET-PAYLOAD-SHOULD-NOT-BE-INJECTED",
+          payload: "irrelevant",
+        }),
+      );
+
+      const pid = await startDaemon(ctx);
+      expect(pid).not.toBeNull();
+      await Bun.sleep(500);
+
+      const linkPath = join(ctx.remindersDir, "planted-link.json");
+      symlinkSync(secretFile, linkPath);
+
+      // Give the watcher time to fire "add" and, if unguarded, propagate the
+      // symlink target's content into pending context.
+      await Bun.sleep(1500);
+
+      const log = readLog();
+      expect(log).toContain("Refusing to read symlinked schedule file");
+      expect(log).toContain(linkPath);
+
+      const pendingFile = join(ctx.root, ".pending-context");
+      const pending = existsSync(pendingFile) ? readFileSync(pendingFile, "utf-8") : "";
+      expect(pending).not.toContain("SECRET-PAYLOAD-SHOULD-NOT-BE-INJECTED");
+    });
   });
 
   describe("SIGHUP reload", () => {
@@ -433,5 +473,50 @@ describe("daemon", () => {
         ctx2.cleanup();
       }
     });
+  });
+});
+
+
+// Deterministic unit seam for the symlink guard, independent of the daemon
+// process and its multi-second startup/watcher-latency timing (the
+// integration test above covers the end-to-end path; this is the fast,
+// non-flaky one). isSymlinkPath is the pure predicate readScheduleFileSafely
+// (bin/macrodata-daemon.ts) uses before every readFileSync on a schedule path.
+describe("isSymlinkPath", () => {
+  let ctx: TestContext;
+
+  beforeEach(() => {
+    ctx = createTestContext("macrodata-symlink-unit-");
+  });
+
+  afterEach(() => {
+    ctx.cleanup();
+  });
+
+  test("is false for a regular file", () => {
+    const target = join(ctx.root, "regular.json");
+    writeFileSync(target, "{}");
+    expect(isSymlinkPath(target)).toBe(false);
+  });
+
+  test("is true for a symlink, even one pointing at a real JSON file", () => {
+    const target = join(ctx.root, "target.json");
+    writeFileSync(target, JSON.stringify({ description: "secret" }));
+    const link = join(ctx.root, "link.json");
+    symlinkSync(target, link);
+    expect(isSymlinkPath(link)).toBe(true);
+    // The guard fires on the link's own lstat, independent of whether the
+    // target exists, is readable, or is even valid JSON.
+    expect(isSymlinkPath(target)).toBe(false);
+  });
+
+  test("is true for a dangling symlink (target does not exist)", () => {
+    const link = join(ctx.root, "dangling.json");
+    symlinkSync(join(ctx.root, "does-not-exist.json"), link);
+    expect(isSymlinkPath(link)).toBe(true);
+  });
+
+  test("is false for a path that does not exist", () => {
+    expect(isSymlinkPath(join(ctx.root, "nope.json"))).toBe(false);
   });
 });

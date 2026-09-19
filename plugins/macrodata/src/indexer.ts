@@ -10,11 +10,14 @@
  */
 
 import { LocalIndex } from "vectra";
-import { join, basename } from "path";
-import { readFileSync, readdirSync, existsSync, mkdirSync } from "fs";
+import { join } from "path";
+import { existsSync, mkdirSync } from "fs";
 import { getLogger } from "@logtape/logtape";
 import { embed, embedBatch, preloadModel as preloadEmbeddings } from "./embeddings.js";
-import { getIndexDir, getEntitiesDir, getJournalDir } from "./config.js";
+import { getIndexDir } from "./config.js";
+import { scanCorpus, projectEntityFile, type MemoryItem, type MemoryItemType } from "./corpus.js";
+
+export type { SourceSnapshot, SourceStatus, SourceKind, CorpusProjection } from "./corpus.js";
 
 // Library-side logging: records go to whatever sink the running entrypoint
 // configured (MCP server -> stderr, daemon -> .daemon.log) and are dropped
@@ -27,16 +30,7 @@ const logger = getLogger(["macrodata", "indexer"]);
 // The entities/ subdirectory names ARE the type set — see rebuildIndex and
 // indexEntityFile, which both derive the type from the folder. No closed union,
 // so new categories index automatically.
-export type MemoryItemType = string;
-
-export interface MemoryItem {
-  id: string;
-  type: MemoryItemType;
-  content: string;
-  source: string;
-  section?: string;
-  timestamp?: string;
-}
+export type { MemoryItemType, MemoryItem } from "./corpus.js";
 
 export interface SearchResult {
   content: string;
@@ -150,7 +144,7 @@ export async function searchMemory(
     since?: string;
     rerank?: boolean;
     candidateK?: number;
-  } = {}
+  } = {},
 ): Promise<SearchResult[]> {
   const { limit = 5, type, since, rerank: doRerank = false, candidateK } = options;
   const idx = await getIndex();
@@ -195,7 +189,10 @@ export async function searchMemory(
 
   if (doRerank && mapped.length > 1) {
     const { rerank } = await import("./rerank.js");
-    const ceScores = await rerank(query, mapped.map((m) => m.content));
+    const ceScores = await rerank(
+      query,
+      mapped.map((m) => m.content),
+    );
     return mapped
       .map((m, i) => ({
         ...m,
@@ -208,104 +205,6 @@ export async function searchMemory(
   }
 
   return mapped.slice(0, limit);
-}
-
-/**
- * Parse journal files and return items for indexing
- */
-function parseJournalForIndexing(): MemoryItem[] {
-  const items: MemoryItem[] = [];
-  const journalDir = getJournalDir();
-
-  if (!existsSync(journalDir)) return items;
-
-  const files = readdirSync(journalDir).filter((f) => f.endsWith(".jsonl"));
-
-  for (const file of files) {
-    try {
-      const content = readFileSync(join(journalDir, file), "utf-8");
-      const lines = content.trim().split("\n").filter(Boolean);
-
-      let malformedLines = 0;
-      for (let i = 0; i < lines.length; i++) {
-        try {
-          const entry = JSON.parse(lines[i]);
-          items.push({
-            id: `journal-${file}-${i}`,
-            type: "journal",
-            content: `[${entry.topic}] ${entry.content}`,
-            source: file,
-            timestamp: entry.timestamp,
-          });
-        } catch {
-          malformedLines++;
-        }
-      }
-      if (malformedLines > 0) {
-        logger.warn("skipped malformed journal lines", { file, malformedLines });
-      }
-    } catch (err) {
-      logger.warn("failed to read journal file", { file, error: String(err) });
-    }
-  }
-
-  return items;
-}
-
-/**
- * Parse entity files in an entities/<subdir>/ directory for indexing.
- * The subdir name is the item type (e.g. people, projects, topics, agents).
- */
-function parseEntitiesForIndexing(subdir: string, type: MemoryItemType): MemoryItem[] {
-  const items: MemoryItem[] = [];
-  const dir = join(getEntitiesDir(), subdir);
-
-  if (!existsSync(dir)) return items;
-
-  const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
-
-  for (const file of files) {
-    try {
-      const content = readFileSync(join(dir, file), "utf-8");
-      const filename = file.replace(".md", "");
-
-      // Split by ## headers for section-level indexing
-      const sections = content.split(/^## /m);
-
-      // Preamble (before any ##)
-      if (sections[0].trim()) {
-        items.push({
-          id: `${type}-${filename}-preamble`,
-          type,
-          content: sections[0].trim(),
-          source: `${subdir}/${file}`,
-          section: "preamble",
-        });
-      }
-
-      // Each section
-      for (let i = 1; i < sections.length; i++) {
-        const section = sections[i];
-        const firstLine = section.split("\n")[0];
-        const sectionTitle = firstLine.trim();
-        const sectionContent = section.slice(firstLine.length).trim();
-
-        if (sectionContent) {
-          items.push({
-            id: `${type}-${filename}-${i}`,
-            type,
-            content: `## ${sectionTitle}\n\n${sectionContent}`,
-            source: `${subdir}/${file}`,
-            section: sectionTitle,
-          });
-        }
-      }
-    } catch {
-      // Skip unreadable files
-    }
-  }
-
-  return items;
 }
 
 /**
@@ -323,24 +222,16 @@ export async function rebuildIndex(): Promise<{ itemCount: number }> {
   // purged here — the one-time person->people rename needs a manual
   // `rm -rf <root>/.index` before rebuild. A safe cross-process clean rebuild
   // (temp-dir atomic swap + daemon coordination) is a tracked follow-up.
-  const allItems: MemoryItem[] = [];
-
-  // 1. Index journal entries
-  logger.info("parsing journal");
-  allItems.push(...parseJournalForIndexing());
-
-  // 2. Index every entity subdirectory (people, projects, topics, agents, …).
-  // The folder list is the single source of truth for entity types, so new
-  // categories are picked up automatically with no code change.
-  const entitiesDir = getEntitiesDir();
-  if (existsSync(entitiesDir)) {
-    for (const dirent of readdirSync(entitiesDir, { withFileTypes: true })) {
-      // Skip non-dirs and dot-dirs (.obsidian, .git, .trash) so tooling
-      // artifacts don't become bogus entity types.
-      if (!dirent.isDirectory() || dirent.name.startsWith(".")) continue;
-      logger.info("parsing entity category", { category: dirent.name });
-      allItems.push(...parseEntitiesForIndexing(dirent.name, dirent.name));
-    }
+  // Canonical corpus projection — one scan, shared with recall. Every entity
+  // category (immediate subdirectory of entities/) is indexed recursively with
+  // no code change; dot segments are excluded at any depth.
+  const projection = scanCorpus();
+  const allItems = projection.items;
+  for (const failure of projection.failures) {
+    logger.warn("corpus source incomplete; indexed what was readable", {
+      source: failure.source,
+      error: failure.error,
+    });
   }
 
   // Index all items
@@ -382,67 +273,17 @@ export async function getIndexStats(): Promise<{ itemCount: number }> {
 
 /**
  * Index a single entity file (person or project)
- * Called by daemon when files change
+ * Called by daemon when files change. The canonical projection derives the
+ * type, source identity, and ids — including nested category paths.
  */
 export async function indexEntityFile(filePath: string): Promise<void> {
-  const filename = basename(filePath, ".md");
-  
-  // The entities/<subdir>/ folder name is the item type (people, projects,
-  // topics, …). Deriving it from the path means any category indexes without a
-  // code change — same source of truth as rebuildIndex.
-  const match = filePath.match(/\/entities\/([^/]+)\//);
-  if (!match) {
-    logger.error("not an entity path, skipping", { filePath });
+  const snap = projectEntityFile(filePath);
+  if (snap.status === "incomplete") {
+    logger.error("failed to index entity file", { filePath, error: snap.error });
     return;
   }
-  const subdir = match[1];
-  // Skip files under a dot-dir at any depth (.obsidian, .trash, .git) — tooling
-  // artifacts, not entities. Check every dir segment, not just the first.
-  const afterEntities = filePath.slice(filePath.indexOf("/entities/") + "/entities/".length);
-  if (afterEntities.split("/").slice(0, -1).some((seg) => seg.startsWith("."))) return;
-  const type: MemoryItemType = subdir;
-
-  try {
-    const content = readFileSync(filePath, "utf-8");
-    const items: MemoryItem[] = [];
-
-    // Split by ## headers for section-level indexing
-    const sections = content.split(/^## /m);
-
-    // Preamble (before any ##)
-    if (sections[0].trim()) {
-      items.push({
-        id: `${type}-${filename}-preamble`,
-        type,
-        content: sections[0].trim(),
-        source: `${subdir}/${basename(filePath)}`,
-        section: "preamble",
-      });
-    }
-
-    // Each section
-    for (let i = 1; i < sections.length; i++) {
-      const section = sections[i];
-      const firstLine = section.split("\n")[0];
-      const sectionTitle = firstLine.trim();
-      const sectionContent = section.slice(firstLine.length).trim();
-
-      if (sectionContent) {
-        items.push({
-          id: `${type}-${filename}-${i}`,
-          type,
-          content: `## ${sectionTitle}\n\n${sectionContent}`,
-          source: `${subdir}/${basename(filePath)}`,
-          section: sectionTitle,
-        });
-      }
-    }
-
-    await indexItems(items);
-    logger.info("indexed entity file", { file: basename(filePath), sections: items.length });
-  } catch (err) {
-    logger.error("failed to index entity file", { filePath, error: String(err) });
-  }
+  await indexItems(snap.items);
+  logger.info("indexed entity file", { file: snap.source, sections: snap.items.length });
 }
 
 /**
