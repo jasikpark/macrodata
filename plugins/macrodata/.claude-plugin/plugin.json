@@ -35,6 +35,14 @@
 				"hooks": [
 					{
 						"type": "command",
+						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-reindex-hook.ts"
+					}
+				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
 						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts flags.md"
 					}
 				]
@@ -132,6 +140,15 @@
 			}
 		],
 		"PostToolUse": [
+			{
+				"matcher": "Write|Edit|MultiEdit|mcp__plugin_macrodata_macrodata__log_journal|mcp__plugin_macrodata_macrodata__save_conversation_summary",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-reindex-hook.ts"
+					}
+				]
+			},
 			{
 				"matcher": "Read|WebSearch|WebFetch",
 				"hooks": [

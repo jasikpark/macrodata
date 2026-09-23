@@ -21,6 +21,7 @@ const capturedEmbedInputs: string[][] = [];
 void mock.module("../src/recall/embeddings.ts", () => ({
   EMBEDDING_DIMENSIONS: 4,
   DEFAULT_TASK: "test task",
+  EMBED_MODEL: "test-model",
   embedDocument: async () => [1, 0, 0, 0],
   embedDocuments: async (texts: string[]) => {
     capturedEmbedInputs.push(texts);

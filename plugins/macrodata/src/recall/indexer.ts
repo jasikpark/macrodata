@@ -8,10 +8,10 @@
  */
 
 import type { LocalIndex } from "vectra";
-import { AtomicLocalIndex, UnparsableIndexError } from "./atomic-index.ts";
+import { AtomicLocalIndex, IndexModelMismatchError, UnusableIndexError } from "./atomic-index.ts";
 import { join, relative, resolve, sep } from "path";
 import { existsSync, lstatSync, mkdirSync } from "fs";
-import { embedDocuments, embedQuery } from "./embeddings.ts";
+import { EMBED_MODEL, embedDocuments, embedQuery } from "./embeddings.ts";
 import { getIndexDir, getJournalDir, getEntitiesDir } from "./config.ts";
 import {
   scanCorpus,
@@ -56,11 +56,13 @@ async function getIndex(): Promise<AtomicLocalIndex> {
   const dir = getIndexDir();
   if (index) return index;
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  index = new AtomicLocalIndex(join(dir, "vectors"));
-  if (!(await index.isIndexCreated())) {
-    await index.createIndex();
+  // Held in a local: a resetIndexCache() during the await nulls `index`.
+  const idx = new AtomicLocalIndex(join(dir, "vectors"), EMBED_MODEL);
+  index = idx;
+  if (!(await idx.isIndexCreated())) {
+    await idx.createIndex();
   }
-  return index;
+  return idx;
 }
 
 // Embed a length-capped view of each doc — long sections dilute the embedding
@@ -113,6 +115,31 @@ export interface ReconcileResult {
   pruned: number;
   /** False when the scope's projection was incomplete, so nothing unseen was pruned. */
   complete: boolean;
+  /** Why the result is incomplete or a prune was withheld, one line per cause. */
+  failures: string[];
+  /** Where an unusable index.json was moved before this reconcile rebuilt it. */
+  setAside?: string;
+}
+
+export interface ReconcileOptions {
+  /** Re-embed every item; sets aside an unusable index and ignores a model mismatch. */
+  force?: boolean;
+  /** Set aside an unusable index (unparsable, or another model's vectors) and rebuild. */
+  heal?: boolean;
+  onProgress?: (msg: string) => void;
+}
+
+let progressAt = Date.now();
+const beat = () => {
+  progressAt = Date.now();
+};
+
+/**
+ * When a writer last started or advanced (an embed batch, a commit). A reconcile
+ * that stops advancing is wedged in the model or the filesystem.
+ */
+export function lastProgressAt(): number {
+  return progressAt;
 }
 
 // Every writer below runs through this chain, so two reconciles in one process
@@ -122,7 +149,11 @@ export interface ReconcileResult {
 let writeChain: Promise<unknown> = Promise.resolve();
 
 function serialized<T>(fn: () => Promise<T>): Promise<T> {
-  const run = writeChain.then(fn, fn);
+  const task = () => {
+    beat();
+    return fn();
+  };
+  const run = writeChain.then(task, task);
   writeChain = run.catch(() => {});
   return run;
 }
@@ -154,7 +185,12 @@ async function applyReconcile(
   idx: LocalIndex,
   items: MemoryItem[],
   stale: Iterable<string>,
-  opts: { force?: boolean; complete: boolean },
+  opts: {
+    force?: boolean;
+    complete: boolean;
+    failures: string[];
+    onProgress?: (msg: string) => void;
+  },
 ): Promise<ReconcileResult> {
   const stored = await idx.listItems();
   const existing = new Map(stored.map((it) => [it.id, it]));
@@ -185,6 +221,7 @@ async function applyReconcile(
     unchanged,
     pruned: deletions.length,
     complete: opts.complete,
+    failures: opts.failures,
   };
   // A commit rewrites the whole index.json and bumps its mtime, which makes the
   // worker drop and reparse every cache it keys on that file.
@@ -205,6 +242,7 @@ async function applyReconcile(
       const vectors = await embedDocuments(
         batch.map((it) => dropLoneHighSurrogate(it.content.slice(0, MAX_EMBED_CHARS))),
       );
+      beat();
       for (let j = 0; j < batch.length; j++) {
         await idx.upsertItem({
           id: batch[j].id,
@@ -220,12 +258,11 @@ async function applyReconcile(
         await idx.beginUpdate();
         open = true;
         sinceCommit = 0;
+        beat();
       }
-      if (done % (EMBED_BATCH * 10) === 0 || done === toEmbed.length) {
+      if (opts.onProgress && (done % (EMBED_BATCH * 10) === 0 || done === toEmbed.length)) {
         const rate = done / ((Date.now() - t0) / 1000);
-        console.log(
-          `[macrodata-recall]${done}/${toEmbed.length} embedded (${rate.toFixed(1)} items/s)`,
-        );
+        opts.onProgress(`${done}/${toEmbed.length} embedded (${rate.toFixed(1)} items/s)`);
       }
     }
     open = false;
@@ -258,7 +295,11 @@ function kindOfSource(source: unknown): "journal" | "entity" | null {
  * unparsable rather than gone. Everything else, including an empty corpus
  * under a present root, is authoritative.
  */
-async function staleIds(idx: LocalIndex, projection: CorpusProjection): Promise<string[]> {
+async function staleIds(
+  idx: LocalIndex,
+  projection: CorpusProjection,
+  failures: string[],
+): Promise<string[]> {
   const indexed = await idx.listItems();
   const live = new Set(projection.items.map((it) => it.id));
   const rootPresent = {
@@ -266,12 +307,9 @@ async function staleIds(idx: LocalIndex, projection: CorpusProjection): Promise<
     entity: existsSync(getEntitiesDir()),
   };
   for (const kind of ["journal", "entity"] as const) {
-    if (!rootPresent[kind])
-      console.log(`[macrodata-recall]prune skipped for ${kind}: root missing`);
+    if (!rootPresent[kind]) failures.push(`prune skipped for ${kind}: root missing`);
   }
-  for (const f of projection.failures) {
-    console.log(`[macrodata-recall]projection incomplete: ${f.source}: ${f.error}`);
-  }
+  for (const f of projection.failures) failures.push(`${f.kind} ${f.source}: ${f.error}`);
 
   // A failure's source is a file or a directory; "." is the root itself.
   const tainted = (kind: "journal" | "entity", source: string) =>
@@ -306,20 +344,35 @@ function isHeld(id: string, source: string, heldFrom: number | undefined): boole
   return !Number.isInteger(line) || line >= heldFrom;
 }
 
-async function freshIndex({ replaceUnparsable = false } = {}): Promise<LocalIndex> {
+/**
+ * The index as it is on disk, ready for a writer. Throws UnusableIndexError when
+ * index.json does not parse or holds another embedding model's vectors, unless
+ * `heal` or `force` sets it aside for a rebuild.
+ */
+async function freshIndex(
+  opts: { heal?: boolean; force?: boolean } = {},
+): Promise<{ idx: LocalIndex; setAside?: string }> {
   // Another process (a manual reindex, a sibling worker) may have rewritten
   // index.json since this one cached it; reconcile against the disk.
-  resetIndexCache();
+  if (!index?.isCurrent()) resetIndexCache();
   const idx = await getIndex();
-  if (!replaceUnparsable) return idx;
   try {
-    await idx.listItems();
-    return idx;
+    const stored = await idx.storedEmbedModel();
+    // An index without a recorded model predates the field; its next commit records one.
+    if (!opts.force && stored !== undefined && stored !== EMBED_MODEL) {
+      throw new IndexModelMismatchError(
+        `${idx.folderPath} holds ${stored} vectors but this process embeds with ${EMBED_MODEL}; run \`bun run bin/recall-reindex.ts --full\` to rebuild`,
+        idx.stamp,
+      );
+    }
+    return { idx };
   } catch (err) {
-    if (!(err instanceof UnparsableIndexError)) throw err;
-    console.log(`[macrodata-recall]unparsable index moved to ${idx.setAside()}; rebuilding`);
+    if (!(err instanceof UnusableIndexError) || !(opts.heal || opts.force)) throw err;
+    const setAside = idx.setAside(err instanceof IndexModelMismatchError ? "model" : "corrupt");
+    // A rebuild after a set-aside embeds fresh rather than reuse vectors from before it.
+    recentlyPruned.clear();
     resetIndexCache();
-    return getIndex();
+    return { idx: await getIndex(), setAside };
   }
 }
 
@@ -327,29 +380,30 @@ async function freshIndex({ replaceUnparsable = false } = {}): Promise<LocalInde
  * Converge the whole index on the current corpus: embed new and changed items,
  * relabel moved metadata, delete what a clean read proves is gone.
  */
-export function reconcileCorpus(opts: { force?: boolean } = {}): Promise<ReconcileResult> {
+export function reconcileCorpus(opts: ReconcileOptions = {}): Promise<ReconcileResult> {
   return serialized(async () => {
-    const start = Date.now();
-    const idx = await freshIndex({ replaceUnparsable: opts.force });
+    const { idx, setAside } = await freshIndex(opts);
     const projection = scanCorpus();
-    const result = await applyReconcile(idx, projection.items, await staleIds(idx, projection), {
+    const failures: string[] = [];
+    const stale = await staleIds(idx, projection, failures);
+    const result = await applyReconcile(idx, projection.items, stale, {
       force: opts.force,
       complete: projection.complete,
+      failures,
+      onProgress: opts.onProgress,
     });
-    console.log(
-      `[macrodata-recall]reconcile: ${result.embedded} embedded, ${result.relabeled} relabeled, ${result.unchanged} unchanged, ${result.pruned} pruned in ${((Date.now() - start) / 1000).toFixed(1)}s`,
-    );
-    return result;
+    return setAside ? { ...result, setAside } : result;
   });
 }
 
-const noopIncomplete = (): ReconcileResult => ({
+const noopIncomplete = (why: string): ReconcileResult => ({
   itemCount: 0,
   embedded: 0,
   relabeled: 0,
   unchanged: 0,
   pruned: 0,
   complete: false,
+  failures: [why],
 });
 
 /**
@@ -376,20 +430,22 @@ export function reconcileSource(path: string): Promise<ReconcileResult> {
   const source = relative(root, absPath).split(sep).join("/");
 
   return serialized(async () => {
-    if (!canonicalUnder(root, absPath)) return noopIncomplete();
+    if (!canonicalUnder(root, absPath)) return noopIncomplete(`${kind} ${source}: not canonical`);
     let gone = false;
     try {
       const st = lstatSync(absPath);
       const ext = kind === "journal" ? ".jsonl" : ".md";
-      if (!st.isFile() || isDotPath(source) || !source.endsWith(ext)) return noopIncomplete();
+      if (!st.isFile() || isDotPath(source) || !source.endsWith(ext)) {
+        return noopIncomplete(`${kind} ${source}: not an indexed file`);
+      }
     } catch (err) {
       // Only ENOENT under a root that still exists proves deletion; EACCES and
       // friends are an unreadable source, and a vanished root is misconfiguration.
       gone = (err as NodeJS.ErrnoException).code === "ENOENT" && existsSync(root);
-      if (!gone) return noopIncomplete();
+      if (!gone) return noopIncomplete(`${kind} ${source}: ${String(err)}`);
     }
 
-    const idx = await freshIndex();
+    const { idx } = await freshIndex();
     if (gone) {
       const stale = (await idx.listItems())
         .filter((it) => {
@@ -399,7 +455,7 @@ export function reconcileSource(path: string): Promise<ReconcileResult> {
           );
         })
         .map((it) => it.id);
-      return applyReconcile(idx, [], stale, { complete: true });
+      return applyReconcile(idx, [], stale, { complete: true, failures: [] });
     }
 
     const snap: SourceSnapshot =
@@ -407,8 +463,10 @@ export function reconcileSource(path: string): Promise<ReconcileResult> {
         ? projectJournalFile(absPath, journalDir)
         : projectEntityFile(absPath, entitiesDir);
     if (snap.status !== "ok") {
-      console.log(`[macrodata-recall]source incomplete: ${snap.source}: ${snap.error}`);
-      return applyReconcile(idx, snap.items, [], { complete: false });
+      return applyReconcile(idx, snap.items, [], {
+        complete: false,
+        failures: [`${kind} ${snap.source}: ${snap.error}`],
+      });
     }
     const live = new Set(snap.items.map((it) => it.id));
     const stale = (await idx.listItems())
@@ -419,19 +477,19 @@ export function reconcileSource(path: string): Promise<ReconcileResult> {
           !isHeld(it.id, source, snap.heldFrom),
       )
       .map((it) => it.id);
-    return applyReconcile(idx, snap.items, stale, { complete: true });
+    return applyReconcile(idx, snap.items, stale, { complete: true, failures: [] });
   });
 }
 
 /** Delete vectors the current corpus proves are gone, without embedding. */
-export function pruneOrphans(): Promise<{ pruned: number; kept: number }> {
+export function pruneOrphans(): Promise<{ pruned: number; kept: number; failures: string[] }> {
   return serialized(async () => {
-    const idx = await freshIndex();
+    const { idx } = await freshIndex();
     const before = (await idx.listItems()).length;
-    const { pruned } = await applyReconcile(idx, [], await staleIds(idx, scanCorpus()), {
-      complete: true,
-    });
-    return { pruned, kept: before - pruned };
+    const failures: string[] = [];
+    const stale = await staleIds(idx, scanCorpus(), failures);
+    const { pruned } = await applyReconcile(idx, [], stale, { complete: true, failures });
+    return { pruned, kept: before - pruned, failures };
   });
 }
 

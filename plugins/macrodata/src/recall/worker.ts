@@ -32,18 +32,28 @@
  * that changes with every plugin version. Dropping them makes every worker
  * unreapable.
  *
+ * Reindexing rides the same mailbox: bin/recall-reindex-hook.ts writes
+ *   reindex-<tag>.json  {corpus: true} | {paths: string[]}
+ * and the worker consumes it into a ReindexQueue (src/recall/reindex.ts). The
+ * worker also reconciles the whole corpus once at startup, which is what builds
+ * the index on a fresh install.
+ *
  * Exactly one worker serves a state root: the first thing this process does is
  * claim <root>/.recall/worker.pid, and a process that loses the claim exits
  * before it can load a model.
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, mkdirSync, statSync, watch } from "fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, mkdirSync, rmSync, statSync, watch } from "fs";
 import { join } from "path";
 import { configure, getConsoleSink, getLogger, jsonLinesFormatter } from "@logtape/logtape";
 import { envNum, pipelineSearch } from "./fts.ts";
 import { TIMER_MAX_MS, WEDGED, withDeadline } from "./deadline.ts";
-import { getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath, getSpawnStampPath } from "./config.ts";
-import { modelsLoaded } from "./models.ts";
+import { getIndexDir, getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath, getSpawnStampPath, getReindexHaltedPath } from "./config.ts";
+import { embedModelLoaded, modelsLoaded } from "./models.ts";
+import { lastProgressAt, reconcileCorpus, reconcileSource } from "./indexer.ts";
+import { stampOf } from "./atomic-index.ts";
+import { ReindexQueue } from "./reindex.ts";
+import { parseReindexRequest } from "./reindex-request.ts";
 
 // Created before the watch below: fs.watch throws on a missing directory, and on
 // a fresh state root nothing has written the mailbox yet.
@@ -52,6 +62,7 @@ mkdirSync(DIR, { recursive: true });
 const FLOOR = envNum("MACRODATA_RECALL_FLOOR", 0.5, 0);
 const LIMIT = envNum("MACRODATA_RECALL_LIMIT", 3, 1);
 const REQ_RE = /^request-(.+)\.json$/;
+const REINDEX_RE = /^reindex-.+\.json$/;
 const SWEEP_DEBOUNCE_MS = 50;
 const SWEEP_INTERVAL_MS = 5_000;
 // The protocol is latest-wins, so a request this old belongs to a turn the agent
@@ -103,6 +114,7 @@ await configure({
 const workerLog = getLogger(["recall", "worker"]);   // process lifecycle
 const ingestLog = getLogger(["recall", "ingest"]);   // mailbox protocol: watch, consume, queue
 const pipelineLog = getLogger(["recall", "pipeline"]); // the rerank run itself
+const reindexLog = getLogger(["recall", "reindex"]);   // index reconciles
 
 const errnoOf = (e: unknown): string =>
   typeof e === "object" && e !== null && "code" in e ? String((e as { code: unknown }).code) : "";
@@ -347,6 +359,63 @@ function ingest(sid: string): void {
   void drain();
 }
 
+// Runs alongside the search drain rather than inside it: a first build can take
+// over an hour, and node-llama-cpp locks each embedding call, so a query's
+// embedding waits for one document's rather than for the whole build.
+const INDEX_JSON = join(getIndexDir(), "vectors", "index.json");
+function reportHalt(message: string | null): void {
+  const path = getReindexHaltedPath();
+  try {
+    if (message === null) rmSync(path, { force: true });
+    else writeFileSync(path, message);
+  } catch (err) {
+    reindexLog.warn("could not update the reindex halt marker", { path, error: String(err) });
+  }
+}
+const reindex = new ReindexQueue({
+  reconcileCorpus: (opts) => reconcileCorpus(opts),
+  reconcileSource,
+  indexStamp: () => stampOf(INDEX_JSON),
+  reportHalt,
+}, reindexLog);
+
+// A reconcile that stops advancing (an embed or model load that never settles)
+// would hold the queue forever while every later request coalesces behind it.
+// Same two budgets as a search, measured from the reconcile's last heartbeat:
+// cold until the embed model has loaded, which covers its first download.
+const REINDEX_WATCHDOG_MS = 30_000;
+setInterval(() => {
+  if (reindex.activeSince === null) return;
+  const since = Math.max(reindex.activeSince, lastProgressAt());
+  const warm = embedModelLoaded();
+  const budget = warm ? WEDGE_WARM_MS : WEDGE_COLD_MS;
+  if (Date.now() - since <= budget) return;
+  reindexLog.error("reindex stopped advancing, exiting so the hook can restart it", {
+    budgetMs: budget, warm, idleMs: Date.now() - since,
+  });
+  process.exit(1);
+}, REINDEX_WATCHDOG_MS).unref();
+
+function ingestReindex(name: string): void {
+  const p = join(DIR, name);
+  let raw: string;
+  try { raw = readFileSync(p, "utf-8"); }
+  catch { return; } // the watch fired for a file already consumed
+  try { unlinkSync(p); }
+  catch (err) {
+    // Queuing a request that cannot be removed would re-run it on every sweep.
+    ingestLog.warn("reindex request not consumed: unlink failed", { name, error: String(err) });
+    return;
+  }
+  let req: ReturnType<typeof parseReindexRequest> = null;
+  try { req = parseReindexRequest(JSON.parse(raw)); } catch { /* reported below */ }
+  if (!req) {
+    ingestLog.warn("reindex request dropped: malformed", { name, chars: raw.length });
+    return;
+  }
+  reindex.add(req);
+}
+
 // Models load LAZILY on the first request (Caleb, 2026-07-21): no memory held
 // until recall actually fires; the mailbox protocol already tolerates a late
 // first hit. Do not add eager preload here.
@@ -362,9 +431,13 @@ function sweep(): void {
   for (const f of files) {
     const m = f.match(REQ_RE);
     if (m) ingest(m[1]);
+    else if (REINDEX_RE.test(f)) ingestReindex(f);
   }
 }
 sweep();
+// Loads the embed model only if the corpus has something new to embed, so a
+// warm store keeps the lazy-load promise above.
+reindex.add({ corpus: true });
 
 /**
  * Delete mailbox files belonging to sessions that have ended.

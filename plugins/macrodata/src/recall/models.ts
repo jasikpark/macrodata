@@ -12,7 +12,8 @@
  */
 import { getLlama, resolveModelFile } from "node-llama-cpp";
 
-const EMBED_URI = process.env.MACRODATA_EMBED_MODEL ?? "hf:Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0";
+/** Recorded in the recall index, which refuses writes from a different model. */
+export const EMBED_URI = process.env.MACRODATA_EMBED_MODEL ?? "hf:Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0";
 const RERANK_URI = process.env.MACRODATA_RERANK_MODEL ?? "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf";
 
 // Memoize the promise but DROP it on rejection: a transient load failure (offline
@@ -105,10 +106,18 @@ export function modelsLoaded(): boolean {
   return embedLoaded && rankLoaded;
 }
 
+/** Whether the embed model load has completed in this process. */
+export function embedModelLoaded(): boolean {
+  return embedLoaded;
+}
+
+/** Token window of both contexts; an embed input longer than this throws. */
+export const CONTEXT_TOKENS = 4096;
+
 async function loadEmbed() {
   const model = await (await llama()).loadModel({ modelPath: await resolveModelFile(EMBED_URI) });
   try {
-    const ctx = await model.createEmbeddingContext({ contextSize: 4096 });
+    const ctx = await model.createEmbeddingContext({ contextSize: CONTEXT_TOKENS });
     embedLoaded = true;
     return ctx;
   } catch (e) {
@@ -121,7 +130,7 @@ export const embedContext = memoAsync(breaker(loadEmbed, "embed"));
 async function loadRank() {
   const model = await (await llama()).loadModel({ modelPath: await resolveModelFile(RERANK_URI) });
   try {
-    const ctx = await model.createRankingContext({ contextSize: 4096 });
+    const ctx = await model.createRankingContext({ contextSize: CONTEXT_TOKENS });
     rankLoaded = true;
     return ctx;
   } catch (e) {

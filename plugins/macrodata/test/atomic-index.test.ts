@@ -11,6 +11,7 @@ import {
   AtomicLocalIndex,
   ConcurrentWriteError,
   UnparsableIndexError,
+  stampOf,
 } from "../src/recall/atomic-index.ts";
 
 describe("AtomicLocalIndex", () => {
@@ -94,5 +95,25 @@ describe("AtomicLocalIndex", () => {
     const err = await new AtomicLocalIndex(dir).listItems().catch((e) => e);
     expect(err).toBeInstanceOf(UnparsableIndexError);
     expect(String(err)).toContain("--full");
+    // The stamp is of the file that failed, so a replacement is distinguishable.
+    expect(err.stamp).toBe(stampOf(file()));
+  });
+
+  test("records its embedding model on commit and reports it after a reload", async () => {
+    const idx = new AtomicLocalIndex(dir, "model-a");
+    await idx.createIndex();
+    expect(await idx.storedEmbedModel()).toBeUndefined();
+    await idx.upsertItem({ id: "a", vector: [1, 0], metadata: { content: "a" } });
+    expect(await new AtomicLocalIndex(dir).storedEmbedModel()).toBe("model-a");
+  });
+
+  test("isCurrent tracks whether the disk still holds what this instance loaded", async () => {
+    const idx = await seeded();
+    expect(idx.isCurrent()).toBe(true);
+    expect(idx.stamp).toBe(stampOf(file()));
+    const other = new AtomicLocalIndex(dir);
+    await other.upsertItem({ id: "b", vector: [0, 1], metadata: { content: "b" } });
+    expect(idx.isCurrent()).toBe(false);
+    expect(new AtomicLocalIndex(dir).isCurrent()).toBe(false);
   });
 });

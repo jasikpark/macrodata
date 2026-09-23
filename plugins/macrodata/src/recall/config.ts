@@ -48,6 +48,11 @@ export function getInboxPath(sid: string): string {
   return join(getMailboxDir(), `inbox-${sid}.json`);
 }
 
+/** Path requests take a unique tag so a burst never overwrites one another's. */
+export function getReindexRequestPath(tag: string): string {
+  return join(getMailboxDir(), `reindex-${tag}.json`);
+}
+
 /** Chunks this session already injected — the dedupe baseline for the next fire. */
 export function getInjectedPath(sid: string): string {
   return join(getMailboxDir(), `injected-${sid}.json`);
@@ -79,6 +84,14 @@ export function getWorkerPidPath(): string {
  */
 export function getSpawnStampPath(): string {
   return join(getRecallDir(), "last-spawn");
+}
+
+/**
+ * Present while the worker has stopped reindexing because index.json is unusable
+ * even after a rebuild; holds the reason. The SessionStart hook prints it.
+ */
+export function getReindexHaltedPath(): string {
+  return join(getRecallDir(), "reindex-halted");
 }
 
 export function getCalibrationLog(): string {

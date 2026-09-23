@@ -18,7 +18,7 @@ import { join } from "path";
 import { getIndexDir, getEntitiesDir } from "./config.ts";
 import { searchMemory, resetIndexCache, type SearchResult } from "./indexer.ts";
 import { loadAccessOverlay, memKey } from "./access.ts";
-import { rankContext } from "./models.ts";
+import { CONTEXT_TOKENS, rankContext } from "./models.ts";
 
 // All env knobs parse through here: bare Number("") is 0 and Number("typo") is
 // NaN, and a NaN pool size makes mmrSelect return [] on every query — ambient
@@ -137,10 +137,16 @@ export async function ftsSearch(query: string, k = 20): Promise<SearchResult[]> 
 // input order. Doc length capped at 2000 chars (full content is long; quality
 // over latency — async hides it). NOTE: rankAll's score scale may differ from
 // llama-server's /v1/rerank — re-validate MACRODATA_RECALL_FLOOR against the A/B.
+// rankAll throws for the whole batch if any template + query + doc overflows
+// CONTEXT_TOKENS, and 2000 chars of dense script can, so both are token-capped;
+// RANK_TEMPLATE_TOKENS is headroom for the model's fixed prompt template.
+const RANK_TEMPLATE_TOKENS = 256;
 export async function rerank(query: string, docs: string[]): Promise<number[]> {
   if (docs.length === 0) return [];
   const ctx = await rankContext();
-  return ctx.rankAll(query, docs.map((d) => d.slice(0, 2000)));
+  const q = ctx.model.tokenize(query).slice(0, CONTEXT_TOKENS / 2);
+  const budget = CONTEXT_TOKENS - RANK_TEMPLATE_TOKENS - q.length;
+  return ctx.rankAll(q, docs.map((d) => ctx.model.tokenize(d.slice(0, 2000)).slice(0, budget)));
 }
 
 export interface PoolCandidate {
@@ -282,8 +288,7 @@ export async function pipelineSearch(
   // query (the agent's current trajectory) when provided, else the same query.
   // BOTH legs read the shared Vectra index — the vector leg via searchMemory,
   // the FTS leg via buildCorpus -> listItems — so EITHER can throw on a torn
-  // index.json read during a concurrent reindex (and the vector leg can also
-  // throw on a token-dense query exceeding contextSize). Isolate each leg so
+  // index.json read during a concurrent reindex. Isolate each leg so
   // one failing degrades to the other instead of killing the whole pipeline;
   // an unguarded ftsSearch throw would also discard a successful vector result.
   // Leg width: Porrima's passive searchLimit tiers are 28/40/64
