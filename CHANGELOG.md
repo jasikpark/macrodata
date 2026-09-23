@@ -1,5 +1,83 @@
 # Changelog
 
+## 0.10.0
+
+### Minor Changes
+
+- [#81](https://github.com/jasikpark/macrodata/pull/81) [`4316bc8`](https://github.com/jasikpark/macrodata/commit/4316bc8fcc33efaee7a662abb23295b3a113c80d) Thanks [@jasikpark](https://github.com/jasikpark)! - Ambient recall reconciles its index incrementally instead of re-embedding the whole corpus.
+
+  `reconcileCorpus` and `reconcileSource` compare each projected item against the indexed one:
+  items whose content already has a stored vector reuse it (a moved timestamp or category, a
+  rename, a journal line shifted by an insert above it), only genuinely new content is embedded,
+  and unchanged items are skipped. A rename reconciled path-by-path reuses the vectors the first
+  path's deletion just pruned. A pass with nothing to do leaves `index.json` untouched, and an
+  interrupted pass resumes where it stopped.
+
+  Deletion follows the projection's authority. An id the scan no longer produces is pruned unless
+  its source lies under something the scan failed on — a root or directory that failed to list, an
+  entry that could not be stat'd, or an unreadable, malformed, or symlinked source — or under a
+  missing journal or entities root. A file with a size but no allocated blocks (evicted by iCloud
+  or another sync provider) or one rewritten during the read counts as unread, not empty. An
+  unparsable final journal line with no trailing newline (an append in flight, or a truncated
+  rewrite) is not a malformed record, and the vectors indexed at or past it are kept.
+  `reconcileSource` treats a path that is gone (ENOENT under a root that still exists) as a
+  confirmed deletion of its source, or of every source under it when it was a directory. A path
+  the scan would not index — a symlink at any depth, a spelling that differs from the on-disk
+  name, a dot path, a wrong extension — changes nothing.
+
+  Index writes are batched and atomic: each commit writes a temp file and renames it over
+  `index.json`, so an interrupt mid-commit can no longer leave a truncated index that every later
+  run fails to parse. A commit refuses to overwrite an `index.json` that another process committed
+  after this one loaded it, instead of silently reverting that write. Leftover temp files from a
+  killed run are swept on load. An update's changes stay invisible to searches until it commits,
+  and replacing a vector recomputes its norm. Writers in one process are serialized.
+
+  `bin/recall-reindex.ts` now reconciles by default; `--full` re-embeds everything (for an
+  embedding-model change) and `--prune-only` deletes only what the current corpus proves is gone. An unparsable `index.json`
+  makes every mode fail with a message naming `--full`, which moves it aside and rebuilds.
+  Unknown or conflicting flags exit with a usage message.
+
+### Patch Changes
+
+- [#79](https://github.com/jasikpark/macrodata/pull/79) [`f3270f7`](https://github.com/jasikpark/macrodata/commit/f3270f7795bf3c7f396966d7697450a770be7c43) Thanks [@jasikpark](https://github.com/jasikpark)! - One canonical projection of the memory corpus, shared by the MiniLM and Qwen indexers.
+
+  Both indexers carried their own copy of the journal and entity parsers, so the two
+  indexes could disagree about what a source is and which units it produces. There is now
+  a single projection — `projectJournalFile`, `projectEntityFile`, `scanCorpus` — and both
+  consume it. A source is its path relative to the journal or entities dir, so an entity
+  nested under a category (`entities/people/team/bob.md`) carries its full
+  category-relative stem in both `source` and its ids; the old basename-derived ids
+  collided with an immediate sibling of the same name. Nested entity files are indexed on
+  a full rebuild now, where only the incremental daemon path saw them before, so the first
+  shared rebuild re-embeds them once.
+
+  A scan now knows whether it is authoritative, and reconciliation depends on it. A file
+  that cannot be read, a directory that cannot be listed, and a journal line that is not
+  an object with string `topic` and `content` all mark their source incomplete while
+  keeping whatever was readable — `"5"`, `null` and `[1,2,3]` parse cleanly and used to
+  index as `[undefined] undefined`. An incomplete scan never prunes: its missing items
+  would otherwise read as deletions and delete live vectors for sources that were merely
+  unreadable. A complete scan is trusted even when it is empty, so a wiped corpus
+  converges to an empty index instead of retaining every stale vector forever; the one
+  exception is both roots missing while the index holds vectors, which is a misconfigured
+  `MACRODATA_ROOT` far more often than a deliberate wipe.
+
+  Symlinks are never followed into the corpus. A link named like a corpus file — say
+  `entities/people/notes.md` pointing at `~/.ssh/id_rsa` — would otherwise have its target
+  read, embedded, and left retrievable through `search_memory` and ambient recall. The
+  refusal is enforced where the bytes are read (`projectEntityFile`, reached by the
+  daemon's live-watch reindex as well as the batch walk) and the walk decides on `lstat`
+  rather than the dirent type bits, which some filesystems report as unknown. Schedule
+  files get the same treatment: `followSymlinks: false` on a chokidar watcher governs
+  chokidar's own traversal and has no effect on `readFileSync`, so the reminders handlers
+  refuse a symlinked schedule before reading it rather than injecting whatever it resolves
+  to into the next session's context.
+
+  Also: an entity file directly at the entities root has no category to take its type from
+  and is refused rather than indexed under a type named after the file, and the embedding
+  input is cut on whole characters, so a note with an astral character at the 2000-char
+  boundary no longer embeds a lone surrogate.
+
 ## 0.9.3
 
 ### Patch Changes
