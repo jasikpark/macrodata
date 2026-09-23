@@ -86,6 +86,14 @@ export function getSpawnStampPath(): string {
   return join(getRecallDir(), "last-spawn");
 }
 
+/**
+ * Present while the worker has stopped reindexing because index.json is unusable
+ * even after a rebuild; holds the reason. The SessionStart hook prints it.
+ */
+export function getReindexHaltedPath(): string {
+  return join(getRecallDir(), "reindex-halted");
+}
+
 export function getCalibrationLog(): string {
   return join(getRecallDir(), "calibration.jsonl");
 }

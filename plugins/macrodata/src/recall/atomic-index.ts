@@ -32,6 +32,8 @@ interface FileStamp {
 
 interface IndexData {
   items: IndexItem[];
+  /** The embedding model the vectors came from; absent on indexes older than the field. */
+  embedModel?: string;
 }
 
 // Vectra keeps these TS-private; the fields exist at runtime on every instance.
@@ -42,8 +44,37 @@ interface VectraInternals {
 
 export class ConcurrentWriteError extends Error {}
 
+/**
+ * index.json that no reconcile can build on. `stamp` is the file's stampOf()
+ * when it was read, so a caller can tell a later replacement from the file
+ * that failed.
+ */
+export class UnusableIndexError extends Error {
+  constructor(
+    message: string,
+    readonly stamp: string,
+  ) {
+    super(message);
+  }
+}
+
 /** index.json exists but does not parse; `--full` sets it aside and rebuilds. */
-export class UnparsableIndexError extends Error {}
+export class UnparsableIndexError extends UnusableIndexError {}
+
+/** index.json holds vectors from a different embedding model than this process loads. */
+export class IndexModelMismatchError extends UnusableIndexError {}
+
+/** Identifies one version of a file: changes whenever it is replaced or removed. */
+export function stampOf(path: string): string {
+  try {
+    const st = statSync(path);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return "missing";
+  }
+}
+
+const formatStamp = (s: FileStamp | null): string => (s ? `${s.mtimeMs}:${s.size}` : "missing");
 
 function isAlive(pid: number): boolean {
   try {
@@ -56,6 +87,14 @@ function isAlive(pid: number): boolean {
 
 export class AtomicLocalIndex extends LocalIndex {
   private loadedStamp: FileStamp | null = null;
+
+  /** `embedModel`, when given, is recorded in index.json on every commit. */
+  constructor(
+    folderPath: string,
+    private readonly embedModel?: string,
+  ) {
+    super(folderPath);
+  }
 
   private get indexPath(): string {
     return join(this.folderPath, this.indexName);
@@ -109,6 +148,7 @@ export class AtomicLocalIndex extends LocalIndex {
       if (err instanceof SyntaxError) {
         throw new UnparsableIndexError(
           `${this.indexPath} is unparsable (${err.message}); run \`bun run bin/recall-reindex.ts --full\` to set it aside and rebuild`,
+          formatStamp(stamp),
         );
       }
       throw err;
@@ -116,9 +156,33 @@ export class AtomicLocalIndex extends LocalIndex {
     this.loadedStamp = stamp;
   }
 
-  /** Rename an unparsable index.json out of the way; returns where it went. */
-  setAside(): string {
-    const aside = `${this.indexPath}.corrupt-${Date.now()}`;
+  /** The embedding model recorded in the loaded index, if any; loads it first. */
+  async storedEmbedModel(): Promise<string | undefined> {
+    await this.loadIndexData();
+    return this.internals._data?.embedModel;
+  }
+
+  /** Stamp of the file as this instance last loaded or committed it. */
+  get stamp(): string {
+    return formatStamp(this.loadedStamp);
+  }
+
+  /** Whether the loaded copy is still what is on disk, so reusing it skips a reparse. */
+  isCurrent(): boolean {
+    const now = this.stampNow();
+    const loaded = this.loadedStamp;
+    return (
+      this.internals._data !== undefined &&
+      loaded !== null &&
+      now !== null &&
+      now.mtimeMs === loaded.mtimeMs &&
+      now.size === loaded.size
+    );
+  }
+
+  /** Rename index.json out of the way (kept for forensics); returns where it went. */
+  setAside(reason = "corrupt"): string {
+    const aside = `${this.indexPath}.${reason}-${Date.now()}`;
     renameSync(this.indexPath, aside);
     this.internals._data = undefined;
     this.loadedStamp = null;
@@ -171,6 +235,7 @@ export class AtomicLocalIndex extends LocalIndex {
 
     // Stamp the temp file itself (rename keeps mtime and size): a stat of the
     // path after the rename could record a concurrent writer's file instead.
+    if (this.embedModel !== undefined) update.embedModel = this.embedModel;
     const tmp = `${this.indexPath}.${process.pid}.tmp`;
     let written: FileStamp;
     try {

@@ -6,12 +6,24 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { spawnSync } from "child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "fs";
 import { join } from "path";
 import { createTestContext, type TestContext } from "./helpers";
-import { ConcurrentWriteError, UnparsableIndexError } from "../src/recall/atomic-index.ts";
+import {
+  ConcurrentWriteError,
+  IndexModelMismatchError,
+  UnparsableIndexError,
+} from "../src/recall/atomic-index.ts";
 import type { ReconcileResult } from "../src/recall/indexer.ts";
-import { ReindexQueue, type ReindexOps } from "../src/recall/reindex.ts";
+import { PATH_CAP, ReindexQueue, type ReindexOps } from "../src/recall/reindex.ts";
 import { parseReindexRequest, reindexRequestFor } from "../src/recall/reindex-request.ts";
 
 const HOOK = join(import.meta.dir, "..", "bin", "recall-reindex-hook.ts");
@@ -23,10 +35,11 @@ const result = (over: Partial<ReconcileResult> = {}): ReconcileResult => ({
   unchanged: 0,
   pruned: 0,
   complete: true,
+  failures: [],
   ...over,
 });
 
-const silent = { info() {}, warn() {}, error() {} };
+const silent = { debug() {}, info() {}, warn() {}, error() {} };
 
 describe("reindexRequestFor", () => {
   let ctx: TestContext;
@@ -48,12 +61,13 @@ describe("reindexRequestFor", () => {
         corpus: true,
       });
     }
-    expect(
-      reindexRequestFor({
-        hook_event_name: "PostToolUse",
-        tool_name: "mcp__plugin_macrodata_macrodata__search_memory",
-      }),
-    ).toBeNull();
+    for (const tool of [
+      "mcp__plugin_macrodata_macrodata__search_memory",
+      "mcp__plugin_notmacrodata_x__log_journal",
+      "mcp__macrodata__log_journal",
+    ]) {
+      expect(reindexRequestFor({ hook_event_name: "PostToolUse", tool_name: tool })).toBeNull();
+    }
   });
 
   test("a write under either corpus root names that path", () => {
@@ -79,6 +93,18 @@ describe("reindexRequestFor", () => {
       reindexRequestFor({
         tool_name: "Write",
         tool_input: { file_path: join(alias, "entities", "people", "x.md") },
+      }),
+    ).toEqual({ paths: [file] });
+  });
+
+  test("a deletion through a symlinked alias is respelled under the configured root", () => {
+    const alias = join(ctx.root, "alias");
+    symlinkSync(ctx.root, alias);
+    const file = join(ctx.root, "entities", "people", "gone.md");
+    expect(
+      reindexRequestFor({
+        tool_name: "Write",
+        tool_input: { file_path: join(alias, "entities", "people", "gone.md") },
       }),
     ).toEqual({ paths: [file] });
   });
@@ -129,13 +155,13 @@ describe("parseReindexRequest", () => {
 describe("ReindexQueue", () => {
   function fakeOps(sourceResult: (p: string) => ReconcileResult | Error = () => result()) {
     const calls: string[] = [];
-    let corpusError: Error | null = null;
+    const halts: (string | null)[] = [];
+    const corpusErrors: Error[] = [];
     let stamp = "v0";
     const ops: ReindexOps = {
-      async reconcileCorpus() {
-        calls.push("corpus");
-        const e = corpusError;
-        corpusError = null;
+      async reconcileCorpus({ heal }) {
+        calls.push(heal ? "corpus:heal" : "corpus");
+        const e = corpusErrors.shift();
         if (e) throw e;
         return result();
       },
@@ -146,11 +172,13 @@ describe("ReindexQueue", () => {
         return r;
       },
       indexStamp: () => stamp,
+      reportHalt: (m) => halts.push(m),
     };
     return {
       ops,
       calls,
-      failCorpusOnce: (e: Error) => (corpusError = e),
+      halts,
+      failCorpusOnce: (e: Error) => corpusErrors.push(e),
       replaceIndex: () => (stamp = `v${Number(stamp.slice(1)) + 1}`),
     };
   }
@@ -162,8 +190,28 @@ describe("ReindexQueue", () => {
     q.add({ corpus: true });
     q.add({ paths: ["/b"] });
     await q.idle();
-    // "/a" started before the corpus request arrived; "/b" was still pending.
+    // The drain starts a microtask after the first add, so all three coalesce.
+    expect(calls).toEqual(["corpus"]);
+  });
+
+  test("a corpus request arriving mid-drain subsumes the paths still pending", async () => {
+    let q!: ReindexQueue;
+    const { ops, calls } = fakeOps((p) => {
+      if (p === "/a") q.add({ corpus: true });
+      return result();
+    });
+    q = new ReindexQueue(ops, silent);
+    q.add({ paths: ["/a", "/b"] });
+    await q.idle();
     expect(calls).toEqual(["/a", "corpus"]);
+  });
+
+  test("more distinct pending paths than PATH_CAP become one corpus pass", async () => {
+    const { ops, calls } = fakeOps();
+    const q = new ReindexQueue(ops, silent);
+    q.add({ paths: Array.from({ length: PATH_CAP + 1 }, (_, i) => `/p${i}`) });
+    await q.idle();
+    expect(calls).toEqual(["corpus"]);
   });
 
   test("duplicate paths coalesce, and work added mid-drain still runs", async () => {
@@ -173,8 +221,6 @@ describe("ReindexQueue", () => {
       return result();
     });
     q = new ReindexQueue(ops, silent);
-    // "/first" is taken as soon as the drain starts; both "/a" requests are
-    // still pending behind it.
     q.add({ paths: ["/first"] });
     q.add({ paths: ["/a", "/a"] });
     q.add({ paths: ["/a"] });
@@ -190,22 +236,67 @@ describe("ReindexQueue", () => {
     expect(calls).toEqual(["/symlinked", "corpus"]);
   });
 
-  test("an unparsable index halts the queue until the index file is replaced", async () => {
+  test("an unusable index is set aside and rebuilt once", async () => {
+    const { ops, calls, halts, failCorpusOnce } = fakeOps();
+    failCorpusOnce(new IndexModelMismatchError("other model", "s0"));
+    const q = new ReindexQueue(ops, silent);
+    q.add({ corpus: true });
+    await q.idle();
+    expect(calls).toEqual(["corpus", "corpus:heal"]);
+    expect(halts).toEqual([null]);
+  });
+
+  test("an index unusable again after its rebuild halts the queue until replaced", async () => {
     const errors: string[] = [];
-    const { ops, calls, failCorpusOnce, replaceIndex } = fakeOps();
-    failCorpusOnce(new UnparsableIndexError("bad"));
+    const { ops, calls, halts, failCorpusOnce, replaceIndex } = fakeOps();
+    failCorpusOnce(new UnparsableIndexError("bad", "s0"));
     const q = new ReindexQueue(ops, { ...silent, error: (m) => errors.push(m) });
+    q.add({ corpus: true });
+    await q.idle();
+    failCorpusOnce(new UnparsableIndexError("bad again", "v0"));
     q.add({ corpus: true });
     await q.idle();
     q.add({ paths: ["/a"] });
     await q.idle();
-    expect(calls).toEqual(["corpus"]);
-    expect(errors).toEqual(["reindex halted: index is unparsable"]);
+    expect(calls).toEqual(["corpus", "corpus:heal", "corpus"]);
+    expect(errors).toEqual(["reindex halted: index is unusable after a rebuild"]);
+    expect(halts).toEqual([null, "bad again"]);
 
     replaceIndex();
     q.add({ paths: ["/b"] });
     await q.idle();
-    expect(calls).toEqual(["corpus", "/b"]);
+    expect(calls).toEqual(["corpus", "corpus:heal", "corpus", "/b"]);
+  });
+
+  test("a heal pass that fails for another reason keeps healing on retry", async () => {
+    const { ops, calls, failCorpusOnce } = fakeOps();
+    failCorpusOnce(new UnparsableIndexError("bad", "s0"));
+    failCorpusOnce(new Error("model offline"));
+    const q = new ReindexQueue(ops, silent, 10);
+    q.add({ corpus: true });
+    await q.idle();
+    await Bun.sleep(50);
+    await q.idle();
+    expect(calls).toEqual(["corpus", "corpus:heal", "corpus:heal"]);
+  });
+
+  test("the same incomplete sources are reported once, and again when they change", async () => {
+    const warned: unknown[] = [];
+    let failures = ["entity a.md: EACCES"];
+    const { ops } = fakeOps();
+    ops.reconcileCorpus = async () => result({ complete: false, failures });
+    const q = new ReindexQueue(ops, {
+      ...silent,
+      warn: (_m, props) => warned.push(props?.failures),
+    });
+    for (let i = 0; i < 2; i++) {
+      q.add({ corpus: true });
+      await q.idle();
+    }
+    failures = ["entity b.md: EACCES"];
+    q.add({ corpus: true });
+    await q.idle();
+    expect(warned).toEqual([["entity a.md: EACCES"], ["entity b.md: EACCES"]]);
   });
 
   test("a lost write race retries the corpus", async () => {
@@ -219,17 +310,42 @@ describe("ReindexQueue", () => {
     expect(calls).toEqual(["corpus", "corpus"]);
   });
 
-  test("any other failure is reported, the queue keeps serving, and the corpus is retried", async () => {
+  test("any other failure is reported, drops the rest of its batch, and retries the corpus", async () => {
     const errors: string[] = [];
     const { ops, calls } = fakeOps((p) => (p === "/boom" ? new Error("disk") : result()));
     const q = new ReindexQueue(ops, { ...silent, error: (m) => errors.push(m) }, 10);
     q.add({ paths: ["/boom", "/ok"] });
     await q.idle();
-    expect(calls).toEqual(["/boom", "/ok"]);
+    expect(calls).toEqual(["/boom"]);
     expect(errors).toEqual(["reindex failed"]);
+    q.add({ paths: ["/later"] });
+    await q.idle();
     await Bun.sleep(50);
     await q.idle();
-    expect(calls).toEqual(["/boom", "/ok", "corpus"]);
+    expect(calls).toEqual(["/boom", "/later", "corpus"]);
+  });
+
+  test("paths failing while a retry is armed do not deepen the backoff", async () => {
+    const delays: unknown[] = [];
+    const { ops } = fakeOps(() => new Error("model offline"));
+    ops.reconcileCorpus = async () => {
+      throw new Error("model offline");
+    };
+    const q = new ReindexQueue(
+      ops,
+      { ...silent, error: (_m, props) => delays.push(props?.retryMs) },
+      40,
+    );
+    for (const p of ["/a", "/b", "/c"]) {
+      q.add({ paths: [p] });
+      await q.idle();
+    }
+    const deadline = Date.now() + 2000;
+    while (delays.length < 4 && Date.now() < deadline) await Bun.sleep(5);
+    // The first path arms 40ms; the next two report what remains of it; the
+    // corpus retry that timer fires is the second cycle, at 80ms.
+    expect((delays[1] as number) <= 40 && (delays[2] as number) <= 40).toBe(true);
+    expect(delays[3]).toBe(80);
   });
 
   test("repeated failures back off", async () => {
@@ -307,6 +423,19 @@ describe("recall-reindex-hook.ts", () => {
     expect(requests()).toEqual([{ corpus: true }]);
   });
 
+  test("says why at SessionStart while reindexing is halted", () => {
+    const vectors = join(ctx.root, ".recall", "index", "vectors");
+    mkdirSync(vectors, { recursive: true });
+    writeFileSync(join(vectors, "index.json"), "{}");
+    const marker = join(ctx.root, ".recall", "reindex-halted");
+    writeFileSync(marker, "index.json is unparsable; run --full");
+    expect(run({ hook_event_name: "SessionStart" }).stdout).toContain(
+      "reindexing is halted, so recall is not picking up new memory. index.json is unparsable; run --full",
+    );
+    rmSync(marker);
+    expect(run({ hook_event_name: "SessionStart" }).stdout).toBe("");
+  });
+
   test("queues the edited path, and nothing for a path outside the corpus", () => {
     const p = join(ctx.root, "entities", "people", "x.md");
     run({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: p } });
@@ -366,7 +495,9 @@ describe("worker reindexing", () => {
   // The corpus holds only a symlink, which the scan skips, so no reconcile has
   // anything to embed and no model loads. reconcileSource declines the symlink
   // and reports it incomplete, which is what makes its "reindexed" record
-  // observable: a request that was consumed but never queued writes none.
+  // observable: a request that was consumed but never queued writes none. The
+  // path request goes in after startup, since the startup corpus pass would
+  // subsume one already waiting.
   test("builds the index at startup and applies reindex requests", async () => {
     const mailbox = join(ctx.root, ".recall", "mailbox");
     mkdirSync(mailbox, { recursive: true });
@@ -374,7 +505,6 @@ describe("worker reindexing", () => {
     writeFileSync(target, "# outside\n");
     const link = join(ctx.root, "entities", "people", "link.md");
     symlinkSync(target, link);
-    writeFileSync(join(mailbox, "reindex-1.json"), JSON.stringify({ paths: [link] }));
     writeFileSync(join(mailbox, "reindex-2.json"), "not json");
     let log = "";
     worker = Bun.spawn(
@@ -396,6 +526,7 @@ describe("worker reindexing", () => {
     }
     const indexJson = join(ctx.root, ".recall", "index", "vectors", "index.json");
     expect(await waitFor(() => existsSync(indexJson))).toBe(true);
+    writeFileSync(join(mailbox, "reindex-1.json"), JSON.stringify({ paths: [link] }));
     expect(await waitFor(() => readdirSync(mailbox).every((f) => !f.startsWith("reindex-")))).toBe(
       true,
     );

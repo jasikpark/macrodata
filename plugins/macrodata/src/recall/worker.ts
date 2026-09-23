@@ -43,14 +43,15 @@
  * before it can load a model.
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, mkdirSync, statSync, watch } from "fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, mkdirSync, rmSync, statSync, watch } from "fs";
 import { join } from "path";
 import { configure, getConsoleSink, getLogger, jsonLinesFormatter } from "@logtape/logtape";
 import { envNum, pipelineSearch } from "./fts.ts";
 import { TIMER_MAX_MS, WEDGED, withDeadline } from "./deadline.ts";
-import { getIndexDir, getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath, getSpawnStampPath } from "./config.ts";
-import { modelsLoaded } from "./models.ts";
-import { reconcileCorpus, reconcileSource } from "./indexer.ts";
+import { getIndexDir, getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath, getSpawnStampPath, getReindexHaltedPath } from "./config.ts";
+import { embedModelLoaded, modelsLoaded } from "./models.ts";
+import { lastProgressAt, reconcileCorpus, reconcileSource } from "./indexer.ts";
+import { stampOf } from "./atomic-index.ts";
 import { ReindexQueue } from "./reindex.ts";
 import { parseReindexRequest } from "./reindex-request.ts";
 
@@ -362,15 +363,38 @@ function ingest(sid: string): void {
 // over an hour, and node-llama-cpp locks each embedding call, so a query's
 // embedding waits for one document's rather than for the whole build.
 const INDEX_JSON = join(getIndexDir(), "vectors", "index.json");
-function indexStamp(): string {
+function reportHalt(message: string | null): void {
+  const path = getReindexHaltedPath();
   try {
-    const st = statSync(INDEX_JSON);
-    return `${st.mtimeMs}:${st.size}`;
-  } catch {
-    return "missing";
+    if (message === null) rmSync(path, { force: true });
+    else writeFileSync(path, message);
+  } catch (err) {
+    reindexLog.warn("could not update the reindex halt marker", { path, error: String(err) });
   }
 }
-const reindex = new ReindexQueue({ reconcileCorpus: () => reconcileCorpus(), reconcileSource, indexStamp }, reindexLog);
+const reindex = new ReindexQueue({
+  reconcileCorpus: (opts) => reconcileCorpus(opts),
+  reconcileSource,
+  indexStamp: () => stampOf(INDEX_JSON),
+  reportHalt,
+}, reindexLog);
+
+// A reconcile that stops advancing (an embed or model load that never settles)
+// would hold the queue forever while every later request coalesces behind it.
+// Same two budgets as a search, measured from the reconcile's last heartbeat:
+// cold until the embed model has loaded, which covers its first download.
+const REINDEX_WATCHDOG_MS = 30_000;
+setInterval(() => {
+  if (reindex.activeSince === null) return;
+  const since = Math.max(reindex.activeSince, lastProgressAt());
+  const warm = embedModelLoaded();
+  const budget = warm ? WEDGE_WARM_MS : WEDGE_COLD_MS;
+  if (Date.now() - since <= budget) return;
+  reindexLog.error("reindex stopped advancing, exiting so the hook can restart it", {
+    budgetMs: budget, warm, idleMs: Date.now() - since,
+  });
+  process.exit(1);
+}, REINDEX_WATCHDOG_MS).unref();
 
 function ingestReindex(name: string): void {
   const p = join(DIR, name);
@@ -410,10 +434,10 @@ function sweep(): void {
     else if (REINDEX_RE.test(f)) ingestReindex(f);
   }
 }
+sweep();
 // Loads the embed model only if the corpus has something new to embed, so a
 // warm store keeps the lazy-load promise above.
 reindex.add({ corpus: true });
-sweep();
 
 /**
  * Delete mailbox files belonging to sessions that have ended.

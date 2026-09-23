@@ -22,6 +22,7 @@ import {
   truncateSync,
 } from "fs";
 import { join } from "path";
+import { IndexModelMismatchError } from "../src/recall/atomic-index.ts";
 
 const embedded: string[] = [];
 // Set to N to make the embedder throw once N texts have been embedded.
@@ -37,6 +38,7 @@ function vectorOf(text: string): number[] {
 void mock.module("../src/recall/embeddings.ts", () => ({
   EMBEDDING_DIMENSIONS: 4,
   DEFAULT_TASK: "test task",
+  EMBED_MODEL: "test-model",
   embedDocument: async () => [1, 0, 0, 0],
   embedDocuments: async (texts: string[]) => {
     if (failAfter !== null && embedded.length + texts.length > failAfter) {
@@ -216,6 +218,76 @@ describe("recall reconciliation", () => {
     expect(String(await recall.reconcileCorpus().catch((e) => e))).toContain("--full");
     expect(await recall.rebuildIndex()).toMatchObject({ itemCount: 1 });
     expect(ids()).toEqual(["people-alice-preamble"]);
+  });
+
+  test("a commit records the embedding model, and an unrecorded index is adopted", async () => {
+    put(entity("people/alice.md"), "# Alice\n");
+    await recall.reconcileCorpus();
+    expect(JSON.parse(readFileSync(indexPath(), "utf-8")).embedModel).toBe("test-model");
+
+    const raw = JSON.parse(readFileSync(indexPath(), "utf-8"));
+    delete raw.embedModel;
+    writeFileSync(indexPath(), JSON.stringify(raw));
+    put(entity("people/bob.md"), "# Bob\n");
+    expect(await recall.reconcileCorpus()).toMatchObject({ embedded: 1, unchanged: 1 });
+    expect(JSON.parse(readFileSync(indexPath(), "utf-8")).embedModel).toBe("test-model");
+  });
+
+  test("another model's index is refused, and a heal sets it aside and rebuilds", async () => {
+    put(entity("people/alice.md"), "# Alice\n");
+    await recall.reconcileCorpus();
+    const raw = JSON.parse(readFileSync(indexPath(), "utf-8"));
+    writeFileSync(indexPath(), JSON.stringify({ ...raw, embedModel: "other-model" }));
+    embedded.length = 0;
+
+    const err = await recall.reconcileCorpus().catch((e) => e);
+    expect(err).toBeInstanceOf(IndexModelMismatchError);
+    expect(String(err)).toContain("--full");
+    expect(await recall.reconcileSource(entity("people/alice.md")).catch((e) => e)).toBeInstanceOf(
+      IndexModelMismatchError,
+    );
+
+    const r = await recall.reconcileCorpus({ heal: true });
+    expect(r).toMatchObject({ embedded: 1, unchanged: 0 });
+    expect(r.setAside).toContain("index.json.model-");
+    expect(existsSync(r.setAside!)).toBe(true);
+    expect(embedded).toEqual(["# Alice"]);
+  });
+
+  test("a heal sets an unparsable index aside and rebuilds", async () => {
+    put(entity("people/alice.md"), "# Alice\n");
+    await recall.reconcileCorpus();
+    writeFileSync(indexPath(), '{"items": [');
+    const r = await recall.reconcileCorpus({ heal: true });
+    expect(r.setAside).toContain("index.json.corrupt-");
+    expect(ids()).toEqual(["people-alice-preamble"]);
+  });
+
+  test("a commit by another process is reloaded, not overwritten", async () => {
+    put(entity("people/alice.md"), "# Alice\n");
+    put(entity("people/bob.md"), "# Bob\n");
+    await recall.reconcileCorpus();
+    // Another writer drops bob's vector; this process's cached copy still has it.
+    const raw = JSON.parse(readFileSync(indexPath(), "utf-8"));
+    raw.items = raw.items.filter((it: { id: string }) => !it.id.startsWith("people-bob"));
+    writeFileSync(indexPath(), JSON.stringify(raw));
+    embedded.length = 0;
+
+    expect(await recall.reconcileCorpus()).toMatchObject({ embedded: 1, unchanged: 1 });
+    expect(embedded).toEqual(["# Bob"]);
+  });
+
+  test("a result names what made it incomplete", async () => {
+    put(entity("people/alice.md"), "# Alice\n");
+    rmSync(ctx.journalDir, { recursive: true, force: true });
+    const r = await recall.reconcileCorpus();
+    expect(r.failures).toContain("prune skipped for journal: root missing");
+
+    const link = entity("people/link.md");
+    symlinkSync(entity("people/alice.md"), link);
+    expect((await recall.reconcileSource(link)).failures).toEqual([
+      "entity people/link.md: not canonical",
+    ]);
   });
 
   test("a pass with nothing to do leaves index.json untouched", async () => {

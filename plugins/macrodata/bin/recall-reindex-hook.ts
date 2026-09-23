@@ -9,13 +9,19 @@
  *
  * On SessionStart with no index yet, prints a one-line notice: the worker's first
  * reconcile embeds the whole corpus, and recall covers only what has committed.
+ * While the worker has halted reindexing on an unusable index, prints why.
  *
  * Exit 1 on an unexpected error (non-blocking, visible); never exit 2.
  */
 
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { join } from "path";
-import { getIndexDir, getMailboxDir, getReindexRequestPath } from "../src/recall/config.ts";
+import {
+  getIndexDir,
+  getMailboxDir,
+  getReindexHaltedPath,
+  getReindexRequestPath,
+} from "../src/recall/config.ts";
 import { reindexRequestFor, type HookEnvelope } from "../src/recall/reindex-request.ts";
 
 let env: HookEnvelope = {};
@@ -44,11 +50,20 @@ try {
   process.exit(1);
 }
 
-if (
-  env.hook_event_name === "SessionStart" &&
-  !existsSync(join(getIndexDir(), "vectors", "index.json"))
-) {
-  console.log(
-    "<macrodata-recall-status>\nmacrodata-recall: no recall index yet; the worker is building it in the background. The first build embeds the whole memory corpus and can take a while; until it finishes, recall covers only what has been indexed so far.\n</macrodata-recall-status>",
-  );
+if (env.hook_event_name === "SessionStart") {
+  let halted: string | null = null;
+  try {
+    halted = readFileSync(getReindexHaltedPath(), "utf-8").trim();
+  } catch {
+    // No marker: reindexing is running normally.
+  }
+  if (halted) {
+    console.log(
+      `<macrodata-recall-status>\nmacrodata-recall: reindexing is halted, so recall is not picking up new memory. ${halted}\n</macrodata-recall-status>`,
+    );
+  } else if (!existsSync(join(getIndexDir(), "vectors", "index.json"))) {
+    console.log(
+      "<macrodata-recall-status>\nmacrodata-recall: no recall index yet; the worker is building it in the background. The first build embeds the whole memory corpus and can take a while; until it finishes, recall covers only what has been indexed so far.\n</macrodata-recall-status>",
+    );
+  }
 }

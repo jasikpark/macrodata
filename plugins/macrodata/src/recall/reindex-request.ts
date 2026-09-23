@@ -7,7 +7,7 @@
  */
 
 import { realpathSync } from "fs";
-import { isAbsolute, join, relative, resolve, sep } from "path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { getEntitiesDir, getJournalDir } from "./config.ts";
 
 /** A whole-corpus reconcile, or reconcileSource over each absolute path. */
@@ -22,20 +22,29 @@ export interface HookEnvelope {
 // MCP tools that append to the journal. Their envelope names no file, and a
 // no-op corpus reconcile costs well under a second of worker time, so they ask
 // for the whole corpus rather than duplicating the journal's file naming here.
-const MEMORY_WRITE_TOOL = /^mcp__.*macrodata.*__(?:log_journal|save_conversation_summary)$/;
+// Keep in sync with the PostToolUse matcher in .claude-plugin/plugin.json.
+const MEMORY_WRITE_TOOL =
+  /^mcp__plugin_macrodata_macrodata__(?:log_journal|save_conversation_summary)$/;
 
+// A deleted file has no realpath, but its directory usually still does, so an
+// alias of the store still resolves for the deletion.
 function realOrSelf(p: string): string {
   try {
     return realpathSync(p);
   } catch {
-    return p;
+    try {
+      return join(realpathSync(dirname(p)), basename(p));
+    } catch {
+      return p;
+    }
   }
 }
 
 /**
  * The path as the indexer spells it (under the configured root), or null when
- * it is outside both corpus roots or not a file the indexer indexes. Compared through realpath so an edit made
- * through a symlinked alias of the store still counts.
+ * it is outside both corpus roots or not a file the indexer indexes. Compared
+ * through realpath so an edit made through a symlinked alias of the store still
+ * counts.
  */
 function corpusPath(filePath: string): string | null {
   const real = realOrSelf(resolve(filePath));

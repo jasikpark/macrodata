@@ -9,7 +9,7 @@
  * already committed.
  */
 
-import { reconcileCorpus, rebuildIndex, pruneOrphans } from "../src/recall/indexer.ts";
+import { reconcileCorpus, pruneOrphans } from "../src/recall/indexer.ts";
 import { getMacrodataRoot, getIndexDir } from "../src/recall/config.ts";
 
 const USAGE = "usage: bun run bin/recall-reindex.ts [--full | --prune-only]";
@@ -20,19 +20,22 @@ if (args.length > 1 || args.some((a) => a !== "--full" && a !== "--prune-only"))
 }
 const mode = args[0];
 
-console.log(`[macrodata-recall]data root: ${getMacrodataRoot()}`);
-console.log(`[macrodata-recall]index dir: ${getIndexDir()}`);
+const say = (msg: string) => console.log(`[macrodata-recall]${msg}`);
+say(`data root: ${getMacrodataRoot()}`);
+say(`index dir: ${getIndexDir()}`);
 
+let failures: string[];
 if (mode === "--prune-only") {
-  const { pruned, kept } = await pruneOrphans();
-  console.log(`[macrodata-recall]✓ pruned ${pruned} orphaned vectors, ${kept} live items remain`);
-} else if (mode === "--full") {
-  const { itemCount, pruned } = await rebuildIndex();
-  console.log(`[macrodata-recall]✓ indexed ${itemCount} items, pruned ${pruned} orphaned vectors`);
+  const r = await pruneOrphans();
+  failures = r.failures;
+  say(`✓ pruned ${r.pruned} orphaned vectors, ${r.kept} live items remain`);
 } else {
   const start = Date.now();
-  const r = await reconcileCorpus();
-  console.log(
-    `[macrodata-recall]✓ ${r.itemCount} items: ${r.embedded} embedded, ${r.relabeled} relabeled, ${r.unchanged} unchanged, ${r.pruned} pruned in ${((Date.now() - start) / 1000).toFixed(1)}s${r.complete ? "" : " (projection incomplete: nothing under a failed source was pruned)"}`,
+  const r = await reconcileCorpus({ force: mode === "--full", onProgress: say });
+  failures = r.failures;
+  if (r.setAside) say(`unusable index moved to ${r.setAside}`);
+  say(
+    `✓ ${r.itemCount} items: ${r.embedded} embedded, ${r.relabeled} relabeled, ${r.unchanged} unchanged, ${r.pruned} pruned in ${((Date.now() - start) / 1000).toFixed(1)}s${r.complete ? "" : " (projection incomplete: nothing under a failed source was pruned)"}`,
   );
 }
+for (const f of failures) say(`incomplete: ${f}`);

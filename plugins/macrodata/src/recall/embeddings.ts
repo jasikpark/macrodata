@@ -10,6 +10,8 @@
  */
 import { CONTEXT_TOKENS, embedContext } from "./models.ts";
 
+export { EMBED_URI as EMBED_MODEL } from "./models.ts";
+
 export const EMBEDDING_DIMENSIONS = 1024;
 
 export const DEFAULT_TASK =

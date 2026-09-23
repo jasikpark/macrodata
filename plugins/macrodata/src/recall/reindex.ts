@@ -9,22 +9,29 @@
  * and turn every overlap into a ConcurrentWriteError.
  */
 
-import { ConcurrentWriteError, UnparsableIndexError } from "./atomic-index.ts";
-import type { ReconcileResult } from "./indexer.ts";
+import { ConcurrentWriteError, UnusableIndexError } from "./atomic-index.ts";
+import type { ReconcileOptions, ReconcileResult } from "./indexer.ts";
 import type { ReindexRequest } from "./reindex-request.ts";
 
 export interface ReindexOps {
-  reconcileCorpus(): Promise<ReconcileResult>;
+  reconcileCorpus(opts: Pick<ReconcileOptions, "heal">): Promise<ReconcileResult>;
   reconcileSource(path: string): Promise<ReconcileResult>;
   /** Changes whenever index.json is replaced or removed (e.g. mtime + size). */
   indexStamp(): string;
+  /** Publishes why reindexing stopped, for the SessionStart hook; null clears it. */
+  reportHalt(message: string | null): void;
 }
 
 // Past models.ts's 10-minute circuit-breaker cooldown, so a capped retry after
 // repeated model-load failures meets a closed circuit.
 const MAX_RETRY_MS = 15 * 60_000;
 
+// Past this many distinct pending paths, one corpus pass is cheaper than a
+// reconcile per path, and the set stays bounded under a bulk rewrite.
+export const PATH_CAP = 64;
+
 interface Log {
+  debug(msg: string, props?: Record<string, unknown>): void;
   info(msg: string, props?: Record<string, unknown>): void;
   warn(msg: string, props?: Record<string, unknown>): void;
   error(msg: string, props?: Record<string, unknown>): void;
@@ -35,6 +42,10 @@ interface Log {
  * pending path; a path whose reconcile reports incomplete (one reconcileSource
  * declines to index, such as a symlink or a wrong-case spelling) falls back to
  * the corpus.
+ *
+ * An unusable index (unparsable, or another embedding model's vectors) gets one
+ * corpus pass that sets it aside and rebuilds. If the rebuilt index is unusable
+ * too, the queue halts until index.json is replaced, and reports the halt.
  */
 export class ReindexQueue {
   private corpus = false;
@@ -43,10 +54,15 @@ export class ReindexQueue {
   private retry: ReturnType<typeof setTimeout> | null = null;
   private retryAt = 0;
   private failures = 0;
-  // An unparsable index fails every reconcile the same way until `--full`
-  // replaces it, so after the first report the queue stops trying until the
-  // index file's stamp moves off the one it halted on.
+  private lastFailures = "";
+  // `heal` asks the next corpus pass to set an unusable index aside, and stays
+  // set until one succeeds. `healed` allows that once per index.json: an index
+  // unusable again after its rebuild halts the queue instead of looping.
+  private heal = false;
+  private healed = false;
   private haltedAt: string | null = null;
+  /** When the current drain began; null while idle. */
+  activeSince: number | null = null;
 
   constructor(
     private ops: ReindexOps,
@@ -58,18 +74,30 @@ export class ReindexQueue {
     if (this.haltedAt !== null) {
       if (this.ops.indexStamp() === this.haltedAt) return;
       this.haltedAt = null;
+      this.healed = false;
       this.log.info("reindex resumed: index replaced");
     }
     if ("corpus" in req) this.corpus = true;
     else for (const p of req.paths) this.paths.add(p);
+    if (this.paths.size > PATH_CAP) {
+      this.corpus = true;
+      this.paths.clear();
+    }
     this.kick();
   }
 
   private kick(): void {
-    this.running ??= this.drain().finally(() => {
-      this.running = null;
-      if (this.pending()) this.kick();
-    });
+    if (this.running) return;
+    this.activeSince = Date.now();
+    // Deferred a microtask so every add() in the same tick (a startup sweep of
+    // queued requests) coalesces before the first reconcile starts.
+    this.running = Promise.resolve()
+      .then(() => this.drain())
+      .finally(() => {
+        this.running = null;
+        this.activeSince = null;
+        if (this.pending()) this.kick();
+      });
   }
 
   private pending(): boolean {
@@ -86,7 +114,8 @@ export class ReindexQueue {
       if (this.corpus) {
         this.corpus = false;
         this.paths.clear();
-        await this.attempt("corpus", () => this.ops.reconcileCorpus());
+        const heal = this.heal;
+        await this.attempt("corpus", () => this.ops.reconcileCorpus({ heal }));
         continue;
       }
       const batch = [...this.paths];
@@ -94,7 +123,10 @@ export class ReindexQueue {
       for (const p of batch) {
         if (this.corpus || this.haltedAt !== null) break;
         const r = await this.attempt(p, () => this.ops.reconcileSource(p));
-        if (r && !r.complete) this.corpus = true;
+        // A failed path drops the rest of the batch: the corpus retry it armed
+        // (or the heal pass it queued) covers every path in it.
+        if (!r) break;
+        if (!r.complete) this.corpus = true;
       }
     }
   }
@@ -104,20 +136,43 @@ export class ReindexQueue {
     run: () => Promise<ReconcileResult>,
   ): Promise<ReconcileResult | null> {
     const t0 = Date.now();
+    this.log.debug("reindex start", { scope });
     try {
-      const r = await run();
-      if (r.embedded || r.relabeled || r.pruned || !r.complete) {
-        this.log.info("reindexed", { scope, ...r, ms: Date.now() - t0 });
+      const { failures, ...r } = await run();
+      const changed = r.embedded || r.relabeled || r.pruned || r.setAside;
+      this.log[changed ? "info" : "debug"]("reindexed", { scope, ...r, ms: Date.now() - t0 });
+      // The same unreadable file fails every pass; report it when the set changes.
+      const key = failures.join("\n");
+      if (key !== this.lastFailures && (scope === "corpus" || failures.length > 0)) {
+        this.lastFailures = key;
+        if (failures.length > 0) this.log.warn("reindex incomplete", { scope, failures });
       }
       // A path succeeding says nothing about what failed the corpus pass.
-      if (scope === "corpus") this.failures = 0;
-      return r;
+      if (scope === "corpus") {
+        this.failures = 0;
+        this.heal = false;
+        this.ops.reportHalt(null);
+      }
+      return { failures, ...r };
     } catch (err) {
-      if (err instanceof UnparsableIndexError) {
-        this.haltedAt = this.ops.indexStamp();
+      if (err instanceof UnusableIndexError && !this.healed) {
+        this.healed = true;
+        this.heal = true;
+        this.corpus = true;
+        this.log.warn("reindex found an unusable index; setting it aside to rebuild", {
+          scope,
+          error: err.message,
+        });
+      } else if (err instanceof UnusableIndexError) {
+        this.haltedAt = err.stamp;
+        this.heal = false;
         this.corpus = false;
         this.paths.clear();
-        this.log.error("reindex halted: index is unparsable", { scope, error: err.message });
+        this.log.error("reindex halted: index is unusable after a rebuild", {
+          scope,
+          error: err.message,
+        });
+        this.ops.reportHalt(err.message);
       } else if (err instanceof ConcurrentWriteError) {
         // Another process (a hand-run recall-reindex.ts) committed first. The
         // failed update was dropped and the cache reset, so a later corpus pass
@@ -129,9 +184,11 @@ export class ReindexQueue {
       } else {
         // A model that failed to load (offline, circuit open) or a transient
         // I/O error; back off rather than wait for the next hook to re-ask.
-        const retryMs = this.scheduleRetry(
-          Math.min(this.retryMs * 2 ** this.failures++, MAX_RETRY_MS),
-        );
+        // One failure per retry cycle: paths failing while a retry is armed
+        // are the same outage, not a deeper one.
+        const retryMs = this.retry
+          ? this.scheduleRetry(0)
+          : this.scheduleRetry(Math.min(this.retryMs * 2 ** this.failures++, MAX_RETRY_MS));
         this.log.error("reindex failed", { scope, error: String(err), retryMs });
       }
       return null;
