@@ -38,10 +38,7 @@ async function embedRaw(inputs: string[]): Promise<number[][]> {
   const ctx = await embedContext();
   const out: number[][] = [];
   for (const text of inputs) {
-    const tokens = ctx.model.tokenize(text);
-    const e = await ctx.getEmbeddingFor(
-      tokens.length > MAX_INPUT_TOKENS ? tokens.slice(0, MAX_INPUT_TOKENS) : text,
-    );
+    const e = await ctx.getEmbeddingFor(ctx.model.tokenize(text).slice(0, MAX_INPUT_TOKENS));
     out.push(l2normalize([...e.vector]));
   }
   return out;

@@ -83,6 +83,17 @@ describe("reindexRequestFor", () => {
     ).toEqual({ paths: [file] });
   });
 
+  test("files under a root that the indexer never indexes ask for nothing", () => {
+    for (const file_path of [
+      join(ctx.root, "journal", "notes.md"),
+      join(ctx.root, "entities", "people", "x.txt"),
+      join(ctx.root, "entities", ".drafts", "x.md"),
+      join(ctx.root, "entities", "people", ".x.md"),
+    ]) {
+      expect(reindexRequestFor({ tool_name: "Write", tool_input: { file_path } })).toBeNull();
+    }
+  });
+
   test("paths outside the corpus, relative paths, and the roots themselves ask for nothing", () => {
     for (const file_path of [
       join(ctx.root, "state", "today.md"),
@@ -236,6 +247,26 @@ describe("ReindexQueue", () => {
     const deadline = Date.now() + 2000;
     while (delays.length < 3 && Date.now() < deadline) await Bun.sleep(5);
     expect(delays.slice(0, 3)).toEqual([10, 20, 40]);
+  });
+
+  test("a path succeeding between corpus failures does not reset the backoff", async () => {
+    const delays: unknown[] = [];
+    const { ops } = fakeOps();
+    ops.reconcileCorpus = async () => {
+      throw new Error("model offline");
+    };
+    const q = new ReindexQueue(
+      ops,
+      { ...silent, error: (_m, props) => delays.push(props?.retryMs) },
+      10,
+    );
+    q.add({ corpus: true });
+    await q.idle();
+    q.add({ paths: ["/ok"] });
+    await q.idle();
+    const deadline = Date.now() + 2000;
+    while (delays.length < 2 && Date.now() < deadline) await Bun.sleep(5);
+    expect(delays.slice(0, 2)).toEqual([10, 20]);
   });
 });
 

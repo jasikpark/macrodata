@@ -7,7 +7,7 @@
  */
 
 import { realpathSync } from "fs";
-import { isAbsolute, join, relative, resolve } from "path";
+import { isAbsolute, join, relative, resolve, sep } from "path";
 import { getEntitiesDir, getJournalDir } from "./config.ts";
 
 /** A whole-corpus reconcile, or reconcileSource over each absolute path. */
@@ -34,14 +34,19 @@ function realOrSelf(p: string): string {
 
 /**
  * The path as the indexer spells it (under the configured root), or null when
- * it is outside both corpus roots. Compared through realpath so an edit made
+ * it is outside both corpus roots or not a file the indexer indexes. Compared through realpath so an edit made
  * through a symlinked alias of the store still counts.
  */
 function corpusPath(filePath: string): string | null {
   const real = realOrSelf(resolve(filePath));
-  for (const root of [getJournalDir(), getEntitiesDir()]) {
+  for (const [root, ext] of [
+    [getJournalDir(), ".jsonl"],
+    [getEntitiesDir(), ".md"],
+  ] as const) {
     const rel = relative(realOrSelf(root), real);
     if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
+      // Files the indexer never indexes would only buy a corpus fallback.
+      if (!rel.endsWith(ext) || rel.split(sep).some((s) => s.startsWith("."))) return null;
       return join(root, rel);
     }
   }

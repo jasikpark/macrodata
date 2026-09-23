@@ -41,6 +41,7 @@ export class ReindexQueue {
   private paths = new Set<string>();
   private running: Promise<void> | null = null;
   private retry: ReturnType<typeof setTimeout> | null = null;
+  private retryAt = 0;
   private failures = 0;
   // An unparsable index fails every reconcile the same way until `--full`
   // replaces it, so after the first report the queue stops trying until the
@@ -108,7 +109,8 @@ export class ReindexQueue {
       if (r.embedded || r.relabeled || r.pruned || !r.complete) {
         this.log.info("reindexed", { scope, ...r, ms: Date.now() - t0 });
       }
-      this.failures = 0;
+      // A path succeeding says nothing about what failed the corpus pass.
+      if (scope === "corpus") this.failures = 0;
       return r;
     } catch (err) {
       if (err instanceof UnparsableIndexError) {
@@ -122,26 +124,29 @@ export class ReindexQueue {
         // reloads its commit and redoes whatever this one lost.
         this.log.warn("reindex lost a write race, retrying the corpus", {
           scope,
-          retryMs: this.retryMs,
+          retryMs: this.scheduleRetry(this.retryMs),
         });
-        this.scheduleRetry(this.retryMs);
       } else {
         // A model that failed to load (offline, circuit open) or a transient
         // I/O error; back off rather than wait for the next hook to re-ask.
-        const retryMs = Math.min(this.retryMs * 2 ** this.failures++, MAX_RETRY_MS);
+        const retryMs = this.scheduleRetry(
+          Math.min(this.retryMs * 2 ** this.failures++, MAX_RETRY_MS),
+        );
         this.log.error("reindex failed", { scope, error: String(err), retryMs });
-        this.scheduleRetry(retryMs);
       }
       return null;
     }
   }
 
-  private scheduleRetry(ms: number): void {
-    if (this.retry) return;
+  /** Arms the one retry timer unless it is already armed; returns ms until it fires. */
+  private scheduleRetry(ms: number): number {
+    if (this.retry) return Math.max(0, this.retryAt - Date.now());
+    this.retryAt = Date.now() + ms;
     this.retry = setTimeout(() => {
       this.retry = null;
       this.add({ corpus: true });
     }, ms);
     this.retry.unref?.();
+    return ms;
   }
 }

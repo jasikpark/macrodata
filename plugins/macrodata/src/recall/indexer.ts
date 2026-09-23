@@ -56,11 +56,13 @@ async function getIndex(): Promise<AtomicLocalIndex> {
   const dir = getIndexDir();
   if (index) return index;
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  index = new AtomicLocalIndex(join(dir, "vectors"));
-  if (!(await index.isIndexCreated())) {
-    await index.createIndex();
+  // Held in a local: a resetIndexCache() during the await nulls `index`.
+  const idx = new AtomicLocalIndex(join(dir, "vectors"));
+  index = idx;
+  if (!(await idx.isIndexCreated())) {
+    await idx.createIndex();
   }
-  return index;
+  return idx;
 }
 
 // Embed a length-capped view of each doc — long sections dilute the embedding

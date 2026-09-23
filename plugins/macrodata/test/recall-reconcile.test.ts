@@ -266,6 +266,17 @@ describe("recall reconciliation", () => {
     expect(ids()).toEqual(["journal-2026-09-23.jsonl-0", "people-alice-preamble"]);
   });
 
+  test("a search racing a reindex's cache reset still gets an index", async () => {
+    put(entity("people/alice.md"), "# Alice\n");
+    await recall.reconcileCorpus();
+    for (let i = 0; i < 20; i++) {
+      recall.resetIndexCache();
+      const search = recall.searchMemory("alice");
+      recall.resetIndexCache();
+      expect((await search).map((r) => r.source)).toContain("people/alice.md");
+    }
+  });
+
   test("a missing journal root never prunes entity or journal vectors wholesale", async () => {
     put(entity("people/alice.md"), "# Alice\n");
     put(journal("2026-09-23.jsonl"), line("t", "a") + "\n");
