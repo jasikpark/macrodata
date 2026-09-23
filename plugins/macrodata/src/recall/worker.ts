@@ -48,7 +48,7 @@ import { join } from "path";
 import { configure, getConsoleSink, getLogger, jsonLinesFormatter } from "@logtape/logtape";
 import { envNum, pipelineSearch } from "./fts.ts";
 import { TIMER_MAX_MS, WEDGED, withDeadline } from "./deadline.ts";
-import { getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath, getSpawnStampPath } from "./config.ts";
+import { getIndexDir, getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath, getSpawnStampPath } from "./config.ts";
 import { modelsLoaded } from "./models.ts";
 import { reconcileCorpus, reconcileSource } from "./indexer.ts";
 import { ReindexQueue } from "./reindex.ts";
@@ -361,13 +361,28 @@ function ingest(sid: string): void {
 // Runs alongside the search drain rather than inside it: a first build can take
 // over an hour, and node-llama-cpp locks each embedding call, so a query's
 // embedding waits for one document's rather than for the whole build.
-const reindex = new ReindexQueue({ reconcileCorpus: () => reconcileCorpus(), reconcileSource }, reindexLog);
+const INDEX_JSON = join(getIndexDir(), "vectors", "index.json");
+function indexStamp(): string {
+  try {
+    const st = statSync(INDEX_JSON);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return "missing";
+  }
+}
+const reindex = new ReindexQueue({ reconcileCorpus: () => reconcileCorpus(), reconcileSource, indexStamp }, reindexLog);
 
 function ingestReindex(name: string): void {
   const p = join(DIR, name);
   let raw: string;
-  try { raw = readFileSync(p, "utf-8"); unlinkSync(p); }
-  catch { return; } // consumed by a concurrent sweep
+  try { raw = readFileSync(p, "utf-8"); }
+  catch { return; } // the watch fired for a file already consumed
+  try { unlinkSync(p); }
+  catch (err) {
+    // Queuing a request that cannot be removed would re-run it on every sweep.
+    ingestLog.warn("reindex request not consumed: unlink failed", { name, error: String(err) });
+    return;
+  }
   let req: ReturnType<typeof parseReindexRequest> = null;
   try { req = parseReindexRequest(JSON.parse(raw)); } catch { /* reported below */ }
   if (!req) {

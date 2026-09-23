@@ -105,10 +105,13 @@ export function modelsLoaded(): boolean {
   return embedLoaded && rankLoaded;
 }
 
+/** Token window of both contexts; an embed input longer than this throws. */
+export const CONTEXT_TOKENS = 4096;
+
 async function loadEmbed() {
   const model = await (await llama()).loadModel({ modelPath: await resolveModelFile(EMBED_URI) });
   try {
-    const ctx = await model.createEmbeddingContext({ contextSize: 4096 });
+    const ctx = await model.createEmbeddingContext({ contextSize: CONTEXT_TOKENS });
     embedLoaded = true;
     return ctx;
   } catch (e) {
@@ -121,7 +124,7 @@ export const embedContext = memoAsync(breaker(loadEmbed, "embed"));
 async function loadRank() {
   const model = await (await llama()).loadModel({ modelPath: await resolveModelFile(RERANK_URI) });
   try {
-    const ctx = await model.createRankingContext({ contextSize: 4096 });
+    const ctx = await model.createRankingContext({ contextSize: CONTEXT_TOKENS });
     rankLoaded = true;
     return ctx;
   } catch (e) {

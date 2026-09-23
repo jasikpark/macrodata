@@ -329,16 +329,12 @@ async function freshIndex({ replaceUnparsable = false } = {}): Promise<LocalInde
  */
 export function reconcileCorpus(opts: { force?: boolean } = {}): Promise<ReconcileResult> {
   return serialized(async () => {
-    const start = Date.now();
     const idx = await freshIndex({ replaceUnparsable: opts.force });
     const projection = scanCorpus();
     const result = await applyReconcile(idx, projection.items, await staleIds(idx, projection), {
       force: opts.force,
       complete: projection.complete,
     });
-    console.log(
-      `[macrodata-recall]reconcile: ${result.embedded} embedded, ${result.relabeled} relabeled, ${result.unchanged} unchanged, ${result.pruned} pruned in ${((Date.now() - start) / 1000).toFixed(1)}s`,
-    );
     return result;
   });
 }

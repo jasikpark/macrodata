@@ -16,7 +16,13 @@ import type { ReindexRequest } from "./reindex-request.ts";
 export interface ReindexOps {
   reconcileCorpus(): Promise<ReconcileResult>;
   reconcileSource(path: string): Promise<ReconcileResult>;
+  /** Changes whenever index.json is replaced or removed (e.g. mtime + size). */
+  indexStamp(): string;
 }
+
+// Past models.ts's 10-minute circuit-breaker cooldown, so a capped retry after
+// repeated model-load failures meets a closed circuit.
+const MAX_RETRY_MS = 15 * 60_000;
 
 interface Log {
   info(msg: string, props?: Record<string, unknown>): void;
@@ -35,9 +41,11 @@ export class ReindexQueue {
   private paths = new Set<string>();
   private running: Promise<void> | null = null;
   private retry: ReturnType<typeof setTimeout> | null = null;
+  private failures = 0;
   // An unparsable index fails every reconcile the same way until `--full`
-  // replaces it, so after the first report the queue stops trying.
-  private halted = false;
+  // replaces it, so after the first report the queue stops trying until the
+  // index file's stamp moves off the one it halted on.
+  private haltedAt: string | null = null;
 
   constructor(
     private ops: ReindexOps,
@@ -46,7 +54,11 @@ export class ReindexQueue {
   ) {}
 
   add(req: ReindexRequest): void {
-    if (this.halted) return;
+    if (this.haltedAt !== null) {
+      if (this.ops.indexStamp() === this.haltedAt) return;
+      this.haltedAt = null;
+      this.log.info("reindex resumed: index replaced");
+    }
     if ("corpus" in req) this.corpus = true;
     else for (const p of req.paths) this.paths.add(p);
     this.kick();
@@ -60,7 +72,7 @@ export class ReindexQueue {
   }
 
   private pending(): boolean {
-    return !this.halted && (this.corpus || this.paths.size > 0);
+    return this.haltedAt === null && (this.corpus || this.paths.size > 0);
   }
 
   /** Resolves once the queue is empty; for tests and orderly shutdown. */
@@ -79,6 +91,7 @@ export class ReindexQueue {
       const batch = [...this.paths];
       this.paths.clear();
       for (const p of batch) {
+        if (this.corpus || this.haltedAt !== null) break;
         const r = await this.attempt(p, () => this.ops.reconcileSource(p));
         if (r && !r.complete) this.corpus = true;
       }
@@ -95,10 +108,11 @@ export class ReindexQueue {
       if (r.embedded || r.relabeled || r.pruned || !r.complete) {
         this.log.info("reindexed", { scope, ...r, ms: Date.now() - t0 });
       }
+      this.failures = 0;
       return r;
     } catch (err) {
       if (err instanceof UnparsableIndexError) {
-        this.halted = true;
+        this.haltedAt = this.ops.indexStamp();
         this.corpus = false;
         this.paths.clear();
         this.log.error("reindex halted: index is unparsable", { scope, error: err.message });
@@ -110,20 +124,24 @@ export class ReindexQueue {
           scope,
           retryMs: this.retryMs,
         });
-        this.scheduleRetry();
+        this.scheduleRetry(this.retryMs);
       } else {
-        this.log.error("reindex failed", { scope, error: String(err) });
+        // A model that failed to load (offline, circuit open) or a transient
+        // I/O error; back off rather than wait for the next hook to re-ask.
+        const retryMs = Math.min(this.retryMs * 2 ** this.failures++, MAX_RETRY_MS);
+        this.log.error("reindex failed", { scope, error: String(err), retryMs });
+        this.scheduleRetry(retryMs);
       }
       return null;
     }
   }
 
-  private scheduleRetry(): void {
+  private scheduleRetry(ms: number): void {
     if (this.retry) return;
     this.retry = setTimeout(() => {
       this.retry = null;
       this.add({ corpus: true });
-    }, this.retryMs);
+    }, ms);
     this.retry.unref?.();
   }
 }

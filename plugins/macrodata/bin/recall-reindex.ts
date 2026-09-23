@@ -30,8 +30,9 @@ if (mode === "--prune-only") {
   const { itemCount, pruned } = await rebuildIndex();
   console.log(`[macrodata-recall]✓ indexed ${itemCount} items, pruned ${pruned} orphaned vectors`);
 } else {
+  const start = Date.now();
   const r = await reconcileCorpus();
   console.log(
-    `[macrodata-recall]✓ ${r.itemCount} items: ${r.embedded} embedded, ${r.relabeled} relabeled, ${r.unchanged} unchanged, ${r.pruned} pruned${r.complete ? "" : " (projection incomplete: nothing under a failed source was pruned)"}`,
+    `[macrodata-recall]✓ ${r.itemCount} items: ${r.embedded} embedded, ${r.relabeled} relabeled, ${r.unchanged} unchanged, ${r.pruned} pruned in ${((Date.now() - start) / 1000).toFixed(1)}s${r.complete ? "" : " (projection incomplete: nothing under a failed source was pruned)"}`,
   );
 }

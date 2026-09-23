@@ -48,7 +48,7 @@ export function getInboxPath(sid: string): string {
   return join(getMailboxDir(), `inbox-${sid}.json`);
 }
 
-/** Unique per request, so a burst of writers never overwrites one another's. */
+/** Path requests take a unique tag so a burst never overwrites one another's. */
 export function getReindexRequestPath(tag: string): string {
   return join(getMailboxDir(), `reindex-${tag}.json`);
 }

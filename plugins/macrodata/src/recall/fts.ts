@@ -282,8 +282,7 @@ export async function pipelineSearch(
   // query (the agent's current trajectory) when provided, else the same query.
   // BOTH legs read the shared Vectra index — the vector leg via searchMemory,
   // the FTS leg via buildCorpus -> listItems — so EITHER can throw on a torn
-  // index.json read during a concurrent reindex (and the vector leg can also
-  // throw on a token-dense query exceeding contextSize). Isolate each leg so
+  // index.json read during a concurrent reindex. Isolate each leg so
   // one failing degrades to the other instead of killing the whole pipeline;
   // an unguarded ftsSearch throw would also discard a successful vector result.
   // Leg width: Porrima's passive searchLimit tiers are 28/40/64

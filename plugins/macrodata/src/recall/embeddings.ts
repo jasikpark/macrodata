@@ -8,7 +8,7 @@
  * (built L2-normalized via llama-server); 1024-dim. Same exported signatures as
  * the HTTP version, so indexer.ts is unchanged.
  */
-import { embedContext } from "./models.ts";
+import { CONTEXT_TOKENS, embedContext } from "./models.ts";
 
 export const EMBEDDING_DIMENSIONS = 1024;
 
@@ -26,14 +26,22 @@ function l2normalize(v: number[]): number[] {
   return norm > 0 ? v.map((x) => x / norm) : v;
 }
 
+// Headroom for the BOS/EOS tokens getEmbeddingFor adds around the input.
+const MAX_INPUT_TOKENS = CONTEXT_TOKENS - 8;
+
 // In-process embedding via node-llama-cpp. Sequential getEmbeddingFor (the context
-// is one sequence); fine for the one-shot reindex and per-query use.
+// is one sequence); fine for the one-shot reindex and per-query use. Inputs are
+// cut to the token window: a character cap alone lets token-dense text (rare
+// scripts, byte-fallback runs) overflow it, and getEmbeddingFor throws on that.
 async function embedRaw(inputs: string[]): Promise<number[][]> {
   if (inputs.length === 0) return [];
   const ctx = await embedContext();
   const out: number[][] = [];
   for (const text of inputs) {
-    const e = await ctx.getEmbeddingFor(text);
+    const tokens = ctx.model.tokenize(text);
+    const e = await ctx.getEmbeddingFor(
+      tokens.length > MAX_INPUT_TOKENS ? tokens.slice(0, MAX_INPUT_TOKENS) : text,
+    );
     out.push(l2normalize([...e.vector]));
   }
   return out;

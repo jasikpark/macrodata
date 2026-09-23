@@ -20,8 +20,8 @@ export interface HookEnvelope {
 }
 
 // MCP tools that append to the journal. Their envelope names no file, and a
-// no-op corpus reconcile costs a few seconds of worker time, so they ask for
-// the whole corpus rather than duplicating the journal's file naming here.
+// no-op corpus reconcile costs well under a second of worker time, so they ask
+// for the whole corpus rather than duplicating the journal's file naming here.
 const MEMORY_WRITE_TOOL = /^mcp__.*macrodata.*__(?:log_journal|save_conversation_summary)$/;
 
 function realOrSelf(p: string): string {

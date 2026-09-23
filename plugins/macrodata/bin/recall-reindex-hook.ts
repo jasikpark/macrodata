@@ -21,7 +21,9 @@ import { reindexRequestFor, type HookEnvelope } from "../src/recall/reindex-requ
 let env: HookEnvelope = {};
 const raw = process.stdin.isTTY ? "" : await Bun.stdin.text();
 try {
-  if (raw.trim()) env = JSON.parse(raw);
+  const parsed: unknown = raw.trim() ? JSON.parse(raw) : {};
+  if (typeof parsed !== "object" || parsed === null) process.exit(0);
+  env = parsed as HookEnvelope;
 } catch {
   process.exit(0);
 }
@@ -31,7 +33,9 @@ if (!req) process.exit(0);
 
 try {
   mkdirSync(getMailboxDir(), { recursive: true });
-  const path = getReindexRequestPath(`${process.pid}-${Date.now()}`);
+  // Corpus requests are identical, so they share one name and a burst of them
+  // (or a worker that never drains them) leaves one file, not one per session.
+  const path = getReindexRequestPath("corpus" in req ? "corpus" : `${process.pid}-${Date.now()}`);
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(req));
   renameSync(tmp, path);
