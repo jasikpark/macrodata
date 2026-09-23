@@ -1,18 +1,29 @@
 /**
  * Ambient-recall indexer — Qwen3/1024 Vectra index over macrodata markdown.
  *
- * Parsing (journal JSONL + per-section entity splitting) is ported verbatim
- * from src/indexer.ts so both indexes hold the same units. The differences are:
+ * Units come from the canonical corpus projection (src/corpus.ts) shared with
+ * the MiniLM indexer, so both indexes hold the same units. The differences are:
  * Qwen3 doc/query embeddings, 1024-dim, and a separate index dir
  * (config.getIndexDir) — MiniLM/384 and Qwen3/1024 cannot share a Vectra store.
  */
 
-import { LocalIndex } from "vectra";
-import { join } from "path";
-import { existsSync, mkdirSync } from "fs";
+import type { LocalIndex } from "vectra";
+import { AtomicLocalIndex, UnparsableIndexError } from "./atomic-index.ts";
+import { join, relative, resolve, sep } from "path";
+import { existsSync, lstatSync, mkdirSync } from "fs";
 import { embedDocuments, embedQuery } from "./embeddings.ts";
 import { getIndexDir, getJournalDir, getEntitiesDir } from "./config.ts";
-import { scanCorpus, type MemoryItem, type MemoryItemType } from "../corpus.ts";
+import {
+  scanCorpus,
+  canonicalUnder,
+  isDotPath,
+  projectJournalFile,
+  projectEntityFile,
+  type CorpusProjection,
+  type MemoryItem,
+  type MemoryItemType,
+  type SourceSnapshot,
+} from "../corpus.ts";
 
 export type { MemoryItem, MemoryItemType } from "../corpus.ts";
 
@@ -31,7 +42,7 @@ export interface SearchResult {
   mmrSim?: number; // redundancy penalty (max cosine/Jaccard vs earlier picks) at pick time; 0 for the first pick
 }
 
-let index: LocalIndex | null = null;
+let index: AtomicLocalIndex | null = null;
 
 // Drop the cached LocalIndex (it holds index.json in memory) so the next call
 // re-reads from disk. Called by the staleness check in fts.ts when a reindex
@@ -41,11 +52,11 @@ export function resetIndexCache(): void {
   index = null;
 }
 
-async function getIndex(): Promise<LocalIndex> {
+async function getIndex(): Promise<AtomicLocalIndex> {
   const dir = getIndexDir();
   if (index) return index;
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  index = new LocalIndex(join(dir, "vectors"));
+  index = new AtomicLocalIndex(join(dir, "vectors"));
   if (!(await index.isIndexCreated())) {
     await index.createIndex();
   }
@@ -65,133 +76,369 @@ function dropLoneHighSurrogate(s: string): string {
   return last >= 0xd800 && last <= 0xdbff ? s.slice(0, -1) : s;
 }
 
-const INDEX_BATCH = 8;
+const EMBED_BATCH = 8;
 
-async function indexItems(items: MemoryItem[]): Promise<void> {
-  if (items.length === 0) return;
-  const idx = await getIndex();
-  const t0 = Date.now();
+// Vectra rewrites the whole index.json on every endUpdate (and on every bare
+// upsertItem/deleteItem, which wraps its own update), so a write per item makes
+// a full rebuild quadratic in index size. Commit every COMMIT_ITEMS embedded
+// items instead: an interrupted pass loses at most that many embeddings, and
+// the next reconcile skips everything already committed.
+const COMMIT_ITEMS = 128;
 
-  // Embed -> upsert -> log per batch (NOT embed-all-then-write): incremental
-  // persistence (resumable / survives a kill), bounded memory, visible progress.
-  for (let i = 0; i < items.length; i += INDEX_BATCH) {
-    const batch = items.slice(i, i + INDEX_BATCH);
-    const vectors = await embedDocuments(
-      batch.map((it) => dropLoneHighSurrogate(it.content.slice(0, MAX_EMBED_CHARS))),
-    );
-    for (let j = 0; j < batch.length; j++) {
-      const item = batch[j];
-      const metadata: Record<string, string | number | boolean> = {
-        type: item.type,
-        content: item.content,
-        source: item.source,
-      };
-      if (item.section) metadata.section = item.section;
-      if (item.timestamp) metadata.timestamp = item.timestamp;
-      await idx.upsertItem({ id: item.id, vector: vectors[j], metadata });
-    }
-    const done = Math.min(i + INDEX_BATCH, items.length);
-    if (done % (INDEX_BATCH * 10) === 0 || done === items.length) {
-      const rate = done / ((Date.now() - t0) / 1000);
-      console.log(`[macrodata-recall]${done}/${items.length} indexed (${rate.toFixed(1)} items/s)`);
-    }
+type Metadata = Record<string, string | number | boolean>;
+
+function metadataOf(item: MemoryItem): Metadata {
+  const metadata: Metadata = { type: item.type, content: item.content, source: item.source };
+  if (item.section) metadata.section = item.section;
+  if (item.timestamp) metadata.timestamp = item.timestamp;
+  return metadata;
+}
+
+// The embedding input is derived from content alone, so equal content means
+// the stored vector is still valid even when other metadata moved.
+const METADATA_KEYS = ["type", "content", "source", "section", "timestamp"] as const;
+
+function sameMetadata(stored: Record<string, unknown>, next: Metadata): boolean {
+  return METADATA_KEYS.every((k) => stored[k] === next[k]);
+}
+
+export interface ReconcileResult {
+  /** Items the projection produced for the reconciled scope. */
+  itemCount: number;
+  /** Items (re-)embedded: new, content changed, or forced. */
+  embedded: number;
+  /** Items whose content matched but metadata moved; vector reused. */
+  relabeled: number;
+  unchanged: number;
+  pruned: number;
+  /** False when the scope's projection was incomplete, so nothing unseen was pruned. */
+  complete: boolean;
+}
+
+// Every writer below runs through this chain, so two reconciles in one process
+// (a watcher's burst of events) never interleave inside one Vectra update: a
+// second beginUpdate on the shared LocalIndex throws, and its cleanup would
+// cancel the first caller's update.
+let writeChain: Promise<unknown> = Promise.resolve();
+
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn);
+  writeChain = run.catch(() => {});
+  return run;
+}
+
+// Vectors this process pruned recently, by content. A watcher sees a rename as
+// two events in either order; when the deletion lands first, the addition
+// finds its content here instead of re-embedding it.
+const RECENTLY_PRUNED_CAP = 4096;
+const recentlyPruned = new Map<unknown, number[]>();
+
+function rememberPruned(items: { metadata: unknown; vector: number[] }[]): void {
+  for (const it of items) {
+    const content = (it.metadata as Record<string, unknown>).content;
+    recentlyPruned.delete(content);
+    recentlyPruned.set(content, it.vector);
+  }
+  for (const key of recentlyPruned.keys()) {
+    if (recentlyPruned.size <= RECENTLY_PRUNED_CAP) break;
+    recentlyPruned.delete(key);
   }
 }
 
-function collectItems(): { items: MemoryItem[]; complete: boolean } {
-  const projection = scanCorpus();
-  if (!projection.complete) {
-    for (const f of projection.failures) {
-      console.log(`[macrodata-recall]projection incomplete: ${f.source}: ${f.error}`);
-    }
-  }
-  return { items: projection.items, complete: projection.complete };
-}
-
-// indexItems only ever upserts, so a vector outlives the journal line, section,
-// or file it came from and keeps scoring against live material forever. Nothing
-// else deletes, so the index only converges on the corpus if the ids the scan
-// no longer produces are removed here.
 /**
- * True when NEITHER corpus root exists on disk. A complete, empty projection
- * over missing roots plus a non-empty index is far more likely a
- * misconfigured MACRODATA_ROOT than a deliberate wipe, so it stays the one
- * pattern pruneAgainst conservatively refuses.
+ * Converge the index on `items`, deleting `stale` ids. Embeds only items whose
+ * content no stored vector already covers, unless `force`. Callers own the
+ * authority of `stale`: it must contain only ids a clean read proved are gone.
  */
-function bothCorpusRootsMissing(): boolean {
-  return !existsSync(getJournalDir()) && !existsSync(getEntitiesDir());
-}
-
-async function pruneAgainst(
+async function applyReconcile(
+  idx: LocalIndex,
   items: MemoryItem[],
-  complete: boolean,
-): Promise<{ pruned: number; kept: number }> {
-  const idx = await getIndex();
-  const indexed = await idx.listItems();
+  stale: Iterable<string>,
+  opts: { force?: boolean; complete: boolean },
+): Promise<ReconcileResult> {
+  const stored = await idx.listItems();
+  const existing = new Map(stored.map((it) => [it.id, it]));
+  // Ids are positional (journal line index, section index), so a line inserted
+  // above or a file renamed moves identical content to a new id; reuse its
+  // vector rather than re-embedding.
+  const byContent = new Map<unknown, number[]>(recentlyPruned);
+  for (const it of stored)
+    byContent.set((it.metadata as Record<string, unknown>).content, it.vector);
 
-  // An incomplete projection (any source that failed to read or list) would
-  // silently read its missing items as deletions. Refuse rather than
-  // reconcile to an untruth.
-  if (!complete) {
-    if (indexed.length > 0) {
-      console.log(`[macrodata-recall]prune skipped: projection incomplete, index holds ${indexed.length}`);
-    }
-    return { pruned: 0, kept: indexed.length };
+  const toEmbed: MemoryItem[] = [];
+  const toRelabel: { item: MemoryItem; vector: number[] }[] = [];
+  let unchanged = 0;
+  for (const item of items) {
+    const meta = existing.get(item.id)?.metadata as Record<string, unknown> | undefined;
+    const reusable = opts.force ? undefined : byContent.get(item.content);
+    if (!reusable) toEmbed.push(item);
+    else if (!meta || !sameMetadata(meta, metadataOf(item)))
+      toRelabel.push({ item, vector: reusable });
+    else unchanged++;
   }
+  const deletions = [...new Set(stale)].filter((id) => existing.has(id));
 
-  // A complete projection is authoritative even when empty: an empty scan
-  // against at least one existing root means the corpus IS empty, and
-  // empties-to-zero is correct convergence after a wipe (bothCorpusRootsMissing
-  // is the one exception, above).
-  if (items.length === 0) {
-    if (indexed.length > 0) {
-      if (bothCorpusRootsMissing()) {
-        console.log(
-          `[macrodata-recall]prune skipped: journal and entities roots both missing (misconfigured root?), index holds ${indexed.length}`,
-        );
-        return { pruned: 0, kept: indexed.length };
+  const result: ReconcileResult = {
+    itemCount: items.length,
+    embedded: toEmbed.length,
+    relabeled: toRelabel.length,
+    unchanged,
+    pruned: deletions.length,
+    complete: opts.complete,
+  };
+  // A commit rewrites the whole index.json and bumps its mtime, which makes the
+  // worker drop and reparse every cache it keys on that file.
+  if (deletions.length === 0 && toRelabel.length === 0 && toEmbed.length === 0) return result;
+
+  const t0 = Date.now();
+  let open = false;
+  try {
+    await idx.beginUpdate();
+    open = true;
+    for (const id of deletions) await idx.deleteItem(id);
+    for (const { item, vector } of toRelabel) {
+      await idx.upsertItem({ id: item.id, vector, metadata: metadataOf(item) });
+    }
+    let sinceCommit = 0;
+    for (let i = 0; i < toEmbed.length; i += EMBED_BATCH) {
+      const batch = toEmbed.slice(i, i + EMBED_BATCH);
+      const vectors = await embedDocuments(
+        batch.map((it) => dropLoneHighSurrogate(it.content.slice(0, MAX_EMBED_CHARS))),
+      );
+      for (let j = 0; j < batch.length; j++) {
+        await idx.upsertItem({
+          id: batch[j].id,
+          vector: vectors[j],
+          metadata: metadataOf(batch[j]),
+        });
       }
-      for (const orphan of indexed) await idx.deleteItem(orphan.id);
-      return { pruned: indexed.length, kept: 0 };
+      sinceCommit += batch.length;
+      const done = Math.min(i + EMBED_BATCH, toEmbed.length);
+      if (sinceCommit >= COMMIT_ITEMS && done < toEmbed.length) {
+        open = false;
+        await idx.endUpdate();
+        await idx.beginUpdate();
+        open = true;
+        sinceCommit = 0;
+      }
+      if (done % (EMBED_BATCH * 10) === 0 || done === toEmbed.length) {
+        const rate = done / ((Date.now() - t0) / 1000);
+        console.log(
+          `[macrodata-recall]${done}/${toEmbed.length} embedded (${rate.toFixed(1)} items/s)`,
+        );
+      }
     }
-    return { pruned: 0, kept: 0 };
+    open = false;
+    await idx.endUpdate();
+    rememberPruned(deletions.flatMap((id) => existing.get(id) ?? []));
+  } catch (err) {
+    // A failed commit may have left the on-disk index ahead of or behind this
+    // copy (ConcurrentWriteError); drop the cache so the next read reloads it.
+    if (open) idx.cancelUpdate();
+    resetIndexCache();
+    throw err;
   }
+  return result;
+}
 
-  const live = new Set(items.map((it) => it.id));
-  const orphans = indexed.filter((it) => !live.has(it.id));
-  for (const orphan of orphans) await idx.deleteItem(orphan.id);
-
-  return { pruned: orphans.length, kept: indexed.length - orphans.length };
+/** Journal and entity sources share one relative-path namespace; the extension tells them apart. */
+function kindOfSource(source: unknown): "journal" | "entity" | null {
+  if (typeof source !== "string") return null;
+  return source.endsWith(".jsonl") ? "journal" : source.endsWith(".md") ? "entity" : null;
 }
 
 /**
- * Prune index vectors the current corpus no longer produces. Called with a
- * pre-scanned item list, the caller OWNS that list's authority (it must be a
- * complete projection); called with no argument, the scan decides.
+ * Ids in the index that `projection` proves are gone.
+ *
+ * A missing root is far more likely a misconfigured MACRODATA_ROOT or a sync
+ * tool mid-swap than a deliberate wipe, so its kind is never pruned. Otherwise
+ * an indexed id the scan no longer produces is gone unless its source lies
+ * under something the scan failed on: a directory that failed to list may hide
+ * it, and an unreadable, malformed, or symlinked source's missing items may be
+ * unparsable rather than gone. Everything else, including an empty corpus
+ * under a present root, is authoritative.
  */
-export async function pruneOrphans(
-  scanned?: MemoryItem[],
-): Promise<{ pruned: number; kept: number }> {
-  if (scanned) return pruneAgainst(scanned, true);
-  const { items, complete } = collectItems();
-  return pruneAgainst(items, complete);
+async function staleIds(idx: LocalIndex, projection: CorpusProjection): Promise<string[]> {
+  const indexed = await idx.listItems();
+  const live = new Set(projection.items.map((it) => it.id));
+  const rootPresent = {
+    journal: existsSync(getJournalDir()),
+    entity: existsSync(getEntitiesDir()),
+  };
+  for (const kind of ["journal", "entity"] as const) {
+    if (!rootPresent[kind])
+      console.log(`[macrodata-recall]prune skipped for ${kind}: root missing`);
+  }
+  for (const f of projection.failures) {
+    console.log(`[macrodata-recall]projection incomplete: ${f.source}: ${f.error}`);
+  }
+
+  // A failure's source is a file or a directory; "." is the root itself.
+  const tainted = (kind: "journal" | "entity", source: string) =>
+    projection.failures.some(
+      (f) =>
+        f.kind === kind &&
+        (f.source === "." || source === f.source || source.startsWith(f.source + "/")),
+    );
+  const heldFrom = new Map(
+    projection.snapshots.flatMap((s) =>
+      s.kind === "journal" && s.heldFrom !== undefined ? [[s.source, s.heldFrom] as const] : [],
+    ),
+  );
+
+  return indexed
+    .filter((it) => {
+      if (live.has(it.id)) return false;
+      const source = (it.metadata as Record<string, unknown>).source;
+      const kind = kindOfSource(source);
+      if (!kind) return projection.complete;
+      if (kind === "journal" && isHeld(it.id, source as string, heldFrom.get(source as string)))
+        return false;
+      return rootPresent[kind] && !tainted(kind, source as string);
+    })
+    .map((it) => it.id);
 }
 
+/** Whether a journal id sits at or past its source's held tail line. */
+function isHeld(id: string, source: string, heldFrom: number | undefined): boolean {
+  if (heldFrom === undefined) return false;
+  const line = Number(id.slice(`journal-${source}-`.length));
+  return !Number.isInteger(line) || line >= heldFrom;
+}
+
+async function freshIndex({ replaceUnparsable = false } = {}): Promise<LocalIndex> {
+  // Another process (a manual reindex, a sibling worker) may have rewritten
+  // index.json since this one cached it; reconcile against the disk.
+  resetIndexCache();
+  const idx = await getIndex();
+  if (!replaceUnparsable) return idx;
+  try {
+    await idx.listItems();
+    return idx;
+  } catch (err) {
+    if (!(err instanceof UnparsableIndexError)) throw err;
+    console.log(`[macrodata-recall]unparsable index moved to ${idx.setAside()}; rebuilding`);
+    resetIndexCache();
+    return getIndex();
+  }
+}
+
+/**
+ * Converge the whole index on the current corpus: embed new and changed items,
+ * relabel moved metadata, delete what a clean read proves is gone.
+ */
+export function reconcileCorpus(opts: { force?: boolean } = {}): Promise<ReconcileResult> {
+  return serialized(async () => {
+    const start = Date.now();
+    const idx = await freshIndex({ replaceUnparsable: opts.force });
+    const projection = scanCorpus();
+    const result = await applyReconcile(idx, projection.items, await staleIds(idx, projection), {
+      force: opts.force,
+      complete: projection.complete,
+    });
+    console.log(
+      `[macrodata-recall]reconcile: ${result.embedded} embedded, ${result.relabeled} relabeled, ${result.unchanged} unchanged, ${result.pruned} pruned in ${((Date.now() - start) / 1000).toFixed(1)}s`,
+    );
+    return result;
+  });
+}
+
+const noopIncomplete = (): ReconcileResult => ({
+  itemCount: 0,
+  embedded: 0,
+  relabeled: 0,
+  unchanged: 0,
+  pruned: 0,
+  complete: false,
+});
+
+/**
+ * Converge the index on one corpus path (absolute). A path that no longer
+ * exists is a confirmed deletion of its source, or of every source under it
+ * when it was a directory; a rename or category move is a deletion at the old
+ * path plus an addition at the new one, so reconcile both paths. A path the
+ * corpus scan would not index (a symlink at any depth, a spelling that differs
+ * from the on-disk name, a dot path, a wrong extension, a directory) changes
+ * nothing and reports incomplete, so the caller can fall back to
+ * reconcileCorpus.
+ */
+export function reconcileSource(path: string): Promise<ReconcileResult> {
+  const absPath = resolve(path);
+  const journalDir = getJournalDir();
+  const entitiesDir = getEntitiesDir();
+  const kind = absPath.startsWith(journalDir + sep)
+    ? "journal"
+    : absPath.startsWith(entitiesDir + sep)
+      ? "entity"
+      : null;
+  if (!kind) return Promise.reject(new Error(`not a corpus path: ${path}`));
+  const root = kind === "journal" ? journalDir : entitiesDir;
+  const source = relative(root, absPath).split(sep).join("/");
+
+  return serialized(async () => {
+    if (!canonicalUnder(root, absPath)) return noopIncomplete();
+    let gone = false;
+    try {
+      const st = lstatSync(absPath);
+      const ext = kind === "journal" ? ".jsonl" : ".md";
+      if (!st.isFile() || isDotPath(source) || !source.endsWith(ext)) return noopIncomplete();
+    } catch (err) {
+      // Only ENOENT under a root that still exists proves deletion; EACCES and
+      // friends are an unreadable source, and a vanished root is misconfiguration.
+      gone = (err as NodeJS.ErrnoException).code === "ENOENT" && existsSync(root);
+      if (!gone) return noopIncomplete();
+    }
+
+    const idx = await freshIndex();
+    if (gone) {
+      const stale = (await idx.listItems())
+        .filter((it) => {
+          const s = (it.metadata as Record<string, unknown>).source;
+          return (
+            kindOfSource(s) === kind && (s === source || (s as string).startsWith(source + "/"))
+          );
+        })
+        .map((it) => it.id);
+      return applyReconcile(idx, [], stale, { complete: true });
+    }
+
+    const snap: SourceSnapshot =
+      kind === "journal"
+        ? projectJournalFile(absPath, journalDir)
+        : projectEntityFile(absPath, entitiesDir);
+    if (snap.status !== "ok") {
+      console.log(`[macrodata-recall]source incomplete: ${snap.source}: ${snap.error}`);
+      return applyReconcile(idx, snap.items, [], { complete: false });
+    }
+    const live = new Set(snap.items.map((it) => it.id));
+    const stale = (await idx.listItems())
+      .filter(
+        (it) =>
+          (it.metadata as Record<string, unknown>).source === source &&
+          !live.has(it.id) &&
+          !isHeld(it.id, source, snap.heldFrom),
+      )
+      .map((it) => it.id);
+    return applyReconcile(idx, snap.items, stale, { complete: true });
+  });
+}
+
+/** Delete vectors the current corpus proves are gone, without embedding. */
+export function pruneOrphans(): Promise<{ pruned: number; kept: number }> {
+  return serialized(async () => {
+    const idx = await freshIndex();
+    const before = (await idx.listItems()).length;
+    const { pruned } = await applyReconcile(idx, [], await staleIds(idx, scanCorpus()), {
+      complete: true,
+    });
+    return { pruned, kept: before - pruned };
+  });
+}
+
+/** Re-embed every item (e.g. after an embedding-model change) and prune. */
 export async function rebuildIndex(): Promise<{ itemCount: number; pruned: number }> {
-  const start = Date.now();
-  const projection = collectItems();
-  const allItems = projection.items;
-
-  console.log(`[macrodata-recall]embedding + indexing ${allItems.length} items (Qwen3/1024)…`);
-  await indexItems(allItems);
-
-  // Prune against the SAME projection just indexed: pruneAgainst needs
-  // `complete` to refuse deleting on an incomplete scan (see pruneAgainst).
-  const { pruned } = await pruneAgainst(allItems, projection.complete);
-  if (pruned > 0) console.log(`[macrodata-recall]pruned ${pruned} orphaned vectors`);
-
-  console.log(`[macrodata-recall]rebuild complete in ${((Date.now() - start) / 1000).toFixed(1)}s`);
-  return { itemCount: allItems.length, pruned };
+  const { itemCount, pruned } = await reconcileCorpus({ force: true });
+  return { itemCount, pruned };
 }
 
 export async function searchMemory(

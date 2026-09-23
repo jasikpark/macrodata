@@ -37,8 +37,17 @@
  * change: a missing item list would read as deletions.
  */
 
-import { readFileSync, readdirSync, existsSync, lstatSync } from "fs";
-import { join, relative, sep } from "path";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+} from "fs";
+import { basename, dirname, join, relative, sep } from "path";
 import { getJournalDir, getEntitiesDir } from "./config.js";
 
 export type MemoryItemType = string;
@@ -73,6 +82,12 @@ export interface SourceSnapshot {
   items: MemoryItem[];
   /** Present when status is "incomplete": why (read error, malformed count). */
   error?: string;
+  /**
+   * Journal only: the line index of an unparsable final line with no newline
+   * after it. Items at or past it may be mid-append or mid-truncation, so an
+   * indexed id there is not proven gone.
+   */
+  heldFrom?: number;
 }
 
 export interface CorpusProjection {
@@ -92,6 +107,39 @@ function relativeSource(root: string, absPath: string): string {
   return sep === "\\" ? rel.split("\\").join("/") : rel;
 }
 
+/**
+ * True when `absPath` lies under `root` through no symlink and with every
+ * existing component spelled as it is on disk. A path may name something that
+ * no longer exists; its deepest existing ancestor is checked instead. On a
+ * case- or normalization-insensitive filesystem (APFS) a lookup succeeds under
+ * any spelling, but only readdir's spelling matches the sources a scan records.
+ */
+export function canonicalUnder(root: string, absPath: string): boolean {
+  if (absPath !== root && !absPath.startsWith(root + sep)) return false;
+  let probe = absPath;
+  for (;;) {
+    try {
+      if (lstatSync(probe).isSymbolicLink()) return false;
+      break;
+    } catch {
+      if (probe === root) return false;
+      probe = dirname(probe);
+    }
+  }
+  if (probe === root) return true;
+  // The parent's realpath covers every ancestor; the leaf is compared against
+  // readdir, since realpath opens its target and fails on an unreadable file.
+  const parent = dirname(probe);
+  try {
+    return (
+      realpathSync.native(parent) === join(realpathSync.native(root), relative(root, parent)) &&
+      readdirSync(parent).includes(basename(probe))
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** True if any segment of the path starts with "." (dot-dir OR dot-file). */
 export function isDotPath(relPath: string): boolean {
   return relPath.split("/").some((seg) => seg.startsWith("."));
@@ -100,6 +148,36 @@ export function isDotPath(relPath: string): boolean {
 // ---------------------------------------------------------------------------
 // Journal projection
 // ---------------------------------------------------------------------------
+
+/**
+ * Read a whole file, or say why the bytes read are not its content.
+ *
+ * A file an iCloud-style sync provider has evicted ("dataless") keeps its size
+ * but has no allocated blocks, and reading it blocks on a download or fails.
+ * A file rewritten in place during the read yields a torn mix of versions.
+ * Either way the source is unread, not empty.
+ */
+function readWhole(absPath: string): { text: string } | { error: string } {
+  const fd = openSync(absPath, "r");
+  try {
+    const before = fstatSync(fd);
+    if (before.size > 0 && before.blocks === 0) {
+      return { error: "dataless (evicted by a sync provider); not read" };
+    }
+    const buf = readFileSync(fd);
+    const after = fstatSync(fd);
+    if (
+      buf.length !== before.size ||
+      after.size !== before.size ||
+      after.mtimeMs !== before.mtimeMs
+    ) {
+      return { error: "changed during read" };
+    }
+    return { text: buf.toString("utf-8") };
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /**
  * Parse one journal JSONL file into a SourceSnapshot.
@@ -118,20 +196,42 @@ export function projectJournalFile(absPath: string, journalDir = getJournalDir()
     items: [],
   };
 
+  // Same seam as projectEntityFile: reconcileSource calls this on one path
+  // directly, so it applies the walk's symlink and dot-path exclusions itself.
+  if (isDotPath(snapshot.source)) {
+    return { ...snapshot, status: "incomplete", error: "dot path excluded from the corpus" };
+  }
   let raw: string;
   try {
-    raw = readFileSync(absPath, "utf-8");
+    if (!canonicalUnder(journalDir, absPath)) {
+      return {
+        ...snapshot,
+        status: "incomplete",
+        error: "symlink or non-canonical path excluded from corpus",
+      };
+    }
+    const read = readWhole(absPath);
+    if ("error" in read) return { ...snapshot, status: "incomplete", error: read.error };
+    raw = read.text;
   } catch (err) {
     return { ...snapshot, status: "incomplete", error: `read failed: ${String(err)}` };
   }
 
   const lines = raw.trim().split("\n").filter(Boolean);
+  // Every writer terminates a record with "\n", so an unparsable final line
+  // with no newline after it is an append in flight or a truncated rewrite,
+  // not a malformed record; heldFrom keeps its indexed id either way.
+  const appendInFlight = !raw.endsWith("\n");
   let malformedLines = 0;
   for (let i = 0; i < lines.length; i++) {
     let entry: unknown;
     try {
       entry = JSON.parse(lines[i]);
     } catch {
+      if (appendInFlight && i === lines.length - 1) {
+        snapshot.heldFrom = i;
+        continue;
+      }
       malformedLines++;
       continue;
     }
@@ -207,6 +307,10 @@ export function projectEntityFile(absPath: string, entitiesDir = getEntitiesDir(
     return error(`not an entity path under ${entitiesDir}`);
   }
 
+  if (!canonicalUnder(entitiesDir, absPath)) {
+    return error("symlink or non-canonical path excluded from corpus");
+  }
+
   const source = relativeSource(entitiesDir, absPath);
   if (isDotPath(source)) {
     return error("dot path excluded from the corpus");
@@ -224,7 +328,9 @@ export function projectEntityFile(absPath: string, entitiesDir = getEntitiesDir(
 
   let content: string;
   try {
-    content = readFileSync(absPath, "utf-8");
+    const read = readWhole(absPath);
+    if ("error" in read) return error(read.error);
+    content = read.text;
   } catch (err) {
     return error(`read failed: ${String(err)}`);
   }
@@ -389,10 +495,12 @@ export function listSources(
       let stat;
       try {
         stat = lstatSync(abs);
-      } catch {
-        // Vanished between readdir and lstat (TOCTOU on a live tree, e.g. a
-        // concurrent daemon write) — nothing left to read or report; the
-        // next scan simply will not see it.
+      } catch (err) {
+        // ENOENT: vanished between readdir and lstat (a concurrent write on a
+        // live tree), nothing left to read. Anything else (EACCES from a
+        // directory without search permission, EIO) exists but is unseen.
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT")
+          failures.push(failureOf(abs, String(err)));
         continue;
       }
       if (stat.isSymbolicLink()) {
