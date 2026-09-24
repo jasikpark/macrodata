@@ -54,9 +54,11 @@ function saveIndexState(state: IndexState): void {
   writeFileSync(statePath, JSON.stringify(state, null, 2));
 }
 
-// Configuration
-const CLAUDE_DIR = join(homedir(), ".claude");
-const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
+// Claude Code keeps transcripts under CLAUDE_CONFIG_DIR when it is set. Read per
+// scan, not at import, so a long-lived process follows the environment it runs in.
+function projectsDir(): string {
+  return join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+}
 
 // Types
 interface ConversationMessage {
@@ -316,17 +318,18 @@ function parseConversationFile(filePath: string, projectPath: string): Conversat
  * Scan all Claude project directories for conversation files
  */
 function* scanConversationFiles(): Generator<{ filePath: string; projectPath: string; mtime: number }> {
-  if (!existsSync(PROJECTS_DIR)) {
+  const root = projectsDir();
+  if (!existsSync(root)) {
     return;
   }
 
-  const projectDirs = readdirSync(PROJECTS_DIR);
+  const projectDirs = readdirSync(root);
 
   for (const projectDir of projectDirs) {
     if (projectDir.startsWith(".")) continue;
 
     const projectPath = decodeProjectPath(projectDir);
-    const projectFullPath = join(PROJECTS_DIR, projectDir);
+    const projectFullPath = join(root, projectDir);
 
     if (!statSync(projectFullPath).isDirectory()) continue;
 
