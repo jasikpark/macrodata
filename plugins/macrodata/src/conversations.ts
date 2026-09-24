@@ -15,7 +15,7 @@ import { join, basename } from "path";
 import { homedir } from "os";
 import { getLogger } from "@logtape/logtape";
 import { embed, embedBatch } from "./embeddings.js";
-import { LocalIndex } from "vectra";
+import { AtomicLocalIndex } from "./recall/atomic-index.js";
 import { getIndexDir } from "./config.js";
 
 // Library-side logging: sink comes from the entrypoint's configure() (MCP
@@ -95,10 +95,16 @@ export interface ConversationSearchResult {
 }
 
 // Cached index with path tracking
-let convIndex: LocalIndex | null = null;
+let convIndex: AtomicLocalIndex | null = null;
 let convIndexPath: string | null = null;
 
-async function getConversationIndex(): Promise<LocalIndex> {
+// Vectra rewrites the whole index.json on every endUpdate (and on every bare
+// upsertItem, which wraps its own update), so a write per exchange makes an
+// update quadratic in index size. Commit every COMMIT_ITEMS exchanges instead,
+// mirroring src/recall/indexer.ts.
+const COMMIT_ITEMS = 128;
+
+async function getConversationIndex(): Promise<AtomicLocalIndex> {
   const currentIndexDir = getIndexDir();
   const currentIndexPath = join(currentIndexDir, "conversations");
 
@@ -115,7 +121,7 @@ async function getConversationIndex(): Promise<LocalIndex> {
     mkdirSync(currentIndexDir, { recursive: true });
   }
 
-  convIndex = new LocalIndex(currentIndexPath);
+  convIndex = new AtomicLocalIndex(currentIndexPath);
   convIndexPath = currentIndexPath;
 
   if (!(await convIndex.isIndexCreated())) {
@@ -124,6 +130,32 @@ async function getConversationIndex(): Promise<LocalIndex> {
   }
 
   return convIndex;
+}
+
+function indexItemOf(exchange: ConversationExchange, vector: number[]) {
+  return {
+    id: exchange.id,
+    vector,
+    metadata: {
+      userPrompt: exchange.userPrompt,
+      assistantSummary: exchange.assistantSummary,
+      project: exchange.project,
+      projectPath: exchange.projectPath,
+      branch: exchange.branch || "",
+      timestamp: exchange.timestamp,
+      sessionId: exchange.sessionId,
+      sessionPath: exchange.sessionPath,
+      messageUuid: exchange.messageUuid,
+    },
+  };
+}
+
+// A failed commit may have left the on-disk index ahead of or behind this copy
+// (ConcurrentWriteError); drop the cache so the next call reloads it.
+function abandonUpdate(idx: AtomicLocalIndex, open: boolean): void {
+  if (open) idx.cancelUpdate();
+  convIndex = null;
+  convIndexPath = null;
 }
 
 /**
@@ -347,10 +379,26 @@ function* scanConversationFiles(): Generator<{ filePath: string; projectPath: st
   }
 }
 
+// Every writer below runs through this chain. manage_index starts updates and
+// rebuilds without awaiting them, and two passes on the shared cached index
+// would interleave inside one Vectra update: the second beginUpdate throws, and
+// its cleanup cancels the first pass's update.
+let writeChain: Promise<unknown> = Promise.resolve();
+
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn);
+  writeChain = run.catch(() => {});
+  return run;
+}
+
 /**
  * Rebuild the conversation index from scratch
  */
-export async function rebuildConversationIndex(): Promise<{ exchangeCount: number }> {
+export function rebuildConversationIndex(): Promise<{ exchangeCount: number }> {
+  return serialized(rebuildUnserialized);
+}
+
+async function rebuildUnserialized(): Promise<{ exchangeCount: number }> {
   logger.info("starting full index rebuild");
   const startTime = Date.now();
 
@@ -383,24 +431,19 @@ export async function rebuildConversationIndex(): Promise<{ exchangeCount: numbe
 
   const idx = await getConversationIndex();
 
-  // Index all exchanges
-  for (let i = 0; i < allExchanges.length; i++) {
-    const exchange = allExchanges[i];
-    await idx.upsertItem({
-      id: exchange.id,
-      vector: vectors[i],
-      metadata: {
-        userPrompt: exchange.userPrompt,
-        assistantSummary: exchange.assistantSummary,
-        project: exchange.project,
-        projectPath: exchange.projectPath,
-        branch: exchange.branch || "",
-        timestamp: exchange.timestamp,
-        sessionId: exchange.sessionId,
-        sessionPath: exchange.sessionPath,
-        messageUuid: exchange.messageUuid,
-      },
-    });
+  // State is saved only after this commit, so an interrupted rebuild starts over
+  // whatever the commit size.
+  await idx.beginUpdate();
+  let open = true;
+  try {
+    for (let i = 0; i < allExchanges.length; i++) {
+      await idx.upsertItem(indexItemOf(allExchanges[i], vectors[i]));
+    }
+    open = false;
+    await idx.endUpdate();
+  } catch (err) {
+    abandonUpdate(idx, open);
+    throw err;
   }
 
   saveIndexState(newState);
@@ -414,7 +457,11 @@ export async function rebuildConversationIndex(): Promise<{ exchangeCount: numbe
 /**
  * Incrementally update the conversation index (only changed files)
  */
-export async function updateConversationIndex(): Promise<{ exchangeCount: number; filesUpdated: number; skipped: number }> {
+export function updateConversationIndex(): Promise<{ exchangeCount: number; filesUpdated: number; skipped: number }> {
+  return serialized(updateUnserialized);
+}
+
+async function updateUnserialized(): Promise<{ exchangeCount: number; filesUpdated: number; skipped: number }> {
   logger.info("starting incremental update");
   const startTime = Date.now();
 
@@ -424,7 +471,7 @@ export async function updateConversationIndex(): Promise<{ exchangeCount: number
   // Check if index exists - if not, do full rebuild
   if (!(await idx.isIndexCreated())) {
     logger.info("no existing index, doing full rebuild");
-    const result = await rebuildConversationIndex();
+    const result = await rebuildUnserialized();
     return { exchangeCount: result.exchangeCount, filesUpdated: 0, skipped: 0 };
   }
 
@@ -433,52 +480,62 @@ export async function updateConversationIndex(): Promise<{ exchangeCount: number
   let totalExchanges = 0;
   const currentFiles = new Set<string>();
 
-  for (const { filePath, projectPath, mtime } of scanConversationFiles()) {
-    currentFiles.add(filePath);
-    const cached = state.files[filePath];
-
-    // Skip if file hasn't changed
-    if (cached && cached.mtime === mtime) {
-      skipped++;
-      totalExchanges += cached.exchangeIds.length;
-      continue;
+  // A file's state entry is recorded only once its exchanges are committed, so
+  // an interrupted pass re-indexes at most the uncommitted batch.
+  let pending: [string, IndexState["files"][string]][] = [];
+  let sinceCommit = 0;
+  let open = false;
+  const commit = async () => {
+    if (open) {
+      open = false;
+      await idx.endUpdate();
     }
+    for (const [filePath, entry] of pending) state.files[filePath] = entry;
+    saveIndexState(state);
+    pending = [];
+    sinceCommit = 0;
+  };
 
-    // File is new or modified - parse and index
-    const exchanges = parseConversationFile(filePath, projectPath);
+  try {
+    for (const { filePath, projectPath, mtime } of scanConversationFiles()) {
+      currentFiles.add(filePath);
+      const cached = state.files[filePath];
 
-    if (exchanges.length > 0) {
-      const texts = exchanges.map(e =>
-        `${e.project}${e.branch ? ` (${e.branch})` : ""}: ${e.userPrompt}`
-      );
-      const vectors = await embedBatch(texts);
-
-      for (let i = 0; i < exchanges.length; i++) {
-        const exchange = exchanges[i];
-        await idx.upsertItem({
-          id: exchange.id,
-          vector: vectors[i],
-          metadata: {
-            userPrompt: exchange.userPrompt,
-            assistantSummary: exchange.assistantSummary,
-            project: exchange.project,
-            projectPath: exchange.projectPath,
-            branch: exchange.branch || "",
-            timestamp: exchange.timestamp,
-            sessionId: exchange.sessionId,
-            sessionPath: exchange.sessionPath,
-            messageUuid: exchange.messageUuid,
-          },
-        });
+      // Skip if file hasn't changed
+      if (cached && cached.mtime === mtime) {
+        skipped++;
+        totalExchanges += cached.exchangeIds.length;
+        continue;
       }
-    }
 
-    state.files[filePath] = {
-      mtime,
-      exchangeIds: exchanges.map(e => e.id),
-    };
-    filesUpdated++;
-    totalExchanges += exchanges.length;
+      // File is new or modified - parse and index
+      const exchanges = parseConversationFile(filePath, projectPath);
+
+      if (exchanges.length > 0) {
+        const texts = exchanges.map(e =>
+          `${e.project}${e.branch ? ` (${e.branch})` : ""}: ${e.userPrompt}`
+        );
+        const vectors = await embedBatch(texts);
+
+        if (!open) {
+          await idx.beginUpdate();
+          open = true;
+        }
+        for (let i = 0; i < exchanges.length; i++) {
+          await idx.upsertItem(indexItemOf(exchanges[i], vectors[i]));
+        }
+      }
+
+      pending.push([filePath, { mtime, exchangeIds: exchanges.map(e => e.id) }]);
+      filesUpdated++;
+      totalExchanges += exchanges.length;
+      sinceCommit += exchanges.length;
+      if (sinceCommit >= COMMIT_ITEMS) await commit();
+    }
+    await commit();
+  } catch (err) {
+    abandonUpdate(idx, open);
+    throw err;
   }
 
   // Clean up deleted files from state (but don't remove from index - they may still be useful)
