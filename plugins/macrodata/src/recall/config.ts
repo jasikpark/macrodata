@@ -13,18 +13,49 @@
  * keep its leading dot to stay that way.
  */
 
+import { readFileSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 import { getStateRoot } from "../config.ts";
 
 export { getStateRoot, getEntitiesDir, getJournalDir } from "../config.ts";
 
 /**
- * MACRODATA_RECALL_DISABLE turns ambient recall off: no hook queues work and the
- * supervisor in bin/macrodata-hook.sh runs no worker. Keep the accepted values in
- * sync with recall_disabled() there.
+ * Whether ambient recall is off: no hook queues work and the supervisor in
+ * bin/macrodata-hook.sh runs no worker. Sources, in order: the
+ * MACRODATA_RECALL_DISABLE override, the recall_enabled option read live from the
+ * user settings file, then CLAUDE_PLUGIN_OPTION_RECALL_ENABLED (the session-start
+ * copy). Keep in sync with recall_disabled() there, which documents why the
+ * option is read live.
  */
 export function recallDisabled(): boolean {
-  return ["1", "true", "yes", "on"].includes((process.env.MACRODATA_RECALL_DISABLE ?? "").trim().toLowerCase());
+  if (["1", "true", "yes", "on"].includes(flagWord(process.env.MACRODATA_RECALL_DISABLE))) return true;
+  const live = liveRecallEnabled();
+  if (live !== undefined) return !live;
+  return ["0", "false", "no", "off"].includes(flagWord(process.env.CLAUDE_PLUGIN_OPTION_RECALL_ENABLED));
+}
+
+/** Trimmed of ASCII whitespace only, matching recall_flag_word() in the hook. */
+function flagWord(v: string | undefined): string {
+  return (v ?? "").replace(/^[ \t\n\r\v\f]+|[ \t\n\r\v\f]+$/g, "").toLowerCase();
+}
+
+/** recall_enabled across every macrodata@<marketplace> entry; an explicit false wins. */
+function liveRecallEnabled(): boolean | undefined {
+  let configs: unknown;
+  try {
+    const dir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+    configs = JSON.parse(readFileSync(join(dir, "settings.json"), "utf-8"))?.pluginConfigs;
+  } catch {
+    return undefined;
+  }
+  if (!configs || typeof configs !== "object" || Array.isArray(configs)) return undefined;
+  const values = Object.entries(configs)
+    .filter(([key, value]) => key.startsWith("macrodata@") && value && typeof value === "object")
+    .map(([, value]) => String((value as Record<string, unknown>).recall_enabled))
+    .filter((v) => v === "true" || v === "false");
+  if (values.length === 0) return undefined;
+  return !values.includes("false");
 }
 
 /** Alias kept for recall entry points that predate the shared resolver. */

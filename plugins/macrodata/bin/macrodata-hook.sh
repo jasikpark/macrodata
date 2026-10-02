@@ -11,7 +11,7 @@
 #                                       context
 #   macrodata-hook.sh recall-worker  - Converge the recall worker alone
 #   macrodata-hook.sh print-root     - Print the resolved state root
-#   macrodata-hook.sh print-recall-disabled - Print how MACRODATA_RECALL_DISABLE parses
+#   macrodata-hook.sh print-recall-disabled - Print whether ambient recall is off
 #
 # Both long-lived processes macrodata owns — the daemon and the ambient-recall
 # worker — are managed from here, on BOTH events. Running on every prompt is what
@@ -39,6 +39,9 @@ RECALL_SENTINEL="--macrodata-recall-worker"
 # State root (MACRODATA_ROOT > config.json > default)
 DEFAULT_ROOT="$HOME/.config/macrodata"
 CONFIG_FILE="$DEFAULT_ROOT/config.json"
+
+# Claude Code's user settings, where the plugin's userConfig values live.
+CLAUDE_SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 
 # One directory, one spelling of it.
 #
@@ -125,12 +128,6 @@ RECALL_PIDFILE="$RECALL_LOGDIR/worker.pid"
 # cadence every gap exceeds it, and the detector never fires for the one person
 # it exists for.
 RECALL_SPAWN_STAMP="$RECALL_LOGDIR/last-spawn"
-# Left by a session with MACRODATA_RECALL_DISABLE set when it reaps a worker. The
-# switch is read from each session's own env, so a session without it respawns
-# what that one reaps, on every prompt in either; the worker clears the
-# failed-start ledger as it starts, so only this marker can see the loop.
-RECALL_DISABLED_REAP="$RECALL_LOGDIR/disabled-reap"
-RECALL_DISABLED_REAP_WINDOW=600
 # Two in a row, because a single failure is also what a reap-then-respawn and a
 # lost spawn race look like, and both of those are healthy by the next pass.
 RECALL_SPAWN_FAIL_COUNT=2
@@ -234,14 +231,41 @@ reap() {
     printf '%s' "$survivors"
 }
 
-# MACRODATA_RECALL_DISABLE turns ambient recall off. Keep the parsing in sync
-# with recallDisabled() in src/recall/config.ts; test/recall-disable.test.ts runs
-# both over the same values.
+# Whether ambient recall is off, from three sources in order:
+#   1. MACRODATA_RECALL_DISABLE, a per-session override that can only turn it off.
+#   2. The plugin's recall_enabled option (userConfig in plugin.json), read live
+#      from pluginConfigs in the user settings file. Claude Code exports options
+#      to hooks only at session start, so a session would otherwise act on the
+#      value it started with and reap or respawn the worker every other session
+#      shares until it restarts.
+#   3. CLAUDE_PLUGIN_OPTION_RECALL_ENABLED, that session-start copy, for an option
+#      set where the file can't show it (managed settings).
+# Keep in sync with recallDisabled() in src/recall/config.ts;
+# test/recall-disable.test.ts runs both over the same inputs.
 recall_disabled() {
-    case "$(printf '%s' "${MACRODATA_RECALL_DISABLE:-}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')" in
+    case "$(recall_flag_word "${MACRODATA_RECALL_DISABLE:-}")" in
         1|true|yes|on) return 0 ;;
-        *) return 1 ;;
     esac
+    # Any install's entry counts, whichever marketplace it came from, and an
+    # explicit false anywhere wins: the switch exists to give memory back.
+    case "$(jq -r '[(.pluginConfigs // {}) | to_entries[] | select(.key | startswith("macrodata@")) | .value.recall_enabled? | select(. == true or . == false or . == "true" or . == "false") | tostring] | if length == 0 then empty elif any(. == "false") then "false" else "true" end' "$CLAUDE_SETTINGS_FILE" 2>/dev/null)" in
+        false) return 0 ;;
+        true) return 1 ;;
+    esac
+    case "$(recall_flag_word "${CLAUDE_PLUGIN_OPTION_RECALL_ENABLED:-}")" in
+        0|false|no|off) return 0 ;;
+    esac
+    return 1
+}
+
+# A flag value trimmed and lowercased. The whitespace set is spelled out because
+# [[:space:]] follows the locale and sed trims per line, and either would let this
+# side and recallDisabled() split on a value only one of them reads as set.
+recall_flag_word() {
+    local v="$1" ws=$' \t\n\r\v\f'
+    v="${v#"${v%%[!$ws]*}"}"
+    v="${v%"${v##*[!$ws]}"}"
+    printf '%s' "$v" | tr '[:upper:]' '[:lower:]'
 }
 
 # Neutralize macrodata tag-openers in text about to be injected into the model's
@@ -525,12 +549,14 @@ ensure_recall_worker() {
     # hand-started worker is still left alone.
     if recall_disabled; then
         if [ -n "$mine$stale" ]; then
-            recall_log "worker: MACRODATA_RECALL_DISABLE set -> reap$mine$stale"
-            date +%s > "$RECALL_DISABLED_REAP" 2>/dev/null
+            recall_log "worker: recall disabled -> reap$mine$stale"
             survived="$(reap "$mine $stale")"
             [ -n "$survived" ] && recall_log "worker: reap FAILED, survived SIGKILL:$survived"
+            # A worker reaped before it cleared its own spawn line was not a
+            # failed start, and left counted it reads as one to the next spawn.
+            rm -f "$RECALL_SPAWN_STAMP"
         elif [ "$voice" = announce ]; then
-            recall_log "worker: MACRODATA_RECALL_DISABLE set -> not starting"
+            recall_log "worker: recall disabled -> not starting"
         fi
         return 0
     fi
@@ -646,18 +672,6 @@ ensure_recall_worker() {
         recall_log "worker: source missing at $RECALL_WORKER -> not starting"
         [ "$voice" = announce ] && recall_announce "macrodata-recall: worker source is missing; ambient recall is NOT running"
         return 0
-    fi
-
-    # Announced on every voice: each occurrence is a full model load thrown away,
-    # and it repeats until the sessions agree. Only a recent reap counts; an old
-    # marker is what turning recall back on everywhere leaves behind.
-    local reaped_at
-    reaped_at="$(cat "$RECALL_DISABLED_REAP" 2>/dev/null)"
-    rm -f "$RECALL_DISABLED_REAP"
-    case "$reaped_at" in ''|*[!0-9]*) reaped_at="" ;; esac
-    if [ -n "$reaped_at" ] && [ $(( $(date +%s) - 10#$reaped_at )) -lt "$RECALL_DISABLED_REAP_WINDOW" ]; then
-        recall_log "worker: a session with MACRODATA_RECALL_DISABLE set reaped the last worker -> starting anyway (this session has recall on)"
-        recall_announce "macrodata-recall: another session has MACRODATA_RECALL_DISABLE set and stopped the recall worker, and this one is restarting it. Set the switch in user-level settings and restart open sessions so they agree."
     fi
 
     # A spawn is fire-and-forget — nothing here waits to see whether it lived —
