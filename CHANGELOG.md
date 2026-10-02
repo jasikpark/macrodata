@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0
+
+### Minor Changes
+
+- [#86](https://github.com/jasikpark/macrodata/pull/86) [`7ddeca5`](https://github.com/jasikpark/macrodata/commit/7ddeca52ef1b040cc5558e1c835cd1931fd7ee27) Thanks [@jasikpark](https://github.com/jasikpark)! - Set `MACRODATA_RECALL_DISABLE=1` to turn ambient recall off on machines that can't spare the worker's memory. The recall and reindex hooks queue nothing, and the next prompt stops any installed recall worker and starts no new one. A hand-started worker is left alone. `1`, `true`, `yes`, and `on` are accepted, in any case. Unset it to turn recall back on.
+
 ## 0.11.1
 
 ### Patch Changes
