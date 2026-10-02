@@ -394,10 +394,10 @@ describe("recall-reindex-hook.ts", () => {
   afterEach(() => ctx.cleanup());
 
   const mailbox = () => join(ctx.root, ".recall", "mailbox");
-  const run = (envelope: object) =>
+  const run = (envelope: object, extraEnv: Record<string, string> = {}) =>
     spawnSync("bun", ["run", HOOK], {
       input: JSON.stringify(envelope),
-      env: { ...process.env, MACRODATA_ROOT: ctx.root },
+      env: { ...process.env, MACRODATA_RECALL_DISABLE: "", MACRODATA_ROOT: ctx.root, ...extraEnv },
       encoding: "utf-8",
     });
   const requests = () =>
@@ -412,6 +412,16 @@ describe("recall-reindex-hook.ts", () => {
     expect(r.status).toBe(0);
     expect(requests()).toEqual([{ corpus: true }]);
     expect(r.stdout).toContain("no recall index yet");
+  });
+
+  test("MACRODATA_RECALL_DISABLE queues nothing and says nothing", () => {
+    const off = { MACRODATA_RECALL_DISABLE: "1" };
+    const r = run({ hook_event_name: "SessionStart" }, off);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe("");
+    const p = join(ctx.root, "entities", "people", "x.md");
+    run({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: p } }, off);
+    expect(requests()).toEqual([]);
   });
 
   test("is silent at SessionStart once an index exists", () => {

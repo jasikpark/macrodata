@@ -35,6 +35,7 @@ import {
   getInjectedPath,
   getMailboxDir,
   getRequestPath,
+  recallDisabled,
 } from "../src/recall/config.ts";
 
 const FLOOR = envNum("MACRODATA_RECALL_FLOOR", 0.5, 0);
@@ -62,6 +63,8 @@ async function main(): Promise<void> {
     session_id?: string;
   } = {};
   const qIdx = process.argv.indexOf("--query");
+  // A manual --query is an explicit ask, so only hook fires honor the switch.
+  if (qIdx < 0 && recallDisabled()) emitSilent();
   if (qIdx >= 0) {
     env = { tool_name: "Manual", tool_input: { query: process.argv[qIdx + 1] } };
   } else if (!process.stdin.isTTY) {

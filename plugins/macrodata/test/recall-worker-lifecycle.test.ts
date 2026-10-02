@@ -78,11 +78,11 @@ function spawnWedgedWorker(fakeCmd: string, root: string): Promise<number> {
   return spawnFakeWorker(fakeCmd, root, `trap "" TERM; while :; do sleep 1; done`);
 }
 
-function runHook(root: string, arg: string) {
+function runHook(root: string, arg: string, extraEnv: Record<string, string> = {}) {
   const r = spawnSync("bash", [HOOK, arg], {
     encoding: "utf-8",
     input: "", // prompt-submit reads session_id off stdin; give it a closed one
-    env: { ...process.env, MACRODATA_ROOT: root, CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT },
+    env: { ...process.env, MACRODATA_RECALL_DISABLE: "", MACRODATA_ROOT: root, CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT, ...extraEnv },
   });
   return { stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -280,6 +280,38 @@ describe("recall worker version lifecycle", () => {
     expect(stdout).toContain("hand-started worker");
     expect(recallLog(ctx.root)).toContain("reap installed");
     expect(recallLog(ctx.root)).not.toContain("reap FAILED");
+  });
+
+  test("MACRODATA_RECALL_DISABLE starts no worker and reaps installed ones", async () => {
+    const installed = await spawnFakeWorker(mineCmd(ctx.root), ctx.root);
+    const stale = await spawnFakeWorker(staleCmd(ctx.root), ctx.root);
+
+    const { stdout, stderr } = runHook(ctx.root, "recall-worker", { MACRODATA_RECALL_DISABLE: " TRUE " });
+
+    expect(await waitGone(installed)).toBe(true);
+    expect(await waitGone(stale)).toBe(true);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("");
+    expect(recallLog(ctx.root)).toContain("MACRODATA_RECALL_DISABLE set -> reap");
+    expect(recallLog(ctx.root)).not.toContain("reap FAILED");
+    // Long enough for a spawn to have registered in `ps` had one been made.
+    expect(await waitFor(() => workersFor(ctx.root).length > 0, 1000)).toBe(false);
+    expect(recallLog(ctx.root)).not.toContain("down -> starting");
+  });
+
+  test("MACRODATA_RECALL_DISABLE leaves a hand-started worker alone", async () => {
+    const dev = await spawnFakeWorker(devCmd(ctx.root), ctx.root);
+
+    runHook(ctx.root, "recall-worker", { MACRODATA_RECALL_DISABLE: "1" });
+
+    expect(alive(dev)).toBe(true);
+    expect(workersFor(ctx.root).map((w) => w.pid)).toEqual([dev]);
+  });
+
+  test("a MACRODATA_RECALL_DISABLE value outside the accepted set leaves recall on", async () => {
+    runHook(ctx.root, "recall-worker", { MACRODATA_RECALL_DISABLE: "0" });
+
+    expect((await waitForWorker(ctx.root)).length).toBe(1);
   });
 
   test("starts a worker when none is running, silently on stderr", async () => {

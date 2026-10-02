@@ -227,6 +227,15 @@ reap() {
     printf '%s' "$survivors"
 }
 
+# MACRODATA_RECALL_DISABLE turns ambient recall off. Keep the accepted values in
+# sync with recallDisabled() in src/recall/config.ts.
+recall_disabled() {
+    case "$(printf '%s' "${MACRODATA_RECALL_DISABLE:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Neutralize macrodata tag-openers in text about to be injected into the model's
 # context.
 #
@@ -502,6 +511,21 @@ ensure_recall_worker() {
             *worker.ts*) foreign="$foreign $pid" ;;
         esac
     done <<< "$snapshot"
+
+    # Off means no installed worker at all, including one started before the
+    # switch was set: that is the memory the switch exists to give back. A
+    # hand-started worker is still left alone.
+    if recall_disabled; then
+        rm -f "$RECALL_SPAWN_STAMP"
+        if [ -n "$mine$stale" ]; then
+            recall_log "worker: MACRODATA_RECALL_DISABLE set -> reap$mine$stale"
+            survived="$(reap "$mine $stale")"
+            [ -n "$survived" ] && recall_log "worker: reap FAILED, survived SIGKILL:$survived"
+        elif [ "$voice" = announce ]; then
+            recall_log "worker: MACRODATA_RECALL_DISABLE set -> not starting"
+        fi
+        return 0
+    fi
 
     # The worker claims worker.pid so a burst of spawns settles on one survivor,
     # and SIGKILL — how a stale version is reaped — leaves that claim behind. A
