@@ -1,6 +1,6 @@
 /**
- * MACRODATA_RECALL_DISABLE at the ambient-recall hook: a fire touches no recall
- * state, so nothing waits in the mailbox for a worker that will never run.
+ * MACRODATA_RECALL_DISABLE: the ambient-recall hook touches no recall state when
+ * it is set, and the bash and TypeScript parsers agree on what "set" means.
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
@@ -8,8 +8,43 @@ import { spawnSync } from "child_process";
 import { existsSync } from "fs";
 import { join } from "path";
 import { createTestContext, type TestContext } from "./helpers";
+import { recallDisabled } from "../src/recall/config.ts";
 
 const HOOK = join(import.meta.dir, "..", "bin", "recall-hook.ts");
+const SUPERVISOR = join(import.meta.dir, "..", "bin", "macrodata-hook.sh");
+
+describe("MACRODATA_RECALL_DISABLE parsing", () => {
+  const saved = process.env.MACRODATA_RECALL_DISABLE;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.MACRODATA_RECALL_DISABLE;
+    else process.env.MACRODATA_RECALL_DISABLE = saved;
+  });
+
+  // The supervisor reaps on its reading and the hooks queue on theirs, so a value
+  // they split on leaves requests piling up in a mailbox no worker drains.
+  test.each([
+    ["", false],
+    ["1", true],
+    ["true", true],
+    [" TRUE ", true],
+    ["Yes", true],
+    ["on\n", true],
+    ["0", false],
+    ["false", false],
+    ["off", false],
+    ["t rue", false],
+    ["tr\nue", false],
+    ["2", false],
+  ])("%j", (value, disabled) => {
+    process.env.MACRODATA_RECALL_DISABLE = value;
+    expect(recallDisabled()).toBe(disabled);
+    const sh = spawnSync("bash", [SUPERVISOR, "print-recall-disabled"], {
+      encoding: "utf-8",
+      env: { ...process.env, MACRODATA_RECALL_DISABLE: value },
+    });
+    expect(sh.stdout.trim()).toBe(disabled ? "disabled" : "enabled");
+  });
+});
 
 describe("recall hook kill switch", () => {
   let ctx: TestContext;

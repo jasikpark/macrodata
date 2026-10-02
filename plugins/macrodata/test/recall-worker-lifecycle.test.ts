@@ -302,10 +302,38 @@ describe("recall worker version lifecycle", () => {
   test("MACRODATA_RECALL_DISABLE leaves a hand-started worker alone", async () => {
     const dev = await spawnFakeWorker(devCmd(ctx.root), ctx.root);
 
-    runHook(ctx.root, "recall-worker", { MACRODATA_RECALL_DISABLE: "1" });
+    const { stdout } = runHook(ctx.root, "recall-worker", { MACRODATA_RECALL_DISABLE: "1" });
 
     expect(alive(dev)).toBe(true);
+    // The enabled path also spares a hand-started worker, but it announces it;
+    // only the disabled branch stays silent and logs the switch.
+    expect(stdout).toBe("");
+    expect(recallLog(ctx.root)).toContain("MACRODATA_RECALL_DISABLE set -> not starting");
     expect(workersFor(ctx.root).map((w) => w.pid)).toEqual([dev]);
+  });
+
+  test("a session with recall on says so when it restarts a worker a disabled session reaped", async () => {
+    const installed = await spawnFakeWorker(mineCmd(ctx.root), ctx.root);
+    runHook(ctx.root, "recall-worker", { MACRODATA_RECALL_DISABLE: "1" });
+    expect(await waitGone(installed)).toBe(true);
+
+    const { stdout } = runHook(ctx.root, "prompt-submit");
+
+    expect(stdout).toContain("another session has MACRODATA_RECALL_DISABLE set");
+    expect((await waitForWorker(ctx.root)).length).toBe(1);
+    // Once per reap, not once per pass.
+    expect(runHook(ctx.root, "prompt-submit").stdout).not.toContain("MACRODATA_RECALL_DISABLE");
+  });
+
+  test("an old disabled-session reap is not reported when recall comes back on", async () => {
+    mkdirSync(join(ctx.root, ".recall"), { recursive: true });
+    writeFileSync(join(ctx.root, ".recall", "disabled-reap"), `${Math.floor(Date.now() / 1000) - 3600}\n`);
+
+    const { stdout } = runWorkerPass(ctx.root);
+
+    expect(stdout).not.toContain("MACRODATA_RECALL_DISABLE");
+    expect(existsSync(join(ctx.root, ".recall", "disabled-reap"))).toBe(false);
+    expect((await waitForWorker(ctx.root)).length).toBe(1);
   });
 
   test("a MACRODATA_RECALL_DISABLE value outside the accepted set leaves recall on", async () => {

@@ -11,6 +11,7 @@
 #                                       context
 #   macrodata-hook.sh recall-worker  - Converge the recall worker alone
 #   macrodata-hook.sh print-root     - Print the resolved state root
+#   macrodata-hook.sh print-recall-disabled - Print how MACRODATA_RECALL_DISABLE parses
 #
 # Both long-lived processes macrodata owns — the daemon and the ambient-recall
 # worker — are managed from here, on BOTH events. Running on every prompt is what
@@ -124,6 +125,12 @@ RECALL_PIDFILE="$RECALL_LOGDIR/worker.pid"
 # cadence every gap exceeds it, and the detector never fires for the one person
 # it exists for.
 RECALL_SPAWN_STAMP="$RECALL_LOGDIR/last-spawn"
+# Left by a session with MACRODATA_RECALL_DISABLE set when it reaps a worker. The
+# switch is read from each session's own env, so a session without it respawns
+# what that one reaps, on every prompt in either; the worker clears the
+# failed-start ledger as it starts, so only this marker can see the loop.
+RECALL_DISABLED_REAP="$RECALL_LOGDIR/disabled-reap"
+RECALL_DISABLED_REAP_WINDOW=600
 # Two in a row, because a single failure is also what a reap-then-respawn and a
 # lost spawn race look like, and both of those are healthy by the next pass.
 RECALL_SPAWN_FAIL_COUNT=2
@@ -227,10 +234,11 @@ reap() {
     printf '%s' "$survivors"
 }
 
-# MACRODATA_RECALL_DISABLE turns ambient recall off. Keep the accepted values in
-# sync with recallDisabled() in src/recall/config.ts.
+# MACRODATA_RECALL_DISABLE turns ambient recall off. Keep the parsing in sync
+# with recallDisabled() in src/recall/config.ts; test/recall-disable.test.ts runs
+# both over the same values.
 recall_disabled() {
-    case "$(printf '%s' "${MACRODATA_RECALL_DISABLE:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+    case "$(printf '%s' "${MACRODATA_RECALL_DISABLE:-}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')" in
         1|true|yes|on) return 0 ;;
         *) return 1 ;;
     esac
@@ -516,9 +524,9 @@ ensure_recall_worker() {
     # switch was set: that is the memory the switch exists to give back. A
     # hand-started worker is still left alone.
     if recall_disabled; then
-        rm -f "$RECALL_SPAWN_STAMP"
         if [ -n "$mine$stale" ]; then
             recall_log "worker: MACRODATA_RECALL_DISABLE set -> reap$mine$stale"
+            date +%s > "$RECALL_DISABLED_REAP" 2>/dev/null
             survived="$(reap "$mine $stale")"
             [ -n "$survived" ] && recall_log "worker: reap FAILED, survived SIGKILL:$survived"
         elif [ "$voice" = announce ]; then
@@ -638,6 +646,18 @@ ensure_recall_worker() {
         recall_log "worker: source missing at $RECALL_WORKER -> not starting"
         [ "$voice" = announce ] && recall_announce "macrodata-recall: worker source is missing; ambient recall is NOT running"
         return 0
+    fi
+
+    # Announced on every voice: each occurrence is a full model load thrown away,
+    # and it repeats until the sessions agree. Only a recent reap counts; an old
+    # marker is what turning recall back on everywhere leaves behind.
+    local reaped_at
+    reaped_at="$(cat "$RECALL_DISABLED_REAP" 2>/dev/null)"
+    rm -f "$RECALL_DISABLED_REAP"
+    case "$reaped_at" in ''|*[!0-9]*) reaped_at="" ;; esac
+    if [ -n "$reaped_at" ] && [ $(( $(date +%s) - 10#$reaped_at )) -lt "$RECALL_DISABLED_REAP_WINDOW" ]; then
+        recall_log "worker: a session with MACRODATA_RECALL_DISABLE set reaped the last worker -> starting anyway (this session has recall on)"
+        recall_announce "macrodata-recall: another session has MACRODATA_RECALL_DISABLE set and stopped the recall worker, and this one is restarting it. Set the switch in user-level settings and restart open sessions so they agree."
     fi
 
     # A spawn is fire-and-forget — nothing here waits to see whether it lived —
@@ -832,8 +852,12 @@ case "$1" in
         # two copies of the same precedence to stay in step.
         printf '%s\n' "$STATE_ROOT"
         ;;
+    print-recall-disabled)
+        # Held against recallDisabled() by test/recall-disable.test.ts.
+        if recall_disabled; then echo disabled; else echo enabled; fi
+        ;;
     *)
-        echo "Usage: $0 {session-start|prompt-submit|recall-worker|print-root}" >&2
+        echo "Usage: $0 {session-start|prompt-submit|recall-worker|print-root|print-recall-disabled}" >&2
         exit 1
         ;;
 esac
