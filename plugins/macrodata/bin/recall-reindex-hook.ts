@@ -21,8 +21,13 @@ import {
   getMailboxDir,
   getReindexHaltedPath,
   getReindexRequestPath,
+  recallDisabled,
 } from "../src/recall/config.ts";
 import { reindexRequestFor, type HookEnvelope } from "../src/recall/reindex-request.ts";
+
+// No worker drains the mailbox while recall is off, and the SessionStart notices
+// below would describe a build that is not happening.
+if (recallDisabled()) process.exit(0);
 
 let env: HookEnvelope = {};
 const raw = process.stdin.isTTY ? "" : await Bun.stdin.text();

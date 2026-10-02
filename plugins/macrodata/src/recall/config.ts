@@ -18,6 +18,15 @@ import { getStateRoot } from "../config.ts";
 
 export { getStateRoot, getEntitiesDir, getJournalDir } from "../config.ts";
 
+/**
+ * MACRODATA_RECALL_DISABLE turns ambient recall off: no hook queues work and the
+ * supervisor in bin/macrodata-hook.sh runs no worker. Keep the accepted values in
+ * sync with recall_disabled() there.
+ */
+export function recallDisabled(): boolean {
+  return ["1", "true", "yes", "on"].includes((process.env.MACRODATA_RECALL_DISABLE ?? "").trim().toLowerCase());
+}
+
 /** Alias kept for recall entry points that predate the shared resolver. */
 export const getMacrodataRoot = getStateRoot;
 
