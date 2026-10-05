@@ -13,18 +13,61 @@
  * keep its leading dot to stay that way.
  */
 
+import { readFileSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 import { getStateRoot } from "../config.ts";
 
 export { getStateRoot, getEntitiesDir, getJournalDir } from "../config.ts";
 
 /**
- * MACRODATA_RECALL_DISABLE turns ambient recall off: no hook queues work and the
- * supervisor in bin/macrodata-hook.sh runs no worker. Keep the accepted values in
- * sync with recall_disabled() there.
+ * Whether ambient recall is off: no hook queues work and the supervisor in
+ * bin/macrodata-hook.sh (via bin/recall-switch.ts) runs no worker. Sources, in
+ * order:
+ *   1. MACRODATA_RECALL_DISABLE, a per-session override that can only turn it off.
+ *   2. The plugin's recall_enabled option (userConfig in plugin.json), read live
+ *      from the user settings file. Claude Code caches option values per process,
+ *      so another open session can hold a stale one and would reap or respawn the
+ *      worker every session shares.
+ *   3. CLAUDE_PLUGIN_OPTION_RECALL_ENABLED, Claude Code's exported copy. It merges
+ *      managed and --settings values over the user file, which this function can't
+ *      read; a user-file entry outranks it here.
  */
 export function recallDisabled(): boolean {
-  return ["1", "true", "yes", "on"].includes((process.env.MACRODATA_RECALL_DISABLE ?? "").trim().toLowerCase());
+  if (["1", "true", "yes", "on"].includes(flagWord(process.env.MACRODATA_RECALL_DISABLE))) return true;
+  const live = liveRecallEnabled();
+  if (live !== undefined) return !live;
+  return ["0", "false", "no", "off"].includes(flagWord(process.env.CLAUDE_PLUGIN_OPTION_RECALL_ENABLED));
+}
+
+function flagWord(v: string | undefined): string {
+  return (v ?? "").trim().toLowerCase();
+}
+
+/**
+ * recall_enabled across every macrodata@<marketplace> entry, where Claude Code
+ * stores it: pluginConfigs[<plugin id>].options.<key>. An explicit false wins.
+ */
+function liveRecallEnabled(): boolean | undefined {
+  let configs: unknown;
+  try {
+    const dir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+    const text = readFileSync(join(dir, "settings.json"), "utf-8").replace(/^\uFEFF/, "");
+    configs = JSON.parse(text)?.pluginConfigs;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(configs)) return undefined;
+  const values = Object.entries(configs)
+    .filter(([key]) => key.startsWith("macrodata@"))
+    .map(([, entry]) => (isRecord(entry) && isRecord(entry.options) ? entry.options.recall_enabled : undefined))
+    .filter((v) => v === true || v === false || v === "true" || v === "false");
+  if (values.length === 0) return undefined;
+  return !values.some((v) => v === false || v === "false");
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 /** Alias kept for recall entry points that predate the shared resolver. */

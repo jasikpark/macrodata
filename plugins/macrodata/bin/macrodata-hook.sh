@@ -11,6 +11,7 @@
 #                                       context
 #   macrodata-hook.sh recall-worker  - Converge the recall worker alone
 #   macrodata-hook.sh print-root     - Print the resolved state root
+#   macrodata-hook.sh print-recall-disabled - Print whether ambient recall is off
 #
 # Both long-lived processes macrodata owns — the daemon and the ambient-recall
 # worker — are managed from here, on BOTH events. Running on every prompt is what
@@ -227,13 +228,11 @@ reap() {
     printf '%s' "$survivors"
 }
 
-# MACRODATA_RECALL_DISABLE turns ambient recall off. Keep the accepted values in
-# sync with recallDisabled() in src/recall/config.ts.
+# Whether ambient recall is off, by recallDisabled() in src/recall/config.ts,
+# which documents its sources. Asked rather than reimplemented: the hooks queue
+# on that function's verdict, and this side reaps on its own.
 recall_disabled() {
-    case "$(printf '%s' "${MACRODATA_RECALL_DISABLE:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
-        1|true|yes|on) return 0 ;;
-        *) return 1 ;;
-    esac
+    [ "$(bun run "$PLUGIN_ROOT/bin/recall-switch.ts" </dev/null 2>/dev/null)" = disabled ]
 }
 
 # Neutralize macrodata tag-openers in text about to be injected into the model's
@@ -516,13 +515,15 @@ ensure_recall_worker() {
     # switch was set: that is the memory the switch exists to give back. A
     # hand-started worker is still left alone.
     if recall_disabled; then
-        rm -f "$RECALL_SPAWN_STAMP"
         if [ -n "$mine$stale" ]; then
-            recall_log "worker: MACRODATA_RECALL_DISABLE set -> reap$mine$stale"
+            recall_log "worker: recall disabled -> reap$mine$stale"
             survived="$(reap "$mine $stale")"
             [ -n "$survived" ] && recall_log "worker: reap FAILED, survived SIGKILL:$survived"
+            # A worker reaped before it cleared its own spawn line was not a
+            # failed start, and left counted it reads as one to the next spawn.
+            rm -f "$RECALL_SPAWN_STAMP"
         elif [ "$voice" = announce ]; then
-            recall_log "worker: MACRODATA_RECALL_DISABLE set -> not starting"
+            recall_log "worker: recall disabled -> not starting"
         fi
         return 0
     fi
@@ -832,8 +833,11 @@ case "$1" in
         # two copies of the same precedence to stay in step.
         printf '%s\n' "$STATE_ROOT"
         ;;
+    print-recall-disabled)
+        if recall_disabled; then echo disabled; else echo enabled; fi
+        ;;
     *)
-        echo "Usage: $0 {session-start|prompt-submit|recall-worker|print-root}" >&2
+        echo "Usage: $0 {session-start|prompt-submit|recall-worker|print-root|print-recall-disabled}" >&2
         exit 1
         ;;
 esac

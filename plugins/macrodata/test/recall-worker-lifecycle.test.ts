@@ -292,7 +292,7 @@ describe("recall worker version lifecycle", () => {
     expect(await waitGone(stale)).toBe(true);
     expect(stdout).toBe("");
     expect(stderr).toBe("");
-    expect(recallLog(ctx.root)).toContain("MACRODATA_RECALL_DISABLE set -> reap");
+    expect(recallLog(ctx.root)).toContain("recall disabled -> reap");
     expect(recallLog(ctx.root)).not.toContain("reap FAILED");
     // Long enough for a spawn to have registered in `ps` had one been made.
     expect(await waitFor(() => workersFor(ctx.root).length > 0, 1000)).toBe(false);
@@ -302,10 +302,46 @@ describe("recall worker version lifecycle", () => {
   test("MACRODATA_RECALL_DISABLE leaves a hand-started worker alone", async () => {
     const dev = await spawnFakeWorker(devCmd(ctx.root), ctx.root);
 
-    runHook(ctx.root, "recall-worker", { MACRODATA_RECALL_DISABLE: "1" });
+    const { stdout } = runHook(ctx.root, "recall-worker", { MACRODATA_RECALL_DISABLE: "1" });
 
     expect(alive(dev)).toBe(true);
+    // The enabled path also spares a hand-started worker, but it announces it;
+    // only the disabled branch stays silent and logs the switch.
+    expect(stdout).toBe("");
+    expect(recallLog(ctx.root)).toContain("recall disabled -> not starting");
     expect(workersFor(ctx.root).map((w) => w.pid)).toEqual([dev]);
+  });
+
+  // A worker reaped while still loading has not yet cleared its spawn line; left
+  // behind, that line makes the next start report a failing install.
+  test("a disabled reap clears the spawn ledger of the worker it killed", async () => {
+    const installed = await spawnFakeWorker(mineCmd(ctx.root), ctx.root);
+    mkdirSync(join(ctx.root, ".recall"), { recursive: true });
+    writeFileSync(stampPath(ctx.root), `${Math.floor(Date.now() / 1000)}\n`);
+
+    runHook(ctx.root, "recall-worker", { MACRODATA_RECALL_DISABLE: "1" });
+
+    expect(await waitGone(installed)).toBe(true);
+    expect(existsSync(stampPath(ctx.root))).toBe(false);
+  });
+
+  // Read live from the settings file, so a session that started with recall on
+  // stops the shared worker on its next prompt instead of at its next restart.
+  test("turning the recall_enabled option off reaps the worker without a restart", async () => {
+    const installed = await spawnFakeWorker(mineCmd(ctx.root), ctx.root);
+    // test/setup.ts points this at a scratch dir for every test file.
+    const settings = join(process.env.CLAUDE_CONFIG_DIR ?? ctx.root, "settings.json");
+    writeFileSync(
+      settings,
+      JSON.stringify({ pluginConfigs: { "macrodata@macrodata": { options: { recall_enabled: false } } } }),
+    );
+    try {
+      runHook(ctx.root, "prompt-submit", { CLAUDE_PLUGIN_OPTION_RECALL_ENABLED: "true" });
+      expect(await waitGone(installed)).toBe(true);
+      expect(recallLog(ctx.root)).toContain("recall disabled -> reap");
+    } finally {
+      rmSync(settings, { force: true });
+    }
   });
 
   test("a MACRODATA_RECALL_DISABLE value outside the accepted set leaves recall on", async () => {
