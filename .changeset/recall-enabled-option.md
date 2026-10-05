@@ -6,4 +6,4 @@ Ambient recall can be turned off with the plugin's new **Ambient recall** option
 
 With recall off, the recall hook exits before loading its search pipeline: a fire costs about 15 MB and 10 ms instead of about 120 MB and 300 ms, on every prompt, `Read`, web search or fetch, and `Stop`.
 
-`MACRODATA_RECALL_DISABLE` values that only one side read as set now read the same everywhere. Before, the worker supervisor and the hooks could disagree on values with whitespace inside them (`t rue`) or a leading newline.
+The worker supervisor and the hooks now share one reader for the switch, so they can no longer disagree on whether recall is off.

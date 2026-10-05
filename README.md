@@ -59,7 +59,7 @@ The daemon is a simple cron runner that spawns Claude Code when reminders fire. 
 
 - This will likely only work on macOS and Linux systems. It may work with WSL on Windows, but this is untested.
 - Requires [Bun](https://bun.com/).
-- Ambient recall runs a background worker with two local GGUF models loaded (about 1.2 GB resident). On a memory-constrained machine, turn off the plugin's **Ambient recall** option in `/config` (or `/plugin configure macrodata@macrodata`). Every open session stops using the worker on its next prompt, with no restart; one you started by hand is left running. The MCP memory tools keep working. `MACRODATA_RECALL_DISABLE=1` in the environment also turns it off, but only for the sessions that have it, and each one stops the worker that sessions without it start again; prefer the option.
+- Ambient recall runs a background worker with two local GGUF models loaded (about 1.2 GB resident). On a memory-constrained machine, turn off the plugin's **Ambient recall** option in `/config` (or `/plugin configure macrodata@macrodata`). Every open session stops using the worker on its next prompt, with no restart; one you started by hand is left running. A value set in managed settings applies only while your own settings have no entry for the option. The MCP memory tools keep working. `MACRODATA_RECALL_DISABLE=1` in the environment also turns it off, but only for the sessions that have it, and each one stops the worker that sessions without it start again; prefer the option.
 
 ## Installation
 

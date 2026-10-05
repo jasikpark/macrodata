@@ -40,9 +40,6 @@ RECALL_SENTINEL="--macrodata-recall-worker"
 DEFAULT_ROOT="$HOME/.config/macrodata"
 CONFIG_FILE="$DEFAULT_ROOT/config.json"
 
-# Claude Code's user settings, where the plugin's userConfig values live.
-CLAUDE_SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
-
 # One directory, one spelling of it.
 #
 # The root string is this hook's IDENTITY for a worker: it is passed in the
@@ -231,41 +228,11 @@ reap() {
     printf '%s' "$survivors"
 }
 
-# Whether ambient recall is off, from three sources in order:
-#   1. MACRODATA_RECALL_DISABLE, a per-session override that can only turn it off.
-#   2. The plugin's recall_enabled option (userConfig in plugin.json), read live
-#      from pluginConfigs in the user settings file. Claude Code exports options
-#      to hooks only at session start, so a session would otherwise act on the
-#      value it started with and reap or respawn the worker every other session
-#      shares until it restarts.
-#   3. CLAUDE_PLUGIN_OPTION_RECALL_ENABLED, that session-start copy, for an option
-#      set where the file can't show it (managed settings).
-# Keep in sync with recallDisabled() in src/recall/config.ts;
-# test/recall-disable.test.ts runs both over the same inputs.
+# Whether ambient recall is off, by recallDisabled() in src/recall/config.ts,
+# which documents its sources. Asked rather than reimplemented: the hooks queue
+# on that function's verdict, and this side reaps on its own.
 recall_disabled() {
-    case "$(recall_flag_word "${MACRODATA_RECALL_DISABLE:-}")" in
-        1|true|yes|on) return 0 ;;
-    esac
-    # Any install's entry counts, whichever marketplace it came from, and an
-    # explicit false anywhere wins: the switch exists to give memory back.
-    case "$(jq -r '[(.pluginConfigs // {}) | to_entries[] | select(.key | startswith("macrodata@")) | .value.recall_enabled? | select(. == true or . == false or . == "true" or . == "false") | tostring] | if length == 0 then empty elif any(. == "false") then "false" else "true" end' "$CLAUDE_SETTINGS_FILE" 2>/dev/null)" in
-        false) return 0 ;;
-        true) return 1 ;;
-    esac
-    case "$(recall_flag_word "${CLAUDE_PLUGIN_OPTION_RECALL_ENABLED:-}")" in
-        0|false|no|off) return 0 ;;
-    esac
-    return 1
-}
-
-# A flag value trimmed and lowercased. The whitespace set is spelled out because
-# [[:space:]] follows the locale and sed trims per line, and either would let this
-# side and recallDisabled() split on a value only one of them reads as set.
-recall_flag_word() {
-    local v="$1" ws=$' \t\n\r\v\f'
-    v="${v#"${v%%[!$ws]*}"}"
-    v="${v%"${v##*[!$ws]}"}"
-    printf '%s' "$v" | tr '[:upper:]' '[:lower:]'
+    [ "$(bun run "$PLUGIN_ROOT/bin/recall-switch.ts" </dev/null 2>/dev/null)" = disabled ]
 }
 
 # Neutralize macrodata tag-openers in text about to be injected into the model's
@@ -867,7 +834,6 @@ case "$1" in
         printf '%s\n' "$STATE_ROOT"
         ;;
     print-recall-disabled)
-        # Held against recallDisabled() by test/recall-disable.test.ts.
         if recall_disabled; then echo disabled; else echo enabled; fi
         ;;
     *)

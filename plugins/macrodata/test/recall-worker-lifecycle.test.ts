@@ -333,7 +333,7 @@ describe("recall worker version lifecycle", () => {
     const settings = join(process.env.CLAUDE_CONFIG_DIR ?? ctx.root, "settings.json");
     writeFileSync(
       settings,
-      JSON.stringify({ pluginConfigs: { "macrodata@macrodata": { recall_enabled: false } } }),
+      JSON.stringify({ pluginConfigs: { "macrodata@macrodata": { options: { recall_enabled: false } } } }),
     );
     try {
       runHook(ctx.root, "prompt-submit", { CLAUDE_PLUGIN_OPTION_RECALL_ENABLED: "true" });
