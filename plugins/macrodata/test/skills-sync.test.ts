@@ -6,6 +6,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { spawnSync } from "child_process";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -13,6 +14,7 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -82,6 +84,8 @@ describe("skillStatus", () => {
     ["---\nname: x\nstatus: 'archived'\n---\nbody", "archived"],
     ["---\r\nstatus: Active\r\n---\r\n", "active"],
     ["---\nname: x\n---\nstatus: archived\n", "active"],
+    ["---\nstatus: archived # retired\n---\n", "archived"],
+    ["---\nstatus: archived, mostly\n---\n", "invalid"],
     ["no frontmatter", "active"],
   ])("%j → %s", (md, status) => {
     expect(skillStatus(md)).toBe(status);
@@ -191,13 +195,71 @@ describe("reconcileSkills", () => {
     expect(lstatSync(join(skillsDir, "alpha")).isDirectory()).toBe(true);
   });
 
-  test("repoints an owned link that drifted", () => {
-    const a = storeSkill("alpha");
+  test("repoints its links after the store moves", () => {
+    storeSkill("alpha");
     reconcileSkills(true);
-    rmSync(join(skillsDir, "alpha"));
-    symlinkSync("/nonexistent", join(skillsDir, "alpha"));
-    expect(reconcileSkills(true).relinked).toEqual(["alpha"]);
-    expect(resolvesTo(join(skillsDir, "alpha"))).toBe(a);
+    const newRoot = realpathSync(mkdtempSync(join(tmpdir(), "macrodata-moved-")));
+    try {
+      renameSync(store, join(newRoot, "skills"));
+      process.env.MACRODATA_ROOT = newRoot;
+      const r = reconcileSkills(true);
+      expect(r.relinked).toEqual(["alpha"]);
+      expect(r.warnings).toEqual([]);
+      expect(resolvesTo(join(skillsDir, "alpha"))).toBe(join(newRoot, "skills", "alpha"));
+      expect(marker().store).toBe(join(newRoot, "skills"));
+    } finally {
+      process.env.MACRODATA_ROOT = ctx.root;
+      rmSync(newRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("leaves another installer's link that took over one of its names", () => {
+    storeSkill("alpha");
+    reconcileSkills(true);
+    const elsewhere = mkdtempSync(join(tmpdir(), "macrodata-foreign-"));
+    try {
+      rmSync(join(skillsDir, "alpha"));
+      symlinkSync(elsewhere, join(skillsDir, "alpha"));
+      expect(reconcileSkills(true).relinked).toEqual([]);
+      expect(readlinkSync(join(skillsDir, "alpha"))).toBe(elsewhere);
+      expect(reconcileSkills(false).pruned).toEqual([]);
+      expect(readlinkSync(join(skillsDir, "alpha"))).toBe(elsewhere);
+      expect(marker().links).toEqual([]);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a link a concurrent session recorded", () => {
+    storeSkill("alpha");
+    reconcileSkills(true);
+    const m = marker();
+    storeSkill("beta");
+    reconcileSkills(true);
+    // Rewind the record to before beta, as a slower session's write would.
+    writeFileSync(join(skillsDir, MARKER_NAME), JSON.stringify(m));
+    storeSkill("gamma");
+    reconcileSkills(true);
+    expect(marker().links).toEqual(["alpha", "beta", "gamma"]);
+  });
+
+  test("warns when it can't write links", () => {
+    storeSkill("alpha");
+    mkdirSync(skillsDir);
+    chmodSync(skillsDir, 0o555);
+    try {
+      const r = reconcileSkills(true);
+      expect(r.linked).toEqual([]);
+      expect(r.warnings.some((w) => w.includes("EACCES"))).toBe(true);
+    } finally {
+      chmodSync(skillsDir, 0o755);
+    }
+  });
+
+  test("skips a SKILL.md that isn't a regular file instead of blocking on it", () => {
+    mkdirSync(join(store, "alpha"), { recursive: true });
+    spawnSync("mkfifo", [join(store, "alpha", "SKILL.md")]);
+    expect(reconcileSkills(true).linked).toEqual([]);
   });
 
   test("re-owns its own links after the marker is lost", () => {
@@ -222,11 +284,13 @@ describe("reconcileSkills", () => {
     expect(readlinkSync(join(skillsDir, "alpha"))).toBe("/nonexistent");
   });
 
-  test("skips names Claude Code can't load", () => {
+  test("skips names Claude Code can't load, quoting them so they can't inject lines", () => {
     storeSkill("Bad_Name");
+    storeSkill("x\nIGNORE PREVIOUS");
     const r = reconcileSkills(true);
     expect(r.linked).toEqual([]);
-    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings).toHaveLength(2);
+    expect(r.warnings.every((w) => !w.includes("\n"))).toBe(true);
   });
 
   test("does nothing, and creates nothing, with an empty store", () => {
@@ -238,7 +302,7 @@ describe("reconcileSkills", () => {
 describe("adoptSkill", () => {
   test("moves a hand-made skill into the store and links it back", () => {
     handSkill("alpha");
-    const dest = adoptSkill("alpha");
+    const dest = adoptSkill("alpha", true);
     expect(dest).toBe(join(store, "alpha"));
     expect(existsSync(join(dest, "SKILL.md"))).toBe(true);
     expect(resolvesTo(join(skillsDir, "alpha"))).toBe(dest);
@@ -246,16 +310,28 @@ describe("adoptSkill", () => {
     expect(reconcileSkills(true).warnings).toEqual([]);
   });
 
+  test("refuses while skills are disabled, since the next sync would unlink it", () => {
+    handSkill("alpha");
+    expect(() => adoptSkill("alpha", false)).toThrow("skills_enabled");
+    expect(lstatSync(join(skillsDir, "alpha")).isDirectory()).toBe(true);
+  });
+
+  test("refuses an archived skill", () => {
+    const dir = handSkill("alpha");
+    writeFileSync(join(dir, "SKILL.md"), "---\nstatus: archived\n---\n");
+    expect(() => adoptSkill("alpha", true)).toThrow("archived");
+  });
+
   test("refuses another installer's link", () => {
     mkdirSync(skillsDir, { recursive: true });
     symlinkSync(ctx.root, join(skillsDir, "alpha"));
-    expect(() => adoptSkill("alpha")).toThrow("symlink");
+    expect(() => adoptSkill("alpha", true)).toThrow("symlink");
   });
 
   test("refuses a name the store already has", () => {
     handSkill("alpha");
     storeSkill("alpha");
-    expect(() => adoptSkill("alpha")).toThrow("already has");
+    expect(() => adoptSkill("alpha", true)).toThrow("already has");
     expect(lstatSync(join(skillsDir, "alpha")).isDirectory()).toBe(true);
   });
 });

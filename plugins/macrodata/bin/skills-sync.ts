@@ -7,7 +7,11 @@
  *   skills-sync.ts adopt N  move ~/.claude/skills/N into the store, link it back.
  */
 
-import { adoptSkill, reconcileSkills } from "../src/skills.ts";
+import { adoptSkill, getClaudeSkillsDir, reconcileSkills } from "../src/skills.ts";
+
+/** Hook stdout lands in model context; an error message may carry store-supplied text. */
+// eslint-disable-next-line no-control-regex -- stripping them is the point
+const oneLine = (s: string) => s.replace(/[\u0000-\u001f\u007f]+/g, " ").slice(0, 300);
 
 const [cmd, arg] = process.argv.slice(2);
 
@@ -32,9 +36,12 @@ if (cmd === "adopt") {
     if (r.relinked.length) lines.push(`relinked: ${r.relinked.join(", ")}`);
     if (r.pruned.length) lines.push(`unlinked: ${r.pruned.join(", ")}`);
     lines.push(...r.warnings);
-    if (r.createdDir) lines.push("created ~/.claude/skills; run /reload-skills to load these this session");
+    if (r.createdDir)
+      lines.push(`created ${getClaudeSkillsDir()}; run /reload-skills to load these this session`);
     if (lines.length) console.log(`<macrodata-skills>\n${lines.join("\n")}\n</macrodata-skills>`);
   } catch (e) {
-    console.log(`<macrodata-skills>sync failed: ${(e as Error).message}</macrodata-skills>`);
+    console.log(
+      `<macrodata-skills>sync failed: ${oneLine(String((e as Error).message))}</macrodata-skills>`,
+    );
   }
 }
