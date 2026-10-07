@@ -88,6 +88,14 @@ describe("skillStatus", () => {
     ["---\nstatus: archived # retired\n---\n", "archived"],
     ["---\nstatus: archived, mostly\n---\n", "invalid"],
     ["no frontmatter", "active"],
+    ["---\n---\n", "active"],
+    ["---\nstatus:\n---\n", "active"],
+    ["---\nstatus : archived\n---\n", "archived"],
+    ['---\n"status": archived\n---\n', "archived"],
+    ["---\n{status: archived}\n---\n", "archived"],
+    ["---\nstatus: active\nstatus: archived\n---\n", "archived"],
+    ["---\nname: x\n----\nstatus: archived\n---\n", "invalid"],
+    ["---\nstatus: [archived]\n---\n", "invalid"],
     ["---\nstatus: archived\n" + "x".repeat(10), "invalid"],
   ])("%j → %s", (md, status) => {
     expect(skillStatus(md)).toBe(status);
@@ -262,6 +270,27 @@ describe("reconcileSkills", () => {
     mkdirSync(join(store, "alpha"), { recursive: true });
     spawnSync("mkfifo", [join(store, "alpha", "SKILL.md")]);
     expect(reconcileSkills(true).linked).toEqual([]);
+  });
+
+  test("prunes a link into its store that the marker lost", () => {
+    storeSkill("alpha");
+    reconcileSkills(true);
+    rmSync(join(skillsDir, MARKER_NAME));
+    storeSkill("alpha", "archived");
+    expect(reconcileSkills(true).pruned).toEqual(["alpha"]);
+    expect(isLink(join(skillsDir, "alpha"))).toBe(false);
+  });
+
+  test("doesn't link a store entry that is itself a symlink", () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), "macrodata-foreign-"));
+    try {
+      writeFileSync(join(elsewhere, "SKILL.md"), "---\nname: alpha\n---\n");
+      mkdirSync(store, { recursive: true });
+      symlinkSync(elsewhere, join(store, "alpha"));
+      expect(reconcileSkills(true).linked).toEqual([]);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 
   test("re-owns its own links after the marker is lost", () => {

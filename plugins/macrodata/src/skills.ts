@@ -66,18 +66,28 @@ export function skillsEnabled(): boolean {
 }
 
 /**
- * The `status:` field of a SKILL.md frontmatter block; absent means `active`.
- * A status that can't be read with confidence (an unparsable line, or a fence
- * that never closes within what was read) is `invalid`, which isn't linked.
+ * The `status:` field of a SKILL.md frontmatter block; absent or empty means
+ * `active`. Frontmatter that isn't a YAML mapping, a fence that never closes
+ * within what was read, or a status that isn't a single word is `invalid`,
+ * which isn't linked.
  */
 export function skillStatus(skillMd: string): string {
-  if (!/^﻿?---\r?\n/.test(skillMd)) return "active";
-  const fm = /^﻿?---\r?\n([\s\S]*?)\r?\n---/.exec(skillMd);
+  if (!/^\uFEFF?---\r?\n/.test(skillMd)) return "active";
+  const fm = /^\uFEFF?---\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)/.exec(skillMd);
   if (!fm) return "invalid";
-  const line = /^status:(.*)$/m.exec(fm[1]);
-  if (!line) return "active";
-  const v = /^\s*(["']?)([A-Za-z-]+)\1\s*(#.*)?\r?$/.exec(line[1]);
-  return v ? v[2].toLowerCase() : "invalid";
+  let data: unknown;
+  try {
+    data = Bun.YAML.parse(fm[1] ?? "");
+  } catch {
+    return "invalid";
+  }
+  if (data == null) return "active";
+  if (!isRecord(data)) return "invalid";
+  const status = data.status;
+  if (status == null) return "active";
+  return typeof status === "string" && /^[A-Za-z-]+$/.test(status.trim())
+    ? status.trim().toLowerCase()
+    : "invalid";
 }
 
 /**
@@ -111,9 +121,20 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Recorded stores that no longer exist: their links are this store's to adopt. */
+/**
+ * Recorded stores that no longer exist: their links are this store's to adopt.
+ * Only ENOENT counts; an unmounted or unreadable store is still someone's.
+ */
 function goneStores(marker: Map<string, Set<string>>, store: string): string[] {
-  return [...marker.keys()].filter((s) => s !== store && !existsSync(s));
+  return [...marker.keys()].filter((s) => {
+    if (s === store) return false;
+    try {
+      lstatSync(s);
+      return false;
+    } catch (e) {
+      return errCode(e) === "ENOENT";
+    }
+  });
 }
 
 /**
@@ -136,17 +157,11 @@ function owningStore(
  * no longer point into them. Re-reads the marker first: a concurrent session
  * (or another root) may have recorded links this one never saw.
  */
-function writeMarker(
-  skillsDir: string,
-  store: string,
-  kept: Set<string>,
-  dropped: Set<string>,
-): void {
+function writeMarker(skillsDir: string, store: string, kept: Set<string>): void {
   const current = readMarker(skillsDir);
   const mine = new Set(kept);
   for (const name of current.get(store) ?? []) {
-    if (!dropped.has(name) && linkTarget(join(skillsDir, name)) === join(store, name))
-      mine.add(name);
+    if (linkTarget(join(skillsDir, name)) === join(store, name)) mine.add(name);
   }
   current.set(store, mine);
   for (const gone of goneStores(current, store)) {
@@ -208,6 +223,13 @@ function desiredSkills(store: string, warnings: string[]): Map<string, string> |
   for (const name of entries.sort()) {
     if (name.startsWith(".")) continue;
     const dir = join(store, name);
+    // A store entry that is itself a link would let whoever controls its
+    // target supply a skill.
+    try {
+      if (!lstatSync(dir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
     const md = readSkillHead(join(dir, "SKILL.md"));
     if (md === undefined) continue;
     if (!SKILL_NAME.test(name)) {
@@ -285,8 +307,10 @@ export function reconcileSkills(enabled = skillsEnabled()): ReconcileResult {
   const marker = readMarker(skillsDir);
   const candidates = [store, ...goneStores(marker, store)];
   const kept = new Set<string>();
-  const dropped = new Set<string>();
   const handled = new Set<string>();
+  const ours = (name: string, path: string) =>
+    owningStore(marker, candidates, name, path) !== undefined ||
+    linkTarget(path) === join(store, name);
 
   for (const [name, dir] of desired) {
     handled.add(name);
@@ -303,37 +327,36 @@ export function reconcileSkills(enabled = skillsEnabled()): ReconcileResult {
       }
       continue;
     }
-    if (owningStore(marker, candidates, name, path) !== undefined) {
+    if (ours(name, path)) {
       if (removeLink(path, result.warnings) && placeLink(want, path, dir, result.warnings)) {
         result.relinked.push(name);
         kept.add(name);
       }
       continue;
     }
-    dropped.add(name);
+    // A concurrent session may have linked it since the check above.
+    if (linkTarget(path) === dir) {
+      kept.add(name);
+      continue;
+    }
     result.warnings.push(
       `${path} already exists and isn't macrodata's; store skill "${name}" not linked`,
     );
   }
 
-  for (const s of candidates) {
-    for (const name of marker.get(s) ?? []) {
-      if (handled.has(name)) continue;
-      handled.add(name);
-      dropped.add(name);
-      const path = join(skillsDir, name);
-      if (
-        owningStore(marker, candidates, name, path) !== undefined &&
-        removeLink(path, result.warnings)
-      ) {
-        result.pruned.push(name);
-      }
-    }
+  // Prune by marker and by target: a link into this store is ours even if a
+  // racing session's marker write lost its name.
+  const prunable = new Set(candidates.flatMap((s) => [...(marker.get(s) ?? [])]));
+  for (const name of readdirSync(skillsDir)) if (SKILL_NAME.test(name)) prunable.add(name);
+  for (const name of [...prunable].sort()) {
+    if (handled.has(name)) continue;
+    const path = join(skillsDir, name);
+    if (ours(name, path) && removeLink(path, result.warnings)) result.pruned.push(name);
   }
 
   if (kept.size > 0 || marker.size > 0) {
     try {
-      writeMarker(skillsDir, store, kept, dropped);
+      writeMarker(skillsDir, store, kept);
     } catch (e) {
       result.warnings.push(
         `couldn't record owned links in ${join(skillsDir, MARKER_NAME)} (${errCode(e)})`,
@@ -425,12 +448,14 @@ export function adoptSkill(name: string, enabled = skillsEnabled()): string {
   try {
     symlinkSync(relative(realpathSync(skillsDir), dest), src);
   } catch (e) {
+    // A session starting mid-adopt links the store copy itself.
+    if (errCode(e) === "EEXIST" && linkTarget(src) === dest) return dest;
     throw new Error(
       `moved to ${dest} but couldn't link it back (${errCode(e)}); the next session start links it`,
     );
   }
   try {
-    writeMarker(skillsDir, store, new Set([name]), new Set());
+    writeMarker(skillsDir, store, new Set([name]));
   } catch {
     // The link points into the store, so the next sync re-owns it.
   }
