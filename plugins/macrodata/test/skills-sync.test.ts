@@ -77,6 +77,7 @@ function handSkill(name: string): string {
 const isLink = (p: string) => existsSync(p) && lstatSync(p).isSymbolicLink();
 const resolvesTo = (p: string) => realpathSync(p);
 const marker = () => JSON.parse(readFileSync(join(skillsDir, MARKER_NAME), "utf-8"));
+const owned = (s = store) => marker().stores[s] ?? [];
 
 describe("skillStatus", () => {
   test.each([
@@ -87,6 +88,7 @@ describe("skillStatus", () => {
     ["---\nstatus: archived # retired\n---\n", "archived"],
     ["---\nstatus: archived, mostly\n---\n", "invalid"],
     ["no frontmatter", "active"],
+    ["---\nstatus: archived\n" + "x".repeat(10), "invalid"],
   ])("%j → %s", (md, status) => {
     expect(skillStatus(md)).toBe(status);
   });
@@ -124,7 +126,7 @@ describe("reconcileSkills", () => {
     expect(resolvesTo(join(skillsDir, "alpha"))).toBe(a);
     expect(resolvesTo(join(skillsDir, "beta"))).toBe(b);
     expect(existsSync(join(skillsDir, "gamma"))).toBe(false);
-    expect(marker()).toEqual({ store, links: ["alpha", "beta"] });
+    expect(marker()).toEqual({ stores: { [store]: ["alpha", "beta"] } });
   });
 
   test("links are relative", () => {
@@ -173,7 +175,7 @@ describe("reconcileSkills", () => {
     expect(r.pruned.sort()).toEqual(["alpha", "beta"]);
     expect(existsSync(join(skillsDir, "alpha"))).toBe(false);
     expect(isLink(join(skillsDir, "beta"))).toBe(false);
-    expect(marker().links).toEqual([]);
+    expect(owned()).toEqual([]);
   });
 
   test("turning it off unlinks only its own links", () => {
@@ -206,7 +208,7 @@ describe("reconcileSkills", () => {
       expect(r.relinked).toEqual(["alpha"]);
       expect(r.warnings).toEqual([]);
       expect(resolvesTo(join(skillsDir, "alpha"))).toBe(join(newRoot, "skills", "alpha"));
-      expect(marker().store).toBe(join(newRoot, "skills"));
+      expect(marker().stores).toEqual({ [join(newRoot, "skills")]: ["alpha"] });
     } finally {
       process.env.MACRODATA_ROOT = ctx.root;
       rmSync(newRoot, { recursive: true, force: true });
@@ -224,7 +226,7 @@ describe("reconcileSkills", () => {
       expect(readlinkSync(join(skillsDir, "alpha"))).toBe(elsewhere);
       expect(reconcileSkills(false).pruned).toEqual([]);
       expect(readlinkSync(join(skillsDir, "alpha"))).toBe(elsewhere);
-      expect(marker().links).toEqual([]);
+      expect(owned()).toEqual([]);
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
@@ -240,7 +242,7 @@ describe("reconcileSkills", () => {
     writeFileSync(join(skillsDir, MARKER_NAME), JSON.stringify(m));
     storeSkill("gamma");
     reconcileSkills(true);
-    expect(marker().links).toEqual(["alpha", "beta", "gamma"]);
+    expect(owned()).toEqual(["alpha", "beta", "gamma"]);
   });
 
   test("warns when it can't write links", () => {
@@ -267,21 +269,67 @@ describe("reconcileSkills", () => {
     reconcileSkills(true);
     rmSync(join(skillsDir, MARKER_NAME));
     expect(reconcileSkills(true).warnings).toEqual([]);
-    expect(marker().links).toEqual(["alpha"]);
+    expect(owned()).toEqual(["alpha"]);
   });
 
-  test("a marker for a different store owns nothing", () => {
+  test("never touches links a different, still-present store recorded", () => {
     storeSkill("alpha");
-    mkdirSync(skillsDir, { recursive: true });
-    symlinkSync("/nonexistent", join(skillsDir, "alpha"));
-    writeFileSync(
-      join(skillsDir, MARKER_NAME),
-      JSON.stringify({ store: "/other", links: ["alpha"] }),
-    );
-    const r = reconcileSkills(true);
-    expect(r.relinked).toEqual([]);
-    expect(r.warnings).toHaveLength(1);
-    expect(readlinkSync(join(skillsDir, "alpha"))).toBe("/nonexistent");
+    reconcileSkills(true);
+    const otherRoot = realpathSync(mkdtempSync(join(tmpdir(), "macrodata-other-")));
+    try {
+      process.env.MACRODATA_ROOT = otherRoot;
+      const other = join(otherRoot, "skills");
+      mkdirSync(join(other, "beta"), { recursive: true });
+      writeFileSync(join(other, "beta", "SKILL.md"), "---\nname: beta\n---\n");
+      const r = reconcileSkills(true);
+      expect(r).toMatchObject({ linked: ["beta"], relinked: [], pruned: [], warnings: [] });
+      expect(resolvesTo(join(skillsDir, "alpha"))).toBe(join(store, "alpha"));
+      process.env.MACRODATA_ROOT = ctx.root;
+      expect(reconcileSkills(true)).toMatchObject({ linked: [], pruned: [], warnings: [] });
+      expect(marker().stores).toEqual({ [store]: ["alpha"], [other]: ["beta"] });
+    } finally {
+      process.env.MACRODATA_ROOT = ctx.root;
+      rmSync(otherRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("leaves its links alone when the store can't be listed", () => {
+    storeSkill("alpha");
+    reconcileSkills(true);
+    chmodSync(store, 0o000);
+    try {
+      const r = reconcileSkills(true);
+      expect(r.pruned).toEqual([]);
+      expect(r.warnings).toHaveLength(1);
+      expect(lstatSync(join(skillsDir, "alpha")).isSymbolicLink()).toBe(true);
+      expect(owned()).toEqual(["alpha"]);
+    } finally {
+      chmodSync(store, 0o755);
+    }
+  });
+
+  test("keeps a moved store's record until its links are repointed", () => {
+    storeSkill("alpha");
+    reconcileSkills(true);
+    const newRoot = realpathSync(mkdtempSync(join(tmpdir(), "macrodata-moved-")));
+    const oldStore = store;
+    try {
+      renameSync(store, join(newRoot, "skills"));
+      process.env.MACRODATA_ROOT = newRoot;
+      chmodSync(skillsDir, 0o555);
+      const r = reconcileSkills(true);
+      chmodSync(skillsDir, 0o755);
+      expect(r.relinked).toEqual([]);
+      expect(r.warnings.some((w) => w.includes("EACCES"))).toBe(true);
+      expect(r.warnings.filter((w) => w.includes("alpha"))).toHaveLength(1);
+      expect(marker().stores).toEqual({ [oldStore]: ["alpha"] });
+      expect(reconcileSkills(true).relinked).toEqual(["alpha"]);
+      expect(marker().stores).toEqual({ [join(newRoot, "skills")]: ["alpha"] });
+    } finally {
+      chmodSync(skillsDir, 0o755);
+      process.env.MACRODATA_ROOT = ctx.root;
+      rmSync(newRoot, { recursive: true, force: true });
+    }
   });
 
   test("skips names Claude Code can't load, quoting them so they can't inject lines", () => {
@@ -306,7 +354,7 @@ describe("adoptSkill", () => {
     expect(dest).toBe(join(store, "alpha"));
     expect(existsSync(join(dest, "SKILL.md"))).toBe(true);
     expect(resolvesTo(join(skillsDir, "alpha"))).toBe(dest);
-    expect(marker().links).toEqual(["alpha"]);
+    expect(owned()).toEqual(["alpha"]);
     expect(reconcileSkills(true).warnings).toEqual([]);
   });
 
