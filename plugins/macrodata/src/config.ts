@@ -107,3 +107,37 @@ export function getIndexDir(): string {
 export function getRemindersDir(): string {
   return join(getStateRoot(), "reminders");
 }
+
+/** The Claude Code config dir: CLAUDE_CONFIG_DIR, else ~/.claude. */
+export function getClaudeConfigDir(): string {
+  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+}
+
+/**
+ * A boolean plugin option (userConfig in plugin.json) read live from the user
+ * settings file, across every macrodata@<marketplace> entry, where Claude Code
+ * stores it: pluginConfigs[<plugin id>].options.<key>. An explicit false wins.
+ *
+ * Read live because Claude Code caches option values per process, so another
+ * open session's CLAUDE_PLUGIN_OPTION_* copy can be stale.
+ */
+export function livePluginOption(key: string): boolean | undefined {
+  let configs: unknown;
+  try {
+    const text = readFileSync(join(getClaudeConfigDir(), "settings.json"), "utf-8").replace(/^﻿/, "");
+    configs = JSON.parse(text)?.pluginConfigs;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(configs)) return undefined;
+  const values = Object.entries(configs)
+    .filter(([id]) => id.startsWith("macrodata@"))
+    .map(([, entry]) => (isRecord(entry) && isRecord(entry.options) ? entry.options[key] : undefined))
+    .filter((v) => v === true || v === false || v === "true" || v === "false");
+  if (values.length === 0) return undefined;
+  return !values.some((v) => v === false || v === "false");
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
