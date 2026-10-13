@@ -57,6 +57,7 @@ describe("corpus projection", () => {
           content: "[alpha] first entry",
           source: "2026-09-18.jsonl",
           timestamp: "2026-09-18T10:00:00.000Z",
+          topic: "alpha",
         },
         {
           id: "journal-2026-09-18.jsonl-1",
@@ -64,6 +65,7 @@ describe("corpus projection", () => {
           content: "[beta] second entry",
           source: "2026-09-18.jsonl",
           timestamp: "2026-09-18T11:00:00.000Z",
+          topic: "beta",
         },
       ]);
 

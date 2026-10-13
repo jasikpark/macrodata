@@ -3,8 +3,9 @@
  *
  * Units come from the canonical corpus projection (src/corpus.ts) shared with
  * the MiniLM indexer, so both indexes hold the same units. The differences are:
- * Qwen3 doc/query embeddings, 1024-dim, and a separate index dir
- * (config.getIndexDir) — MiniLM/384 and Qwen3/1024 cannot share a Vectra store.
+ * Qwen3 doc/query embeddings, 1024-dim, a separate index dir
+ * (config.getIndexDir) — MiniLM/384 and Qwen3/1024 cannot share a Vectra store —
+ * and recall drops CALIBRATION_TOPIC journal lines, which search_memory keeps.
  */
 
 import type { LocalIndex } from "vectra";
@@ -12,7 +13,7 @@ import { AtomicLocalIndex, IndexModelMismatchError, UnusableIndexError } from ".
 import { join, relative, resolve, sep } from "path";
 import { existsSync, lstatSync, mkdirSync } from "fs";
 import { EMBED_MODEL, embedDocuments, embedQuery } from "./embeddings.ts";
-import { getIndexDir, getJournalDir, getEntitiesDir } from "./config.ts";
+import { CALIBRATION_TOPIC, getIndexDir, getJournalDir, getEntitiesDir } from "./config.ts";
 import {
   scanCorpus,
   canonicalUnder,
@@ -284,6 +285,8 @@ function kindOfSource(source: unknown): "journal" | "entity" | null {
   return source.endsWith(".jsonl") ? "journal" : source.endsWith(".md") ? "entity" : null;
 }
 
+const recallable = (items: MemoryItem[]) => items.filter((it) => it.topic !== CALIBRATION_TOPIC);
+
 /**
  * Ids in the index that `projection` proves are gone.
  *
@@ -383,7 +386,8 @@ async function freshIndex(
 export function reconcileCorpus(opts: ReconcileOptions = {}): Promise<ReconcileResult> {
   return serialized(async () => {
     const { idx, setAside } = await freshIndex(opts);
-    const projection = scanCorpus();
+    const scanned = scanCorpus();
+    const projection = { ...scanned, items: recallable(scanned.items) };
     const failures: string[] = [];
     const stale = await staleIds(idx, projection, failures);
     const result = await applyReconcile(idx, projection.items, stale, {
@@ -458,10 +462,11 @@ export function reconcileSource(path: string): Promise<ReconcileResult> {
       return applyReconcile(idx, [], stale, { complete: true, failures: [] });
     }
 
-    const snap: SourceSnapshot =
+    const projected: SourceSnapshot =
       kind === "journal"
         ? projectJournalFile(absPath, journalDir)
         : projectEntityFile(absPath, entitiesDir);
+    const snap = { ...projected, items: recallable(projected.items) };
     if (snap.status !== "ok") {
       return applyReconcile(idx, snap.items, [], {
         complete: false,

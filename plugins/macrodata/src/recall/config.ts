@@ -146,6 +146,13 @@ export function getReindexHaltedPath(): string {
   return join(getRecallDir(), "reindex-halted");
 }
 
+/**
+ * Journal topic the recall hook asks the agent to log usefulness verdicts under.
+ * Those lines quote the hits they grade, so the recall index leaves them out:
+ * indexed, they outrank the entries they describe.
+ */
+export const CALIBRATION_TOPIC = "ambient-memory-calibration";
+
 export function getCalibrationLog(): string {
   return join(getRecallDir(), "calibration.jsonl");
 }

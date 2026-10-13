@@ -199,6 +199,40 @@ describe("recall reconciliation", () => {
     expect(embedded).toEqual(["[t] new"]);
   });
 
+  test("calibration verdicts stay out of the index on full and single-file passes", async () => {
+    const day = journal("2026-09-23.jsonl");
+    const cal = (verdict: string) => line("ambient-memory-calibration", verdict);
+    put(day, [line("t", "fact"), cal("0.9 off-topic")].join("\n") + "\n");
+    const r = await recall.reconcileCorpus();
+
+    expect(r).toMatchObject({ embedded: 1, pruned: 0 });
+    expect(embedded).toEqual(["[t] fact"]);
+    expect(ids()).toEqual(["journal-2026-09-23.jsonl-0"]);
+
+    put(
+      day,
+      [line("t", "fact"), cal("0.9 off-topic"), line("t", "next"), cal("0.8 useful")].join("\n") +
+        "\n",
+    );
+    await recall.reconcileSource(day);
+    expect(ids()).toEqual(["journal-2026-09-23.jsonl-0", "journal-2026-09-23.jsonl-2"]);
+  });
+
+  test("a vector already indexed for a calibration line is pruned", async () => {
+    const day = journal("2026-09-23.jsonl");
+    put(day, [line("t", "fact"), line("t", "verdict")].join("\n") + "\n");
+    await recall.reconcileCorpus();
+
+    put(
+      day,
+      [line("t", "fact"), line("ambient-memory-calibration", "verdict")].join("\n") + "\n",
+    );
+    const r = await recall.reconcileCorpus();
+
+    expect(r).toMatchObject({ pruned: 1, embedded: 0 });
+    expect(ids()).toEqual(["journal-2026-09-23.jsonl-0"]);
+  });
+
   test("force re-embeds everything even when content is unchanged", async () => {
     put(entity("people/alice.md"), "# Alice\n");
     await recall.reconcileCorpus();

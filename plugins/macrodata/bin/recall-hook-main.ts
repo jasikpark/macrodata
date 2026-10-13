@@ -31,6 +31,7 @@ import type { SearchResult } from "../src/recall/indexer.ts";
 import { buildHookQuery, analyzeTranscript, scrubOperationalNoise } from "../src/recall/query.ts";
 import { memKey, recordAccess } from "../src/recall/access.ts";
 import {
+  CALIBRATION_TOPIC,
   getCalibrationLog,
   getExcludePath,
   getInboxPath,
@@ -288,7 +289,7 @@ async function main(): Promise<void> {
     const verdictGuidance = askVerdict
       ? `\n<recall-calibration sampled="~${Math.round(VERDICT_RATE * 100)}%">\n` +
         `Were any of the above relevant to what you're doing right now? Before the turn ends, ` +
-        `log a one-line verdict via log_journal(topic="ambient-memory-calibration"): the scores + ` +
+        `log a one-line verdict via log_journal(topic="${CALIBRATION_TOPIC}"): the scores + ` +
         `useful | off-topic + why. (Sampled, so it won't fire every recall.)\n</recall-calibration>`
       : "";
     const visible = `[macrodata-recall] ${chunks.length} hit(s) from ${env.tool_name ?? event} · recency ${halfLife}d half-life · ${tag}${askVerdict ? " · ⊙ verdict requested" : ""}\n${debugBlock}`;

@@ -59,6 +59,8 @@ export interface MemoryItem {
   source: string;
   section?: string;
   timestamp?: string;
+  /** Journal entries only: the entry's topic tag. */
+  topic?: string;
 }
 
 /** Where a snapshot came from, and what parse rules produced it. */
@@ -255,6 +257,7 @@ export function projectJournalFile(absPath: string, journalDir = getJournalDir()
       content: `[${record.topic}] ${record.content}`,
       source: snapshot.source,
       timestamp: typeof record.timestamp === "string" ? record.timestamp : undefined,
+      topic: record.topic,
     });
   }
 
