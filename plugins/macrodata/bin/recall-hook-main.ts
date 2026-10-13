@@ -220,7 +220,9 @@ async function main(): Promise<void> {
         sources: chunks.map(srcLabel),
         // Per-STAGE breakdown so calibration sweeps can see WHY a hit ranked, not just
         // the conflated final: rerank (final cross-encoder), rrf (fused recall), recency factor.
+        // `key` joins a hit to its record_recall_verdict rows in verdicts.jsonl.
         hits: chunks.map((h) => ({
+          key: memKey(h),
           src: srcLabel(h),
           rerank: Number(h.score.toFixed(3)),
           rrf: h.rrf != null ? Number(h.rrf.toFixed(4)) : null,
@@ -275,21 +277,20 @@ async function main(): Promise<void> {
     // block early and pass itself off as post-recall context.
     const excerpt = (s: string) =>
       s.replace(/\s+/g, " ").split("</macrodata-recall").join("<\\/macrodata-recall").slice(0, 220);
+    // `key` is the memKey that record_recall_verdict takes to grade this hit.
     const row = (h: SearchResult) =>
-      `- rerank ${h.score.toFixed(2)} · rrf ${fmt(h.rrf, 3)}${mmrSeg(h)} · rec (${fmt(h.recency, 2)} · seen ${ageLabel(h.timestamp)}) — ${srcLabel(h)}\n  ${excerpt(h.content)}`;
+      `- rerank ${h.score.toFixed(2)} · rrf ${fmt(h.rrf, 3)}${mmrSeg(h)} · rec (${fmt(h.recency, 2)} · seen ${ageLabel(h.timestamp)}) · key ${memKey(h)} — ${srcLabel(h)}\n  ${excerpt(h.content)}`;
     const block = "<macrodata-recall>\n" + chunks.map(row).join("\n") + "\n</macrodata-recall>";
     const debugBlock = chunks.map(row).join("\n");
     // Sampled calibration prompt: on ~VERDICT_RATE of injections, ask the agent to
-    // journal a usefulness verdict. Goes in additionalContext (model-facing) so the
-    // agent acts on it; the human sees a marker in systemMessage. Reinstates the
-    // first-iteration ambient-memory-calibration loop (cf. feedback_ambient_calibration),
-    // now sampled to avoid flooding the turn.
+    // grade the hits. Goes in additionalContext (model-facing) so the agent acts on
+    // it; the human sees a marker in systemMessage.
     const askVerdict = VERDICT_RATE > 0 && Math.random() < VERDICT_RATE;
     const verdictGuidance = askVerdict
       ? `\n<recall-calibration sampled="~${Math.round(VERDICT_RATE * 100)}%">\n` +
         `Were any of the above relevant to what you're doing right now? Before the turn ends, ` +
-        `log a one-line verdict via log_journal(topic="ambient-memory-calibration"): the scores + ` +
-        `useful | off-topic + why. (Sampled, so it won't fire every recall.)\n</recall-calibration>`
+        `grade each hit by its key with record_recall_verdict, not log_journal. ` +
+        `(Sampled, so it won't fire every recall.)\n</recall-calibration>`
       : "";
     const visible = `[macrodata-recall] ${chunks.length} hit(s) from ${env.tool_name ?? event} · recency ${halfLife}d half-life · ${tag}${askVerdict ? " · ⊙ verdict requested" : ""}\n${debugBlock}`;
     process.stdout.write(JSON.stringify({

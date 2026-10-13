@@ -44,6 +44,7 @@ import {
   getRemindersDir,
 } from "./config.js";
 import { unlinkSync } from "fs";
+import { VERDICTS, recordVerdicts } from "./recall/verdicts.js";
 import { getRecentJournalEntries, type JournalEntry } from "./journal.js";
 import { cronTooFrequent, SAFE_ID_RE, isSafeId, onceExpressionError } from "./reminders.js";
 
@@ -219,6 +220,35 @@ server.tool(
           text: `Logged to journal: ${topic}`,
         },
       ],
+    };
+  }
+);
+
+// Tool: record_recall_verdict
+// @ts-expect-error TS2589: deep generic instantiation in the deprecated server.tool() overload (SDK 1.29.0 recommends registerTool); suppressed pending migration to registerTool
+server.tool(
+  "record_recall_verdict",
+  "Grade injected <macrodata-recall> hits. Writes to the recall verdict log, not the journal, so verdicts never get recalled themselves.",
+  {
+    verdicts: z
+      .array(
+        z.object({
+          key: z.string().describe("The hit's key, as printed on its recall row"),
+          verdict: z
+            .enum(VERDICTS)
+            .describe(
+              "useful: informed the work · reminder: not needed for this task but worth being nudged about · redundant: already in context · off-topic: unrelated to the turn · stale: relevant but outdated or superseded"
+            ),
+          note: z.string().optional().describe("Why, in a few words"),
+        })
+      )
+      .describe("One entry per hit you're grading"),
+    note: z.string().optional().describe("Anything about the slate as a whole, e.g. what the turn was actually about"),
+  },
+  async ({ verdicts, note }) => {
+    recordVerdicts(verdicts, note, new Date().toISOString());
+    return {
+      content: [{ type: "text" as const, text: `Recorded ${verdicts.length} recall verdict(s)` }],
     };
   }
 );

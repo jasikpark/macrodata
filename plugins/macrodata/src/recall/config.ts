@@ -150,6 +150,10 @@ export function getCalibrationLog(): string {
   return join(getRecallDir(), "calibration.jsonl");
 }
 
+export function getVerdictLog(): string {
+  return join(getRecallDir(), "verdicts.jsonl");
+}
+
 export function getAccessLog(): string {
   return join(getRecallDir(), "access-events.jsonl");
 }
