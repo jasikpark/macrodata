@@ -205,10 +205,24 @@ function spawnHeadless(schedule: Schedule) {
         : logError(`Headless ${schedule.id} exited with code ${code}`)
     );
     proc.unref();
+    if (process.platform === "darwin" && proc.pid) holdSleepAssertion(proc.pid, schedule.id);
     log(`Spawned headless claude --print for ${schedule.id} (model ${resolveModel(schedule.model)})`);
   } catch (err) {
     logError(`Failed to spawn headless for ${schedule.id}: ${String(err)}`);
   }
+}
+
+// A run that fires while the Mac sleeps only advances during ~45s maintenance
+// DarkWakes. `caffeinate -w` holds the assertion exactly as long as the child
+// lives. `-s` only applies on AC; on battery with the lid closed macOS sleeps
+// regardless.
+function holdSleepAssertion(pid: number, id: string) {
+  const caffeinate = spawn("caffeinate", ["-is", "-w", String(pid)], {
+    stdio: "ignore",
+    detached: true,
+  });
+  caffeinate.on("error", (err) => logError(`caffeinate failed for ${id}: ${String(err)}`));
+  caffeinate.unref();
 }
 
 function ensureDirectories() {
