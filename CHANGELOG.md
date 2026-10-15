@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.1
+
+### Patch Changes
+
+- [#95](https://github.com/jasikpark/macrodata/pull/95) [`fdfd3ab`](https://github.com/jasikpark/macrodata/commit/fdfd3ab65350cf779994c587917a539e771f1250) Thanks [@jasikpark](https://github.com/jasikpark)! - Keep the Mac awake while a headless scheduled run is in progress. On macOS the daemon now holds a `caffeinate -is` assertion until the `claude --print` child exits, capped at 4 hours, so a run that fires with the lid closed on AC no longer crawls through brief maintenance wakes. On battery it blocks idle sleep while the run is alive; with the lid closed on battery macOS sleeps regardless.
+
 ## 0.13.0
 
 ### Minor Changes
