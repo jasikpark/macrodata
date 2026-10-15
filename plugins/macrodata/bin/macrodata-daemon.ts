@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, rea
 import { join, basename } from "path";
 import { Cron } from "croner";
 import { getStateRoot, getEntitiesDir, getJournalDir, getIndexDir, getRemindersDir } from "../src/config.js";
-import { formatReminderEntry, upsertReminderLine, buildHeadlessArgs, resolveModel, resolveDelivery, cronTooFrequent, isSafeId, notificationText, isSymlinkPath } from "../src/reminders.js";
+import { formatReminderEntry, upsertReminderLine, buildHeadlessArgs, caffeinateArgs, resolveModel, resolveDelivery, cronTooFrequent, isSafeId, notificationText, isSymlinkPath } from "../src/reminders.js";
 
 // The indexing modules pull in @huggingface/transformers + vectra (multi-second
 // import). Load them lazily so the daemon writes its PID file and starts
@@ -205,9 +205,26 @@ function spawnHeadless(schedule: Schedule) {
         : logError(`Headless ${schedule.id} exited with code ${code}`)
     );
     proc.unref();
+    if (process.platform === "darwin" && proc.pid) holdSleepAssertion(proc.pid, schedule.id);
     log(`Spawned headless claude --print for ${schedule.id} (model ${resolveModel(schedule.model)})`);
   } catch (err) {
     logError(`Failed to spawn headless for ${schedule.id}: ${String(err)}`);
+  }
+}
+
+// A run that fires while the Mac sleeps only advances during ~45s maintenance
+// DarkWakes; see caffeinateArgs for what the assertion does and doesn't block.
+function holdSleepAssertion(pid: number, id: string) {
+  try {
+    const caffeinate = spawn("caffeinate", caffeinateArgs(pid), { stdio: "ignore", detached: true });
+    caffeinate.on("error", (err) => logError(`caffeinate failed for ${id}: ${String(err)}`));
+    // A pid that already exited is rc=0, so nonzero means the assertion was refused.
+    caffeinate.on("exit", (code) => {
+      if (code !== 0) logError(`caffeinate for ${id} exited with code ${code}`);
+    });
+    caffeinate.unref();
+  } catch (err) {
+    logError(`caffeinate failed for ${id}: ${String(err)}`);
   }
 }
 

@@ -11,7 +11,7 @@
 
 import { describe, test, expect, beforeEach, afterEach, afterAll } from "bun:test";
 import { spawn } from "child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "fs";
 import { join, dirname } from "path";
 import {
   createTestContext,
@@ -19,7 +19,7 @@ import {
   addReminder,
   type TestContext,
 } from "./helpers";
-import { isSymlinkPath } from "../src/reminders";
+import { caffeinateArgs, isSymlinkPath } from "../src/reminders";
 
 // Track all spawned daemon processes for cleanup, including ones whose PID
 // file never appeared — otherwise a startup slower than the poll window leaks
@@ -30,13 +30,14 @@ const startedDaemons: { pid: number; ctx: TestContext }[] = [];
 // Get paths
 const DAEMON_SCRIPT = join(dirname(import.meta.dir), "bin", "macrodata-daemon.ts");
 
-async function startDaemon(ctx: TestContext): Promise<number | null> {
+async function startDaemon(ctx: TestContext, env: Record<string, string> = {}): Promise<number | null> {
   return new Promise((resolve) => {
     const proc = spawn("bun", ["run", DAEMON_SCRIPT], {
       env: {
         ...process.env,
         MACRODATA_ROOT: ctx.root,
         MACRODATA_OPENCODE_DB_PATH: join(ctx.root, "nonexistent-opencode.db"),
+        ...env,
       },
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
@@ -422,6 +423,47 @@ describe("daemon", () => {
       const pending = existsSync(pendingFile) ? readFileSync(pendingFile, "utf-8") : "";
       expect(pending).not.toContain("SECRET-PAYLOAD-SHOULD-NOT-BE-INJECTED");
     });
+  });
+
+  describe("headless", () => {
+    // Fake `claude` and `caffeinate` on PATH record their pid and argv.
+    test.skipIf(process.platform !== "darwin")(
+      "spawns caffeinate with a cap, waiting on the claude child's pid",
+      async () => {
+        const fakeBin = join(ctx.root, "fake-bin");
+        mkdirSync(fakeBin);
+        const childPidFile = join(ctx.root, "child.pid");
+        const caffeinateArgsFile = join(ctx.root, "caffeinate.args");
+        writeFileSync(join(fakeBin, "claude"), `#!/bin/sh\necho $$ > "${childPidFile}"\nsleep 2\n`, { mode: 0o755 });
+        writeFileSync(join(fakeBin, "caffeinate"), `#!/bin/sh\necho "$@" > "${caffeinateArgsFile}"\n`, { mode: 0o755 });
+        // An expired one-shot is deleted unfired, so the lead time outlasts
+        // startDaemon's 2s pid-file wait.
+        writeFileSync(
+          join(ctx.remindersDir, "caffeinate-test.json"),
+          JSON.stringify({
+            id: "caffeinate-test",
+            type: "once",
+            expression: new Date(Date.now() + 5000).toISOString(),
+            payload: "test payload",
+            delivery: "headless",
+          }),
+        );
+
+        const pid = await startDaemon(ctx, { PATH: `${fakeBin}:${process.env.PATH}` });
+        expect(pid).not.toBeNull();
+
+        // Non-empty, not just present: `echo > file` truncates before it writes.
+        const written = (f: string) => existsSync(f) && readFileSync(f, "utf-8").trim() !== "";
+        for (let i = 0; i < 80 && !(written(caffeinateArgsFile) && written(childPidFile)); i++) {
+          await Bun.sleep(250);
+        }
+        expect(written(childPidFile), "headless claude never ran").toBe(true);
+        expect(written(caffeinateArgsFile), "caffeinate never ran").toBe(true);
+        const childPid = readFileSync(childPidFile, "utf-8").trim();
+        expect(readFileSync(caffeinateArgsFile, "utf-8").trim()).toBe(caffeinateArgs(Number(childPid)).join(" "));
+      },
+      30_000,
+    );
   });
 
   describe("SIGHUP reload", () => {

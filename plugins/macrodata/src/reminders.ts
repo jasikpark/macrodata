@@ -200,6 +200,23 @@ export function buildHeadlessArgs(s: ReminderInput): string[] {
 }
 
 /**
+ * Upper bound on a headless run's sleep assertion: the daemon doesn't supervise
+ * headless children, so a hung `claude` would otherwise keep the Mac awake
+ * until reboot.
+ */
+export const HEADLESS_AWAKE_CAP_SECONDS = 4 * 60 * 60;
+
+/**
+ * Argv for the `caffeinate` held beside a headless child (macOS only). It
+ * releases when the child exits or the cap passes, whichever is first. `-s`
+ * blocks system sleep on AC only; `-i` blocks idle sleep on battery too, but
+ * nothing stops clamshell sleep on battery.
+ */
+export function caffeinateArgs(pid: number): string[] {
+  return ["-is", "-t", String(HEADLESS_AWAKE_CAP_SECONDS), "-w", String(pid)];
+}
+
+/**
  * True if `path` is itself a symlink (its own dirent, via lstat — not
  * whatever it resolves to). This is the actual guard against a symlinked
  * schedule file: chokidar's `followSymlinks: false` on the reminders watcher
