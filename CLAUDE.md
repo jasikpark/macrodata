@@ -56,7 +56,7 @@ Two daemon tests (`SIGHUP reload`, `detects new schedules at runtime`) are `Bun.
 
 Releases are automated with [changesets](https://github.com/changesets/changesets), **version-only**: it never publishes to npm (the plugin installs via the Claude Code marketplace, and the package is `private`). The flow:
 
-1. **Per change:** add a changeset — `bunx changeset` (pick a bump level, write a summary). Commit the `.changeset/*.md` with the PR. This is what keeps `CHANGELOG.md` honest (a skipped changeset = a missing changelog entry, the failure mode hit pre-0.4.0).
+1. **Per change:** add a changeset — `bunx changeset` (pick a bump level, write a summary). Commit the `.changeset/*.md` with the PR. The frontmatter must name `"macrodata"` (the root `package.json`), not `"@macrodata/opencode"` (`plugins/macrodata/package.json`): `.changeset/config.json` ignores the latter, so it releases nothing — `bunx changeset status` should list `macrodata`. This is what keeps `CHANGELOG.md` honest (a skipped changeset = a missing changelog entry, the failure mode hit pre-0.4.0).
 2. **On merge to `main`:** `.github/workflows/release.yml` opens/refreshes a **"ci: release"** PR via `changesets/action`. That PR runs `bun run version` → `changeset version` bumps `plugins/macrodata/package.json` + writes `CHANGELOG.md`, and `scripts/version.ts` syncs the new version into `plugin.json` + `marketplace.json` (the 3-file lockstep, automated).
 3. **Merge the "ci: release" PR** → `changesets/action` runs `bunx changeset tag` to cut the release. It creates a git tag **and** a GitHub Release object, both named `macrodata@X.Y.Z` (verified Aug 13 2026 against 0.7.1–0.7.5; the older `vX.Y.Z` scheme ended at v0.5.0). No npm publish.
 
