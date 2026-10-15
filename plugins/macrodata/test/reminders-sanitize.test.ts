@@ -18,6 +18,8 @@ import {
   formatReminderEntry,
   upsertReminderLine,
   buildHeadlessArgs,
+  caffeinateArgs,
+  HEADLESS_AWAKE_CAP_SECONDS,
   cronTooFrequent,
   DEFAULT_MODEL,
   REMINDERS_HEADING,
@@ -98,6 +100,13 @@ describe("resolveModel", () => {
         expect(allowed.has(resolveModel(m))).toBe(true);
       })
     );
+  });
+});
+
+describe("caffeinateArgs (headless sleep assertion)", () => {
+  test("blocks idle and system sleep, capped, until the child pid exits", () => {
+    expect(caffeinateArgs(4242)).toEqual(["-is", "-t", "14400", "-w", "4242"]);
+    expect(HEADLESS_AWAKE_CAP_SECONDS).toBe(14400);
   });
 });
 

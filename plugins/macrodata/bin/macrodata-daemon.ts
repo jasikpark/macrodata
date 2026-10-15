@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, rea
 import { join, basename } from "path";
 import { Cron } from "croner";
 import { getStateRoot, getEntitiesDir, getJournalDir, getIndexDir, getRemindersDir } from "../src/config.js";
-import { formatReminderEntry, upsertReminderLine, buildHeadlessArgs, resolveModel, resolveDelivery, cronTooFrequent, isSafeId, notificationText, isSymlinkPath } from "../src/reminders.js";
+import { formatReminderEntry, upsertReminderLine, buildHeadlessArgs, caffeinateArgs, resolveModel, resolveDelivery, cronTooFrequent, isSafeId, notificationText, isSymlinkPath } from "../src/reminders.js";
 
 // The indexing modules pull in @huggingface/transformers + vectra (multi-second
 // import). Load them lazily so the daemon writes its PID file and starts
@@ -213,16 +213,19 @@ function spawnHeadless(schedule: Schedule) {
 }
 
 // A run that fires while the Mac sleeps only advances during ~45s maintenance
-// DarkWakes. `caffeinate -w` holds the assertion exactly as long as the child
-// lives. `-s` only applies on AC; on battery with the lid closed macOS sleeps
-// regardless.
+// DarkWakes; see caffeinateArgs for what the assertion does and doesn't block.
 function holdSleepAssertion(pid: number, id: string) {
-  const caffeinate = spawn("caffeinate", ["-is", "-w", String(pid)], {
-    stdio: "ignore",
-    detached: true,
-  });
-  caffeinate.on("error", (err) => logError(`caffeinate failed for ${id}: ${String(err)}`));
-  caffeinate.unref();
+  try {
+    const caffeinate = spawn("caffeinate", caffeinateArgs(pid), { stdio: "ignore", detached: true });
+    caffeinate.on("error", (err) => logError(`caffeinate failed for ${id}: ${String(err)}`));
+    // A pid that already exited is rc=0, so nonzero means the assertion was refused.
+    caffeinate.on("exit", (code) => {
+      if (code !== 0) logError(`caffeinate for ${id} exited with code ${code}`);
+    });
+    caffeinate.unref();
+  } catch (err) {
+    logError(`caffeinate failed for ${id}: ${String(err)}`);
+  }
 }
 
 function ensureDirectories() {
