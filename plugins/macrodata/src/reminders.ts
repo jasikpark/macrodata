@@ -238,3 +238,47 @@ export function isSymlinkPath(path: string): boolean {
     return false;
   }
 }
+
+/**
+ * Variables that tell a `claude` process it is a child of a desktop-app /
+ * SDK host session. The daemon is usually started by a SessionStart hook
+ * *inside* such a session, so without scrubbing, every headless child inherits
+ * them and believes it has a host too.
+ *
+ * The one that matters: with `CLAUDE_CODE_ENTRYPOINT=claude-desktop` (or
+ * `local-agent`) plus `CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH=1`, Claude Code
+ * replaces its own OAuth-refresh path with "ask the host over the control
+ * channel". A detached `--print` child has no host (stdin is ignored and the
+ * inherited socket belongs to a session that has since exited), so the first
+ * time its access token is rejected it waits on nobody and exits 1 with
+ * "Not logged in · Please run /login" — while `claude auth status` says
+ * loggedIn: true. The runs only work while an interactive session keeps the
+ * keychain token fresh; leave the machine alone long enough and every tick
+ * fails until a session is opened again. Observed Aug–Oct 2026 as five
+ * multi-day outages, all misdiagnosed as login expiry.
+ *
+ * `CLAUDECODE` is deliberately kept: it is the nested-session marker and does
+ * not gate `--print`.
+ */
+export const HOST_SESSION_ENV_VARS = [
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH",
+  "CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH",
+  "CLAUDE_CODE_HOST_AUTH_REFRESH_TIMEOUT_MS",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_CODE_HOST_SESSION_ID",
+  "CLAUDE_CODE_CHILD_SESSION",
+] as const;
+
+/**
+ * The environment for a headless `claude --print` child: the daemon's own
+ * environment minus the host-session variables above, so the child behaves
+ * like `claude -p` typed in a terminal (same keychain, same permissions, and
+ * crucially its own token refresh).
+ */
+export function headlessSpawnEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env };
+  for (const key of HOST_SESSION_ENV_VARS) delete out[key];
+  return out;
+}
