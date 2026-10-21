@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, rea
 import { join, basename } from "path";
 import { Cron } from "croner";
 import { getStateRoot, getEntitiesDir, getJournalDir, getIndexDir, getRemindersDir } from "../src/config.js";
-import { formatReminderEntry, upsertReminderLine, buildHeadlessArgs, caffeinateArgs, resolveModel, resolveDelivery, cronTooFrequent, isSafeId, notificationText, isSymlinkPath } from "../src/reminders.js";
+import { formatReminderEntry, upsertReminderLine, buildHeadlessArgs, headlessSpawnEnv, caffeinateArgs, resolveModel, resolveDelivery, cronTooFrequent, isSafeId, notificationText, isSymlinkPath } from "../src/reminders.js";
 
 // The indexing modules pull in @huggingface/transformers + vectra (multi-second
 // import). Load them lazily so the daemon writes its PID file and starts
@@ -192,6 +192,10 @@ function spawnHeadless(schedule: Schedule) {
   try {
     const proc = spawn("claude", buildHeadlessArgs(schedule), {
       cwd: getStateRoot(),
+      // Drop the desktop-app host-session variables inherited from the session
+      // that started the daemon — with them, the child defers OAuth refresh to a
+      // host it doesn't have and dies "Not logged in" once the token expires.
+      env: headlessSpawnEnv(process.env),
       stdio: "ignore",
       detached: true,
     });

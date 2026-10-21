@@ -20,6 +20,8 @@ import {
   buildHeadlessArgs,
   caffeinateArgs,
   HEADLESS_AWAKE_CAP_SECONDS,
+  headlessSpawnEnv,
+  HOST_SESSION_ENV_VARS,
   cronTooFrequent,
   DEFAULT_MODEL,
   REMINDERS_HEADING,
@@ -107,6 +109,45 @@ describe("caffeinateArgs (headless sleep assertion)", () => {
   test("blocks idle and system sleep, capped, until the child pid exits", () => {
     expect(caffeinateArgs(4242)).toEqual(["-is", "-t", "14400", "-w", "4242"]);
     expect(HEADLESS_AWAKE_CAP_SECONDS).toBe(14400);
+  });
+});
+
+describe("headlessSpawnEnv (headless delivery)", () => {
+  // The daemon is started by a SessionStart hook inside a desktop-app session;
+  // this is a representative slice of what it inherits.
+  const hostEnv: NodeJS.ProcessEnv = {
+    HOME: "/Users/x",
+    PATH: "/usr/bin",
+    CLAUDECODE: "1",
+    CLAUDE_CODE_ENTRYPOINT: "claude-desktop",
+    CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: "1",
+    CLAUDE_CODE_MESSAGING_SOCKET: "/tmp/cc-socks/2179.sock",
+    CLAUDE_CODE_MESSAGING_TOKEN: "t",
+    CLAUDE_CODE_HOST_SESSION_ID: "local_abc",
+    CLAUDE_CODE_CHILD_SESSION: "1",
+  };
+
+  test("strips every host-session variable and nothing else", () => {
+    const env = headlessSpawnEnv(hostEnv);
+    for (const key of HOST_SESSION_ENV_VARS) expect(env).not.toHaveProperty(key);
+    expect(env.HOME).toBe("/Users/x");
+    expect(env.PATH).toBe("/usr/bin");
+    // nested-session marker is not a host-auth signal; it stays
+    expect(env.CLAUDECODE).toBe("1");
+  });
+
+  test("the auth-refresh gate specifically is closed: no entrypoint, no host-refresh flag", () => {
+    const env = headlessSpawnEnv(hostEnv);
+    expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+    expect(env.CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH).toBeUndefined();
+  });
+
+  test("does not mutate the input and is a no-op on a plain terminal env", () => {
+    const before = { ...hostEnv };
+    headlessSpawnEnv(hostEnv);
+    expect(hostEnv).toEqual(before);
+    const plain = { HOME: "/Users/x", PATH: "/usr/bin" };
+    expect(headlessSpawnEnv(plain)).toEqual(plain);
   });
 });
 
