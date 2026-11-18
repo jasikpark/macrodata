@@ -42,11 +42,6 @@ import {
 const FLOOR = envNum("MACRODATA_RECALL_FLOOR", 0.5, 0);
 const LIMIT = envNum("MACRODATA_RECALL_LIMIT", 3, 1);
 const MIN_QUERY_CHARS = 8;
-// Sampled calibration: fraction of recall INJECTIONS that also ask the agent to
-// journal a usefulness verdict. Rate-limited so it doesn't flood the turn with
-// meta-tasks. 0 disables. This is the lossless human-judgment signal (distinct
-// from the punted "was-it-referenced" inference) that feeds floor/recency tuning.
-const VERDICT_RATE = envNum("MACRODATA_RECALL_VERDICT_RATE", 0.25, 0);
 
 function emitSilent(): never {
   // No output = nothing injected.
@@ -259,8 +254,7 @@ async function main(): Promise<void> {
     // the conflated final. rerank = final cross-encoder; rrf = fused recall score
     // (pre-rerank); rec = recency factor (0-1, pre-rerank selection only); "seen" =
     // effective last_accessed age that rec decays from (surfacing bumps it —
-    // Porrima semantics). The model-facing verdict loop needs the same stage
-    // breakdown the human sees, or its journaled verdicts cite only the final score.
+    // Porrima semantics).
     // mmr segment: pick order + redundancy penalty at pick time. Omitted (not
     // defaulted) when absent — absence means MMR was bypassed for that slate.
     // An absent stage value renders as "?" (unknown — e.g. a version-skewed
@@ -279,22 +273,10 @@ async function main(): Promise<void> {
       `- rerank ${h.score.toFixed(2)} · rrf ${fmt(h.rrf, 3)}${mmrSeg(h)} · rec (${fmt(h.recency, 2)} · seen ${ageLabel(h.timestamp)}) — ${srcLabel(h)}\n  ${excerpt(h.content)}`;
     const block = "<macrodata-recall>\n" + chunks.map(row).join("\n") + "\n</macrodata-recall>";
     const debugBlock = chunks.map(row).join("\n");
-    // Sampled calibration prompt: on ~VERDICT_RATE of injections, ask the agent to
-    // journal a usefulness verdict. Goes in additionalContext (model-facing) so the
-    // agent acts on it; the human sees a marker in systemMessage. Reinstates the
-    // first-iteration ambient-memory-calibration loop (cf. feedback_ambient_calibration),
-    // now sampled to avoid flooding the turn.
-    const askVerdict = VERDICT_RATE > 0 && Math.random() < VERDICT_RATE;
-    const verdictGuidance = askVerdict
-      ? `\n<recall-calibration sampled="~${Math.round(VERDICT_RATE * 100)}%">\n` +
-        `Were any of the above relevant to what you're doing right now? Before the turn ends, ` +
-        `log a one-line verdict via log_journal(topic="ambient-memory-calibration"): the scores + ` +
-        `useful | off-topic + why. (Sampled, so it won't fire every recall.)\n</recall-calibration>`
-      : "";
-    const visible = `[macrodata-recall] ${chunks.length} hit(s) from ${env.tool_name ?? event} · recency ${halfLife}d half-life · ${tag}${askVerdict ? " · ⊙ verdict requested" : ""}\n${debugBlock}`;
+    const visible = `[macrodata-recall] ${chunks.length} hit(s) from ${env.tool_name ?? event} · recency ${halfLife}d half-life · ${tag}\n${debugBlock}`;
     process.stdout.write(JSON.stringify({
       systemMessage: visible,
-      hookSpecificOutput: { hookEventName: event, additionalContext: block + verdictGuidance },
+      hookSpecificOutput: { hookEventName: event, additionalContext: block },
     }));
     process.exit(0);
   };
