@@ -47,6 +47,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdi
 import { join } from "path";
 import { configure, getConsoleSink, getLogger, jsonLinesFormatter } from "@logtape/logtape";
 import { envNum, pipelineSearch } from "./fts.ts";
+import { ambientProfile } from "./profiles.ts";
 import { TIMER_MAX_MS, WEDGED, withDeadline } from "./deadline.ts";
 import { getIndexDir, getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath, getSpawnStampPath, getReindexHaltedPath } from "./config.ts";
 import { embedModelLoaded, modelsLoaded } from "./models.ts";
@@ -59,8 +60,6 @@ import { parseReindexRequest } from "./reindex-request.ts";
 // a fresh state root nothing has written the mailbox yet.
 const DIR = getMailboxDir();
 mkdirSync(DIR, { recursive: true });
-const FLOOR = envNum("MACRODATA_RECALL_FLOOR", 0.5, 0);
-const LIMIT = envNum("MACRODATA_RECALL_LIMIT", 3, 1);
 const REQ_RE = /^request-(.+)\.json$/;
 const REINDEX_RE = /^reindex-.+\.json$/;
 const SWEEP_DEBOUNCE_MS = 50;
@@ -248,8 +247,8 @@ async function runPipeline(req: Request): Promise<void> {
   const budget = warm ? WEDGE_WARM_MS : WEDGE_COLD_MS;
   let hits: Awaited<ReturnType<typeof pipelineSearch>> | typeof WEDGED;
   try {
-    hits = await withDeadline(pipelineSearch(req.search, {
-      limit: LIMIT, floor: FLOOR, rerankQuery: req.rerankQuery, exclude,
+    hits = await withDeadline(pipelineSearch(req.search, ambientProfile(), {
+      rerankQuery: req.rerankQuery, exclude,
     }), budget);
   } catch (e) {
     l.error("pipeline error", { error: String(e) });
@@ -500,4 +499,4 @@ watch(DIR, () => {
 // read; the watch path is only a latency optimization. Don't remove or widen
 // it without re-measuring the rename-event behavior.
 setInterval(sweep, SWEEP_INTERVAL_MS);
-workerLog.info("watching for recall requests", { dir: DIR, floor: FLOOR, limit: LIMIT });
+workerLog.info("watching for recall requests", { dir: DIR, floor: ambientProfile().floor, limit: ambientProfile().limit });
