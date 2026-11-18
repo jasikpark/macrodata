@@ -12,6 +12,7 @@
  * time.
  */
 
+import type { RetrievalProfile } from "./profiles.ts";
 import { LocalIndex } from "vectra";
 import { statSync } from "fs";
 import { join } from "path";
@@ -278,9 +279,11 @@ export function mmrSelect(slate: PoolCandidate[], k: number, lambda: number): Po
 // on pure relevance.
 export async function pipelineSearch(
   query: string,
-  opts: { limit?: number; task?: string; floor?: number; rerankQuery?: string; exclude?: Set<string> } = {},
+  profile: RetrievalProfile,
+  opts: { task?: string; rerankQuery?: string; exclude?: Set<string> } = {},
 ): Promise<SearchResult[]> {
-  const { limit = 5, task, floor = 0.5, rerankQuery, exclude } = opts;
+  const { legK, rerankPool: pool, mmrLambda: lambda, halfLifeDays, floor, limit } = profile;
+  const { task, rerankQuery, exclude } = opts;
   // Freshness check BEFORE the vector leg — searchMemory uses the cached
   // LocalIndex, so the reset must happen ahead of it, not just in ftsSearch.
   checkIndexFresh();
@@ -291,13 +294,9 @@ export async function pipelineSearch(
   // index.json read during a concurrent reindex. Isolate each leg so
   // one failing degrades to the other instead of killing the whole pipeline;
   // an unguarded ftsSearch throw would also discard a successful vector result.
-  // Leg width: Porrima's passive searchLimit tiers are 28/40/64
-  // (fast/balanced/thorough); 40 matches balanced. Widening is free at query
-  // time — vectra's queryItems scores every item and slices, and the FTS leg
-  // scans the full corpus regardless of the requested limit. Keep
-  // MACRODATA_RECALL_RERANK_POOL below the fused slate size (legK * 2) or the
-  // pool-selection stage goes vacuous and recency/MMR silently stop gating.
-  const legK = envNum("MACRODATA_RECALL_LEG_K", 40, 1);
+  // Leg width (profile.legK) is free at query time: vectra's queryItems scores
+  // every item and slices, and the FTS leg scans the full corpus regardless of
+  // the requested limit.
   let vec: SearchResult[] = [];
   try {
     vec = await searchMemory(query, { limit: legK, task });
@@ -345,7 +344,6 @@ export async function pipelineSearch(
   // created_at once and owns it. A dormant entity fades from ambient recall but
   // stays reachable via explicit search_memory. (Caveat: a move/copy can reset
   // birthtime, so it's a prior, not ground truth.)
-  const halfLifeDays = envNum("MACRODATA_RECALL_HALFLIFE_DAYS", 30, 0.1);
   const now = Date.now();
   const entitiesDir = getEntitiesDir();
   const seedCache = new Map<string, string | undefined>();
@@ -383,8 +381,6 @@ export async function pipelineSearch(
   // recency a no-op (everyone gets reranked); tighten it to give recency bite.
   // Seed is precomputed once per candidate (not in the sort comparator) to avoid
   // redundant statSync calls.
-  const pool = envNum("MACRODATA_RECALL_RERANK_POOL", 20, 1);
-  const lambda = envNum("MACRODATA_RECALL_MMR_LAMBDA", 0.55, 0);
   const slate = [...fused.values()]
     .map((x) => { const rec = recency(lastAccessed(x.item)); return { item: x.item, rrf: x.rrf, rec, w: x.rrf * rec, vector: contentVec?.get(x.item.content) } as PoolCandidate; })
     .sort((a, b) => b.w - a.w);
@@ -409,9 +405,16 @@ export async function pipelineSearch(
     console.warn(`[fts] rerank failed, returning no hits: ${String(e)}`);
     return [];
   }
-  return candidates
-    .map((c, i) => ({ ...c.item, score: scores[i], rrf: c.rrf, recency: c.rec, wRank: c.wRank, mmrPick: c.mmr?.pick, mmrSim: c.mmr?.maxSim, timestamp: lastAccessed(c.item) }))
-    .filter((c) => c.score >= floor)
+  return finalizeHits(
+    candidates.map((c, i) => ({ ...c.item, score: scores[i], rrf: c.rrf, recency: c.rec, wRank: c.wRank, mmrPick: c.mmr?.pick, mmrSim: c.mmr?.maxSim, timestamp: lastAccessed(c.item) })),
+    { floor, limit },
+  );
+}
+
+/** Final stage: drop hits under the profile's floor, rank by rerank score, cap at its limit. */
+export function finalizeHits<T extends { score: number }>(hits: T[], profile: Pick<RetrievalProfile, "floor" | "limit">): T[] {
+  return hits
+    .filter((h) => h.score >= profile.floor)
     .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+    .slice(0, profile.limit);
 }

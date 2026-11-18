@@ -26,7 +26,8 @@
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "fs";
-import { envNum, pipelineSearch } from "../src/recall/fts.ts";
+import { pipelineSearch } from "../src/recall/fts.ts";
+import { ambientProfile } from "../src/recall/profiles.ts";
 import type { SearchResult } from "../src/recall/indexer.ts";
 import { buildHookQuery, analyzeTranscript, scrubOperationalNoise } from "../src/recall/query.ts";
 import { memKey, recordAccess } from "../src/recall/access.ts";
@@ -39,8 +40,7 @@ import {
   getRequestPath,
 } from "../src/recall/config.ts";
 
-const FLOOR = envNum("MACRODATA_RECALL_FLOOR", 0.5, 0);
-const LIMIT = envNum("MACRODATA_RECALL_LIMIT", 3, 1);
+const AMBIENT = ambientProfile();
 const MIN_QUERY_CHARS = 8;
 
 function emitSilent(): never {
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
       const d = (Date.now() - Date.parse(ts)) / 86_400_000;
       return Number.isNaN(d) ? "evergreen" : d < 1 ? "<1d ago" : `${Math.round(d)}d ago`;
     };
-    const halfLife = envNum("MACRODATA_RECALL_HALFLIFE_DAYS", 30, 0.1);
+    const halfLife = AMBIENT.halfLifeDays;
     // One row format for BOTH surfaces (model additionalContext + human
     // systemMessage): per-STAGE numbers so neither reader judges calibration on
     // the conflated final. rerank = final cross-encoder; rrf = fused recall score
@@ -318,7 +318,7 @@ async function main(): Promise<void> {
     // blackout row needs identities, not just a count, to tell true N2 (the
     // just-injected chunk re-won) from an exclude false positive.
     let filteredSrc: string[] = [];
-    // Hits the FLOOR re-check (or a malformed score) dropped after the exclude
+    // Hits the floor re-check (or a malformed score) dropped after the exclude
     // accounting — without this counter a floor-dropped hit leaves a drain row
     // (drained>0, filteredInContext<drained, n:0) matching no documented
     // signature, and a mixed row would fail the N2 test even when N2 fired.
@@ -354,7 +354,7 @@ async function main(): Promise<void> {
           const kept = raw.filter((h) => !excludeSet.has(h.content));
           filteredInContext = drained - kept.length;
           filteredSrc = raw.filter((h) => excludeSet.has(h.content)).map(srcLabel);
-          // Re-apply this process's FLOOR too, not just LIMIT: hook and worker
+          // Re-apply this process's ambient floor too, not just its limit: hook and worker
           // read separate environments, and on skew a tightened hook floor must
           // not be bypassed by hits the worker admitted under its looser one.
           // The typeof guards keep a version-skewed inbox (string scores,
@@ -366,9 +366,9 @@ async function main(): Promise<void> {
           // exclude for content the model never saw.
           const floored = kept.filter((h) =>
             typeof h.content === "string" && typeof h.source === "string" &&
-            typeof h.score === "number" && h.score >= FLOOR);
+            typeof h.score === "number" && h.score >= AMBIENT.floor);
           floorDropped = kept.length - floored.length;
-          ready = floored.slice(0, LIMIT);
+          ready = floored.slice(0, AMBIENT.limit);
           meta = parsed;
         } catch {
           drainError = true;
@@ -444,7 +444,7 @@ async function main(): Promise<void> {
   let hits: SearchResult[] = [];
   const tPipe = Date.now();
   try {
-    hits = await pipelineSearch(search, { limit: LIMIT, floor: FLOOR, rerankQuery, exclude: excludeSet });
+    hits = await pipelineSearch(search, AMBIENT, { rerankQuery, exclude: excludeSet });
   } catch {
     emitSilent(); // servers down / error — never block the tool
   }
