@@ -31,4 +31,4 @@ if (( count % INTERVAL != 0 )); then
   exit 0
 fi
 
-printf '%s' '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"<macrodata-tools-hint>For recall of past work, journals, or project context: call `mcp__plugin_macrodata_macrodata__search_memory` (semantic over journals/entities) or `mcp__plugin_macrodata_macrodata__get_recent_journal` (chronological). For lexical+semantic search across local markdown collections (wikis, docs, sources), call `mcp__plugin_qmd_qmd__query`. Skip for trivial or social prompts.</macrodata-tools-hint>"},"systemMessage":"[macrodata] injected reminder about search_memory + qmd recall tools"}'
+printf '%s' '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"<macrodata-tools-hint>For recall of past work, journals, or project context: call `mcp__plugin_macrodata_macrodata__search_memory` (semantic over journals/entities) or `mcp__plugin_macrodata_macrodata__get_recent_journal` (chronological). Skip for trivial or social prompts.</macrodata-tools-hint>"},"systemMessage":"[macrodata] injected reminder about the search_memory recall tools"}'
