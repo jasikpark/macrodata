@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0
+
+### Minor Changes
+
+- [#98](https://github.com/jasikpark/macrodata/pull/98) [`4a068a8`](https://github.com/jasikpark/macrodata/commit/4a068a89bbf83316bb6cd3d6fde8454f0026c77e) Thanks [@jasikpark](https://github.com/jasikpark)! - Ambient recall no longer asks the agent to grade its hits. About a quarter of recall injections used to carry a request to journal a usefulness verdict under `ambient-memory-calibration`; those verdicts piled up in the journal and resurfaced through recall. The request and its `MACRODATA_RECALL_VERDICT_RATE` setting are gone. Recall injection and the per-fire `calibration.jsonl` log are unchanged.
+
+### Patch Changes
+
+- [#95](https://github.com/jasikpark/macrodata/pull/95) [`fdfd3ab`](https://github.com/jasikpark/macrodata/commit/fdfd3ab65350cf779994c587917a539e771f1250) Thanks [@jasikpark](https://github.com/jasikpark)! - Keep the Mac awake while a headless scheduled run is in progress. On macOS the daemon now holds a `caffeinate -is` assertion until the `claude --print` child exits, capped at 4 hours, so a run that fires with the lid closed on AC no longer crawls through brief maintenance wakes. On battery it blocks idle sleep while the run is alive; with the lid closed on battery macOS sleeps regardless.
+
 ## 0.13.0
 
 ### Minor Changes
