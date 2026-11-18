@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.1
+
+### Patch Changes
+
+- [#102](https://github.com/jasikpark/macrodata/pull/102) [`67249bb`](https://github.com/jasikpark/macrodata/commit/67249bbb285ebca4ed97b0aa6161677f11b61733) Thanks [@jasikpark](https://github.com/jasikpark)! - The recall-tools reminder no longer points at qmd's `query` tool. Macrodata's own `search_memory` and `get_recent_journal` cover that ground, and qmd is no longer part of the setup.
+
+- [#100](https://github.com/jasikpark/macrodata/pull/100) [`4ca2146`](https://github.com/jasikpark/macrodata/commit/4ca2146731abe8386f9d64db17a12d2f21d2e823) Thanks [@jasikpark](https://github.com/jasikpark)! - Recall's tuning now lives in named retrieval profiles. The `ambient` profile drives the recall hook with the same defaults and `MACRODATA_RECALL_*` overrides as before. A new `search` profile (5 results, no score floor, relevance-leaning diversity) is ready for deliberate search tools to use.
+
 ## 0.14.0
 
 ### Minor Changes
