@@ -13,7 +13,7 @@
  * without a worker restart. The env vars tune the ambient profile only.
  */
 
-import { envNum } from "./fts.ts";
+import { envNum } from "./env.ts";
 
 export type ProfileName = "ambient" | "search";
 
