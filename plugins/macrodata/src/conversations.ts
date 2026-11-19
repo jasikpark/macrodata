@@ -10,7 +10,19 @@
  * - Metadata: project, branch, timestamp, session
  */
 
-import { readdirSync, readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from "fs";
+import {
+  readdirSync,
+  readFileSync,
+  existsSync,
+  statSync,
+  writeFileSync,
+  mkdirSync,
+  renameSync,
+  openSync,
+  readSync,
+  closeSync,
+} from "fs";
+import { createHash } from "crypto";
 import { join, basename } from "path";
 import { homedir } from "os";
 import { getLogger } from "@logtape/logtape";
@@ -25,8 +37,32 @@ const logger = getLogger(["macrodata", "conversations"]);
 
 // Index state tracking for incremental updates
 interface IndexState {
-  files: Record<string, { mtime: number; exchangeIds: string[] }>;
+  files: Record<string, FileState>;
   lastUpdate: string;
+}
+
+interface FileState {
+  mtime: number;
+  /** File size when last read; absent in state written before offsets existed. */
+  size?: number;
+  /** Byte offset the next read resumes from; absent means read from the start. */
+  offset?: number;
+  /** anchorAt(offset) when it was recorded; a read resumes only while it still matches. */
+  anchor?: string;
+  exchangeIds: string[];
+}
+
+const ANCHOR_BYTES = 4096;
+
+/**
+ * A hash of the first and last ANCHOR_BYTES before `offset`. The head holds the
+ * session's first line and the tail its latest, so a rewritten file differs in
+ * one or the other; line tails alone repeat across sessions.
+ */
+function anchorAt(filePath: string, offset: number): string {
+  const head = readRange(filePath, 0, Math.min(offset, ANCHOR_BYTES));
+  const tail = readRange(filePath, Math.max(0, offset - ANCHOR_BYTES), offset);
+  return createHash("sha256").update(head).update(tail).digest("base64");
 }
 
 function getIndexStatePath(): string {
@@ -51,7 +87,10 @@ function saveIndexState(state: IndexState): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-  writeFileSync(statePath, JSON.stringify(state, null, 2));
+  // A torn write would parse as corrupt, and a fresh state re-embeds every transcript.
+  const tmp = `${statePath}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state));
+  renameSync(tmp, statePath);
 }
 
 // Claude Code keeps transcripts under CLAUDE_CONFIG_DIR when it is set. Read per
@@ -280,21 +319,56 @@ function extractUserText(content: string | unknown[]): string {
   return text;
 }
 
+/** Bytes [from, to) of a file. */
+function readRange(filePath: string, from: number, to: number): Buffer {
+  const buf = Buffer.alloc(Math.max(0, to - from));
+  const fd = openSync(filePath, "r");
+  try {
+    let read = 0;
+    while (read < buf.length) {
+      const n = readSync(fd, buf, read, buf.length - read, from + read);
+      if (n === 0) break;
+      read += n;
+    }
+    return buf.subarray(0, read);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
- * Parse a conversation file and extract exchanges
+ * Parse a conversation file from byte `from` up to `size` and extract exchanges.
+ *
+ * Returns the offset a later call resumes from: the start of a user prompt
+ * still waiting for its reply, or else the end of the last complete line. A
+ * trailing line without its newline is still being written and is left for the
+ * next read. Transcripts are append-only, so resuming there sees every
+ * exchange exactly once.
  */
-function parseConversationFile(filePath: string, projectPath: string): ConversationExchange[] {
+function parseConversationFile(
+  filePath: string,
+  projectPath: string,
+  from = 0,
+  size = Infinity,
+): { exchanges: ConversationExchange[]; offset: number } {
   const exchanges: ConversationExchange[] = [];
   const projectName = getProjectName(projectPath);
+  let offset = from;
 
   try {
-    const content = readFileSync(filePath, "utf-8");
-    const lines = content.trim().split("\n").filter(Boolean);
+    const end = Number.isFinite(size) ? size : statSync(filePath).size;
+    const buf = readRange(filePath, from, end);
 
-    let currentUser: { msg: ConversationMessage; text: string } | null = null;
+    let currentUser: { msg: ConversationMessage; text: string; start: number } | null = null;
     let malformedLines = 0;
 
-    for (const line of lines) {
+    // Split on the newline byte: it never occurs inside a multi-byte UTF-8
+    // sequence, so line boundaries are exact byte offsets.
+    let lineStart = 0;
+    for (let nl = buf.indexOf(0x0a); nl !== -1; lineStart = nl + 1, nl = buf.indexOf(0x0a, lineStart)) {
+      offset = from + nl + 1;
+      const line = buf.toString("utf-8", lineStart, nl).trim();
+      if (!line) continue;
       try {
         const msg: ConversationMessage = JSON.parse(line);
 
@@ -312,7 +386,7 @@ function parseConversationFile(filePath: string, projectPath: string): Conversat
             continue;
           }
 
-          currentUser = { msg, text: userText };
+          currentUser = { msg, text: userText, start: from + lineStart };
         } else if (msg.type === "assistant" && currentUser && msg.message?.content) {
           // Found a user-assistant pair
           const assistantText = extractAssistantText(msg.message.content);
@@ -338,6 +412,7 @@ function parseConversationFile(filePath: string, projectPath: string): Conversat
         malformedLines++;
       }
     }
+    if (currentUser) offset = currentUser.start;
     if (malformedLines > 0) {
       logger.warn("skipped malformed lines", { filePath, malformedLines });
     }
@@ -345,13 +420,18 @@ function parseConversationFile(filePath: string, projectPath: string): Conversat
     logger.error("failed to parse session file", { filePath, error: String(err) });
   }
 
-  return exchanges;
+  return { exchanges, offset };
 }
 
 /**
  * Scan all Claude project directories for conversation files
  */
-function* scanConversationFiles(): Generator<{ filePath: string; projectPath: string; mtime: number }> {
+function* scanConversationFiles(): Generator<{
+  filePath: string;
+  projectPath: string;
+  mtime: number;
+  size: number;
+}> {
   const root = projectsDir();
   if (!existsSync(root)) {
     return;
@@ -374,9 +454,9 @@ function* scanConversationFiles(): Generator<{ filePath: string; projectPath: st
       if (!file.endsWith(".jsonl") || file.startsWith("agent-")) continue;
 
       const filePath = join(projectFullPath, file);
-      const mtime = statSync(filePath).mtimeMs;
+      const { mtimeMs: mtime, size } = statSync(filePath);
 
-      yield { filePath, projectPath, mtime };
+      yield { filePath, projectPath, mtime, size };
     }
   }
 }
@@ -407,11 +487,14 @@ async function rebuildUnserialized(): Promise<{ exchangeCount: number }> {
   const allExchanges: ConversationExchange[] = [];
   const newState: IndexState = { files: {}, lastUpdate: new Date().toISOString() };
 
-  for (const { filePath, projectPath, mtime } of scanConversationFiles()) {
-    const exchanges = parseConversationFile(filePath, projectPath);
+  for (const { filePath, projectPath, mtime, size } of scanConversationFiles()) {
+    const { exchanges, offset } = parseConversationFile(filePath, projectPath, 0, size);
     allExchanges.push(...exchanges);
     newState.files[filePath] = {
       mtime,
+      size,
+      offset,
+      anchor: anchorAt(filePath, offset),
       exchangeIds: exchanges.map(e => e.id),
     };
   }
@@ -499,19 +582,29 @@ async function updateUnserialized(): Promise<{ exchangeCount: number; filesUpdat
   };
 
   try {
-    for (const { filePath, projectPath, mtime } of scanConversationFiles()) {
+    for (const { filePath, projectPath, mtime, size } of scanConversationFiles()) {
       currentFiles.add(filePath);
       const cached = state.files[filePath];
 
-      // Skip if file hasn't changed
-      if (cached && cached.mtime === mtime) {
+      if (cached && cached.mtime === mtime && (cached.size === undefined || cached.size === size)) {
         skipped++;
         totalExchanges += cached.exchangeIds.length;
         continue;
       }
 
-      // File is new or modified - parse and index
-      const exchanges = parseConversationFile(filePath, projectPath);
+      // Read only what was appended since the last pass. A file now shorter
+      // than its offset, or whose bytes before it changed, was rewritten rather
+      // than appended to, so read it whole.
+      const resume =
+        cached?.offset !== undefined &&
+        cached.offset <= size &&
+        cached.anchor === anchorAt(filePath, cached.offset);
+      const { exchanges, offset } = parseConversationFile(
+        filePath,
+        projectPath,
+        resume ? cached.offset : 0,
+        size,
+      );
 
       if (exchanges.length > 0) {
         const texts = exchanges.map(e =>
@@ -528,9 +621,11 @@ async function updateUnserialized(): Promise<{ exchangeCount: number; filesUpdat
         }
       }
 
-      pending.push([filePath, { mtime, exchangeIds: exchanges.map(e => e.id) }]);
+      const ids = exchanges.map((e) => e.id);
+      const exchangeIds = resume ? [...new Set([...cached.exchangeIds, ...ids])] : ids;
+      pending.push([filePath, { mtime, size, offset, anchor: anchorAt(filePath, offset), exchangeIds }]);
       filesUpdated++;
-      totalExchanges += exchanges.length;
+      totalExchanges += exchangeIds.length;
       sinceCommit += exchanges.length;
       if (sinceCommit >= COMMIT_ITEMS) await commit();
     }
