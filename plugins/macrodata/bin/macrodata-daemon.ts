@@ -20,6 +20,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, rea
 import { join, basename } from "path";
 import { Cron } from "croner";
 import { getStateRoot, getEntitiesDir, getJournalDir, getIndexDir, getRemindersDir } from "../src/config.js";
+import { checkpointDelayMs, getCheckpointDir, parseCheckpointRequest, type CheckpointRequest } from "../src/checkpoint.js";
 import { formatReminderEntry, upsertReminderLine, buildHeadlessArgs, caffeinateArgs, resolveModel, resolveDelivery, cronTooFrequent, isSafeId, notificationText, isSymlinkPath } from "../src/reminders.js";
 
 // The indexing modules pull in @huggingface/transformers + vectra (multi-second
@@ -358,6 +359,10 @@ class MacrodataLocalDaemon {
   private cronJobs: Map<string, ArmedJob> = new Map();
   private watcher: ReturnType<typeof watch> | null = null;
   private schedulesWatcher: ReturnType<typeof watch> | null = null;
+  private checkpointWatcher: ReturnType<typeof watch> | null = null;
+  private checkpointTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private conversationIndexRun: Promise<void> | null = null;
+  private conversationIndexAgain = false;
   private shouldRun = true;
 
   private acquirePidFile(pidFile: string): boolean {
@@ -419,7 +424,7 @@ class MacrodataLocalDaemon {
       .then(() => {
         log("Embedding model preloaded");
         // After model is loaded, incrementally update both conversation indexes
-        return updateAllConversationIndexes();
+        return this.refreshConversationIndex();
       })
       .catch((err) => logError(`Failed to preload/index: ${err}`));
 
@@ -431,6 +436,8 @@ class MacrodataLocalDaemon {
 
     // Start file watcher for entity changes
     this.startFileWatcher();
+
+    this.watchCheckpoints();
 
     // Keep process alive
     log("Daemon running");
@@ -710,6 +717,78 @@ class MacrodataLocalDaemon {
     }
   }
 
+  // Session checkpoints (src/checkpoint.ts). One timer per session file; a newer
+  // write for that session re-arms it, so a burst of Stops runs once.
+  private watchCheckpoints() {
+    const dir = getCheckpointDir();
+    mkdirSync(dir, { recursive: true });
+    // ignoreInitial: false so requests left by sessions that ended while no
+    // daemon ran are picked up at startup.
+    this.checkpointWatcher = watch(dir, { ignoreInitial: false, persistent: true, followSymlinks: false, depth: 0 });
+    this.checkpointWatcher.on("add", (path) => this.armCheckpoint(path));
+    this.checkpointWatcher.on("change", (path) => this.armCheckpoint(path));
+    this.checkpointWatcher.on("error", (err) => logError(`Checkpoint watcher error: ${String(err)}`));
+  }
+
+  private stopCheckpoints() {
+    if (this.checkpointWatcher) {
+      void this.checkpointWatcher.close();
+      this.checkpointWatcher = null;
+    }
+    for (const timer of this.checkpointTimers.values()) clearTimeout(timer);
+    this.checkpointTimers.clear();
+  }
+
+  private armCheckpoint(path: string) {
+    if (!path.endsWith(".json")) return; // the hook's in-flight .tmp files
+    let req: CheckpointRequest | null = null;
+    try {
+      req = parseCheckpointRequest(readFileSync(path, "utf-8"));
+    } catch {
+      return; // replaced or consumed between the event and the read
+    }
+    if (!req) {
+      logError(`Dropping unreadable checkpoint request: ${basename(path)}`);
+      try { unlinkSync(path); } catch {}
+      return;
+    }
+    const prev = this.checkpointTimers.get(path);
+    if (prev) clearTimeout(prev);
+    const wait = Math.max(0, req.ts + checkpointDelayMs(req.event) - Date.now());
+    const armed = req;
+    this.checkpointTimers.set(path, setTimeout(() => void this.runCheckpoint(path, armed), wait));
+  }
+
+  private async runCheckpoint(path: string, req: CheckpointRequest) {
+    this.checkpointTimers.delete(path);
+    log(`Checkpoint ${req.event} for session ${req.session_id}`);
+    await this.refreshConversationIndex();
+    // Consume only the request acted on: a write that landed during the run
+    // re-armed its own timer and stays queued.
+    try {
+      const current = parseCheckpointRequest(readFileSync(path, "utf-8"));
+      if (current && current.ts === req.ts) unlinkSync(path);
+    } catch {}
+  }
+
+  // Single-flight with one trailing rerun: a request that arrives mid-run is
+  // covered by the rerun, never by a second concurrent indexer.
+  private refreshConversationIndex(): Promise<void> {
+    if (this.conversationIndexRun) {
+      this.conversationIndexAgain = true;
+      return this.conversationIndexRun;
+    }
+    this.conversationIndexRun = (async () => {
+      do {
+        this.conversationIndexAgain = false;
+        await updateAllConversationIndexes();
+      } while (this.conversationIndexAgain);
+    })().finally(() => {
+      this.conversationIndexRun = null;
+    });
+    return this.conversationIndexRun;
+  }
+
   private reindexQueue: Set<string> = new Set();
   private reindexTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -756,6 +835,7 @@ class MacrodataLocalDaemon {
       void this.schedulesWatcher.close();
       this.schedulesWatcher = null;
     }
+    this.stopCheckpoints();
 
     // Stop all cron jobs
     for (const { job } of this.cronJobs.values()) {
@@ -770,6 +850,7 @@ class MacrodataLocalDaemon {
     this.loadAndStartSchedules();
     this.watchRemindersDir();
     this.startFileWatcher();
+    this.watchCheckpoints();
 
     log("Reload complete");
   }
@@ -793,6 +874,7 @@ class MacrodataLocalDaemon {
       void this.schedulesWatcher.close();
       this.schedulesWatcher = null;
     }
+    this.stopCheckpoints();
 
     // Clean up PID file
     try {
