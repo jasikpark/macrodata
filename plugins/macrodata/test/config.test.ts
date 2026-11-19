@@ -6,7 +6,14 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { createTestContext, type TestContext } from "./helpers";
-import { getStateRoot, getStateDir, getEntitiesDir, getJournalDir, getIndexDir, getRemindersDir } from "../src/config";
+import {
+  getStateRoot,
+  getStateDir,
+  getEntitiesDir,
+  getJournalDir,
+  getIndexDir,
+  getRemindersDir,
+} from "../src/config";
 
 describe("config", () => {
   let ctx: TestContext;

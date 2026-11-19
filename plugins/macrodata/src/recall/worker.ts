@@ -43,14 +43,34 @@
  * before it can load a model.
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, mkdirSync, rmSync, statSync, watch } from "fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  unlinkSync,
+  readdirSync,
+  mkdirSync,
+  rmSync,
+  statSync,
+  watch,
+} from "fs";
 import { join } from "path";
 import { configure, getConsoleSink, getLogger, jsonLinesFormatter } from "@logtape/logtape";
 import { envNum } from "./env.ts";
 import { pipelineSearch } from "./fts.ts";
 import { ambientProfile } from "./profiles.ts";
 import { TIMER_MAX_MS, WEDGED, withDeadline } from "./deadline.ts";
-import { getIndexDir, getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath, getSpawnStampPath, getReindexHaltedPath } from "./config.ts";
+import {
+  getIndexDir,
+  getMailboxDir,
+  getRequestPath,
+  getInboxPath,
+  getExcludePath,
+  getWorkerPidPath,
+  getSpawnStampPath,
+  getReindexHaltedPath,
+} from "./config.ts";
 import { embedModelLoaded, modelsLoaded } from "./models.ts";
 import { lastProgressAt, reconcileCorpus, reconcileSource } from "./indexer.ts";
 import { stampOf } from "./atomic-index.ts";
@@ -92,7 +112,12 @@ const WEDGE_WARM_MS = envNum("MACRODATA_RECALL_WEDGE_WARM_MS", 2 * 60_000, 1_000
 // fire that gets far enough to have something to record — an early bail rewrites
 // neither — so a live session's mtime can lag its last message by a long way, and
 // culling one costs it the dedupe state that keeps recall from repeating itself.
-const ORPHAN_TTL_MS = envNum("MACRODATA_RECALL_ORPHAN_TTL_MS", 7 * 24 * 60 * 60_000, 60_000, TIMER_MAX_MS);
+const ORPHAN_TTL_MS = envNum(
+  "MACRODATA_RECALL_ORPHAN_TTL_MS",
+  7 * 24 * 60 * 60_000,
+  60_000,
+  TIMER_MAX_MS,
+);
 const ORPHAN_SWEEP_MS = 60 * 60_000;
 const ORPHAN_RE = /^(?:inbox|exclude|injected)-.+\.json$|\.(?:tmp|claim|bad|trim)$/;
 
@@ -111,10 +136,10 @@ await configure({
     { category: ["logtape", "meta"], lowestLevel: "warning", sinks: ["console"] },
   ],
 });
-const workerLog = getLogger(["recall", "worker"]);   // process lifecycle
-const ingestLog = getLogger(["recall", "ingest"]);   // mailbox protocol: watch, consume, queue
+const workerLog = getLogger(["recall", "worker"]); // process lifecycle
+const ingestLog = getLogger(["recall", "ingest"]); // mailbox protocol: watch, consume, queue
 const pipelineLog = getLogger(["recall", "pipeline"]); // the rerank run itself
-const reindexLog = getLogger(["recall", "reindex"]);   // index reconciles
+const reindexLog = getLogger(["recall", "reindex"]); // index reconciles
 
 const errnoOf = (e: unknown): string =>
   typeof e === "object" && e !== null && "code" in e ? String((e as { code: unknown }).code) : "";
@@ -123,7 +148,12 @@ const errnoOf = (e: unknown): string =>
 // one answer a mutex must never round down to "gone", since that steals a claim
 // from a process still holding it.
 const alive = (pid: number): boolean => {
-  try { process.kill(pid, 0); return true; } catch (e) { return errnoOf(e) === "EPERM"; }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return errnoOf(e) === "EPERM";
+  }
 };
 
 /**
@@ -159,7 +189,11 @@ function claimWorkerSlot(): void {
       let raw: string;
       // Gone between the failed create and this read — another loser cleared a
       // stale claim, so retry into the race it just opened.
-      try { raw = readFileSync(pidPath, "utf-8").trim(); } catch { continue; }
+      try {
+        raw = readFileSync(pidPath, "utf-8").trim();
+      } catch {
+        continue;
+      }
       const holder = Number(raw);
       if (holder && holder !== process.pid && alive(holder)) {
         workerLog.info("another worker already serves this root, exiting", { holder, pidPath });
@@ -174,7 +208,9 @@ function claimWorkerSlot(): void {
       // syscalls.
       try {
         if (readFileSync(pidPath, "utf-8").trim() === raw) unlinkSync(pidPath);
-      } catch { /* a peer cleared the same stale claim */ }
+      } catch {
+        /* a peer cleared the same stale claim */
+      }
     }
   }
   // Three collisions without a live holder means something is churning the file
@@ -187,14 +223,20 @@ claimWorkerSlot();
 // makes the hook's count mean "starts that left no worker": a worker that comes
 // up healthy and then sits idle all day is not a failing install, and a count
 // that never resets reports one on the next restart.
-try { unlinkSync(getSpawnStampPath()); } catch { /* no failed starts recorded */ }
+try {
+  unlinkSync(getSpawnStampPath());
+} catch {
+  /* no failed starts recorded */
+}
 // Only ever removes OUR claim — the content check is what keeps the losing half
 // of a spawn burst from deleting the winner's pidfile on its way out.
 process.on("exit", () => {
   try {
     const p = getWorkerPidPath();
     if (readFileSync(p, "utf-8").trim() === String(process.pid)) unlinkSync(p);
-  } catch { /* already gone, or already someone else's */ }
+  } catch {
+    /* already gone, or already someone else's */
+  }
 });
 // Without these, a SIGTERM'd worker skips the exit handler and leaves a pidfile
 // its successor has to clear. SIGKILL still can't be caught; the takeover above
@@ -202,7 +244,12 @@ process.on("exit", () => {
 process.on("SIGTERM", () => process.exit(0));
 process.on("SIGINT", () => process.exit(0));
 
-interface Request { sid: string; search: string; rerankQuery: string; ts?: string }
+interface Request {
+  sid: string;
+  search: string;
+  rerankQuery: string;
+  ts?: string;
+}
 
 const reqPath = getRequestPath;
 const inboxPath = getInboxPath;
@@ -214,7 +261,11 @@ const excludePath = getExcludePath;
 function loadExclude(sid: string): Set<string> {
   const p = excludePath(sid);
   if (!existsSync(p)) return new Set();
-  try { return new Set(JSON.parse(readFileSync(p, "utf-8")) as string[]); } catch { return new Set(); }
+  try {
+    return new Set(JSON.parse(readFileSync(p, "utf-8")) as string[]);
+  } catch {
+    return new Set();
+  }
 }
 
 function atomicWrite(path: string, data: string): void {
@@ -248,9 +299,13 @@ async function runPipeline(req: Request): Promise<void> {
   const budget = warm ? WEDGE_WARM_MS : WEDGE_COLD_MS;
   let hits: Awaited<ReturnType<typeof pipelineSearch>> | typeof WEDGED;
   try {
-    hits = await withDeadline(pipelineSearch(req.search, ambientProfile(), {
-      rerankQuery: req.rerankQuery, exclude,
-    }), budget);
+    hits = await withDeadline(
+      pipelineSearch(req.search, ambientProfile(), {
+        rerankQuery: req.rerankQuery,
+        exclude,
+      }),
+      budget,
+    );
   } catch (e) {
     l.error("pipeline error", { error: String(e) });
     return;
@@ -263,7 +318,9 @@ async function runPipeline(req: Request): Promise<void> {
     // claim that stops the hook from replacing it. Dying is what lets the next
     // convergence pass spawn a worker that can serve.
     l.error("pipeline exceeded its budget, exiting so the hook can restart it", {
-      budgetMs: budget, warm, ms: Date.now() - t0,
+      budgetMs: budget,
+      warm,
+      ms: Date.now() - t0,
     });
     process.exit(1);
   }
@@ -273,18 +330,21 @@ async function runPipeline(req: Request): Promise<void> {
     // enqueued) → servedAt (now); pipelineMs is the off-path cost the tool call
     // never paid.
     try {
-      atomicWrite(inboxPath(req.sid), JSON.stringify({
-        requestedAt: req.ts ?? null,
-        servedAt: new Date().toISOString(),
-        pipelineMs: ms,
-        // Echo the query that PRODUCED these hits. Async injection lags ~1 fire,
-        // so the draining hook's own query is NOT this result's query — without
-        // this the calibration log pairs each row's hits with the wrong (later)
-        // query, poisoning any retrieval-quality read of the log.
-        servedSearch: req.search,
-        servedRerankQuery: req.rerankQuery,
-        hits,
-      }));
+      atomicWrite(
+        inboxPath(req.sid),
+        JSON.stringify({
+          requestedAt: req.ts ?? null,
+          servedAt: new Date().toISOString(),
+          pipelineMs: ms,
+          // Echo the query that PRODUCED these hits. Async injection lags ~1 fire,
+          // so the draining hook's own query is NOT this result's query — without
+          // this the calibration log pairs each row's hits with the wrong (later)
+          // query, poisoning any retrieval-quality read of the log.
+          servedSearch: req.search,
+          servedRerankQuery: req.rerankQuery,
+          hits,
+        }),
+      );
       l.info("hits -> inbox", { hits: hits.length, ms });
     } catch (e) {
       // Dropped result → under-recall (safe), but make it visible: an unwrapped throw
@@ -317,8 +377,9 @@ function ingest(sid: string): void {
   const p = reqPath(sid);
   if (!existsSync(p)) return;
   let req: Request;
-  try { req = { ...JSON.parse(readFileSync(p, "utf-8")), sid }; }
-  catch (e) {
+  try {
+    req = { ...JSON.parse(readFileSync(p, "utf-8")), sid };
+  } catch (e) {
     // Moved aside, not left in place. Nothing else consumes a request file, so
     // one that cannot be parsed is found again by every 5s sweep for the life of
     // the worker — a warn line every five seconds for as long as it sits there.
@@ -329,10 +390,20 @@ function ingest(sid: string): void {
     // pattern rather than one bad write. The orphan sweep expires them.
     const dest = `${p}.${Date.now()}-${quarantineSeq++}.bad`;
     ingestLog.warn("quarantining malformed request file", { sid, dest, error: String(e) });
-    try { renameSync(p, dest); } catch { try { unlinkSync(p); } catch { /* already gone */ } }
+    try {
+      renameSync(p, dest);
+    } catch {
+      try {
+        unlinkSync(p);
+      } catch {
+        /* already gone */
+      }
+    }
     return;
   }
-  try { unlinkSync(p); } catch {} // consume; latest-wins handled by the map
+  try {
+    unlinkSync(p);
+  } catch {} // consume; latest-wins handled by the map
   // Typed, not merely truthy: a number is truthy and has no `.length`, so
   // `req.search.length < 8` is `undefined < 8` — false — and a JSON number sails
   // through into pipelineSearch(), which then calls string methods on it deep in
@@ -340,7 +411,9 @@ function ingest(sid: string): void {
   // without a line means a schema-mismatched writer sees its requests vanish.
   if (typeof req.search !== "string" || req.search.length < 8) {
     ingestLog.warn("request dropped: search is not a string of at least 8 chars", {
-      sid, searchType: typeof req.search, searchChars: typeof req.search === "string" ? req.search.length : null,
+      sid,
+      searchType: typeof req.search,
+      searchChars: typeof req.search === "string" ? req.search.length : null,
     });
     return;
   }
@@ -372,12 +445,15 @@ function reportHalt(message: string | null): void {
     reindexLog.warn("could not update the reindex halt marker", { path, error: String(err) });
   }
 }
-const reindex = new ReindexQueue({
-  reconcileCorpus: (opts) => reconcileCorpus(opts),
-  reconcileSource,
-  indexStamp: () => stampOf(INDEX_JSON),
-  reportHalt,
-}, reindexLog);
+const reindex = new ReindexQueue(
+  {
+    reconcileCorpus: (opts) => reconcileCorpus(opts),
+    reconcileSource,
+    indexStamp: () => stampOf(INDEX_JSON),
+    reportHalt,
+  },
+  reindexLog,
+);
 
 // A reconcile that stops advancing (an embed or model load that never settles)
 // would hold the queue forever while every later request coalesces behind it.
@@ -391,7 +467,9 @@ setInterval(() => {
   const budget = warm ? WEDGE_WARM_MS : WEDGE_COLD_MS;
   if (Date.now() - since <= budget) return;
   reindexLog.error("reindex stopped advancing, exiting so the hook can restart it", {
-    budgetMs: budget, warm, idleMs: Date.now() - since,
+    budgetMs: budget,
+    warm,
+    idleMs: Date.now() - since,
   });
   process.exit(1);
 }, REINDEX_WATCHDOG_MS).unref();
@@ -399,16 +477,24 @@ setInterval(() => {
 function ingestReindex(name: string): void {
   const p = join(DIR, name);
   let raw: string;
-  try { raw = readFileSync(p, "utf-8"); }
-  catch { return; } // the watch fired for a file already consumed
-  try { unlinkSync(p); }
-  catch (err) {
+  try {
+    raw = readFileSync(p, "utf-8");
+  } catch {
+    return;
+  } // the watch fired for a file already consumed
+  try {
+    unlinkSync(p);
+  } catch (err) {
     // Queuing a request that cannot be removed would re-run it on every sweep.
     ingestLog.warn("reindex request not consumed: unlink failed", { name, error: String(err) });
     return;
   }
   let req: ReturnType<typeof parseReindexRequest> = null;
-  try { req = parseReindexRequest(JSON.parse(raw)); } catch { /* reported below */ }
+  try {
+    req = parseReindexRequest(JSON.parse(raw));
+  } catch {
+    /* reported below */
+  }
   if (!req) {
     ingestLog.warn("reindex request dropped: malformed", { name, chars: raw.length });
     return;
@@ -426,8 +512,12 @@ function sweep(): void {
   // callback and kill the worker. The interval retries in 5s anyway, which is
   // sooner than the hook's next convergence pass would notice the process gone.
   let files: string[];
-  try { files = readdirSync(DIR); }
-  catch (e) { ingestLog.warn("sweep skipped: readdir failed", { error: String(e) }); return; }
+  try {
+    files = readdirSync(DIR);
+  } catch (e) {
+    ingestLog.warn("sweep skipped: readdir failed", { error: String(e) });
+    return;
+  }
   for (const f of files) {
     const m = f.match(REQ_RE);
     if (m) ingest(m[1]);
@@ -463,8 +553,12 @@ reindex.add({ corpus: true });
  */
 function sweepOrphans(): void {
   let files: string[];
-  try { files = readdirSync(DIR); }
-  catch (e) { ingestLog.warn("orphan sweep skipped: readdir failed", { error: String(e) }); return; }
+  try {
+    files = readdirSync(DIR);
+  } catch (e) {
+    ingestLog.warn("orphan sweep skipped: readdir failed", { error: String(e) });
+    return;
+  }
   const cutoff = Date.now() - ORPHAN_TTL_MS;
   let removed = 0;
   for (const f of files) {
@@ -474,9 +568,12 @@ function sweepOrphans(): void {
       if (statSync(p).mtimeMs >= cutoff) continue;
       unlinkSync(p);
       removed++;
-    } catch { /* raced with a hook writing or draining the same file */ }
+    } catch {
+      /* raced with a hook writing or draining the same file */
+    }
   }
-  if (removed > 0) ingestLog.info("swept orphaned mailbox files", { removed, ttlMs: ORPHAN_TTL_MS });
+  if (removed > 0)
+    ingestLog.info("swept orphaned mailbox files", { removed, ttlMs: ORPHAN_TTL_MS });
 }
 sweepOrphans();
 setInterval(sweepOrphans, ORPHAN_SWEEP_MS);
@@ -491,7 +588,10 @@ setInterval(sweepOrphans, ORPHAN_SWEEP_MS);
 let pendingSweep: ReturnType<typeof setTimeout> | null = null;
 watch(DIR, () => {
   if (pendingSweep) return;
-  pendingSweep = setTimeout(() => { pendingSweep = null; sweep(); }, SWEEP_DEBOUNCE_MS);
+  pendingSweep = setTimeout(() => {
+    pendingSweep = null;
+    sweep();
+  }, SWEEP_DEBOUNCE_MS);
 });
 // Load-bearing, not just a backstop: the debounce drops events during its 50ms
 // window with no trailing re-arm, and whether a rename landing AFTER the
@@ -500,4 +600,8 @@ watch(DIR, () => {
 // read; the watch path is only a latency optimization. Don't remove or widen
 // it without re-measuring the rename-event behavior.
 setInterval(sweep, SWEEP_INTERVAL_MS);
-workerLog.info("watching for recall requests", { dir: DIR, floor: ambientProfile().floor, limit: ambientProfile().limit });
+workerLog.info("watching for recall requests", {
+  dir: DIR,
+  floor: ambientProfile().floor,
+  limit: ambientProfile().limit,
+});

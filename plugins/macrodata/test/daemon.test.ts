@@ -13,12 +13,7 @@ import { describe, test, expect, beforeEach, afterEach, afterAll } from "bun:tes
 import { spawn } from "child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "fs";
 import { join, dirname } from "path";
-import {
-  createTestContext,
-  setupMinimalState,
-  addReminder,
-  type TestContext,
-} from "./helpers";
+import { createTestContext, setupMinimalState, addReminder, type TestContext } from "./helpers";
 import { caffeinateArgs, isSymlinkPath } from "../src/reminders";
 
 // Track all spawned daemon processes for cleanup, including ones whose PID
@@ -30,7 +25,10 @@ const startedDaemons: { pid: number; ctx: TestContext }[] = [];
 // Get paths
 const DAEMON_SCRIPT = join(dirname(import.meta.dir), "bin", "macrodata-daemon.ts");
 
-async function startDaemon(ctx: TestContext, env: Record<string, string> = {}): Promise<number | null> {
+async function startDaemon(
+  ctx: TestContext,
+  env: Record<string, string> = {},
+): Promise<number | null> {
   return new Promise((resolve) => {
     const proc = spawn("bun", ["run", DAEMON_SCRIPT], {
       env: {
@@ -434,8 +432,16 @@ describe("daemon", () => {
         mkdirSync(fakeBin);
         const childPidFile = join(ctx.root, "child.pid");
         const caffeinateArgsFile = join(ctx.root, "caffeinate.args");
-        writeFileSync(join(fakeBin, "claude"), `#!/bin/sh\necho $$ > "${childPidFile}"\nsleep 2\n`, { mode: 0o755 });
-        writeFileSync(join(fakeBin, "caffeinate"), `#!/bin/sh\necho "$@" > "${caffeinateArgsFile}"\n`, { mode: 0o755 });
+        writeFileSync(
+          join(fakeBin, "claude"),
+          `#!/bin/sh\necho $$ > "${childPidFile}"\nsleep 2\n`,
+          { mode: 0o755 },
+        );
+        writeFileSync(
+          join(fakeBin, "caffeinate"),
+          `#!/bin/sh\necho "$@" > "${caffeinateArgsFile}"\n`,
+          { mode: 0o755 },
+        );
         // An expired one-shot is deleted unfired, so the lead time outlasts
         // startDaemon's 2s pid-file wait.
         writeFileSync(
@@ -460,7 +466,9 @@ describe("daemon", () => {
         expect(written(childPidFile), "headless claude never ran").toBe(true);
         expect(written(caffeinateArgsFile), "caffeinate never ran").toBe(true);
         const childPid = readFileSync(childPidFile, "utf-8").trim();
-        expect(readFileSync(caffeinateArgsFile, "utf-8").trim()).toBe(caffeinateArgs(Number(childPid)).join(" "));
+        expect(readFileSync(caffeinateArgsFile, "utf-8").trim()).toBe(
+          caffeinateArgs(Number(childPid)).join(" "),
+        );
       },
       30_000,
     );
@@ -517,7 +525,6 @@ describe("daemon", () => {
     });
   });
 });
-
 
 // Deterministic unit seam for the symlink guard, independent of the daemon
 // process and its multi-second startup/watcher-latency timing (the

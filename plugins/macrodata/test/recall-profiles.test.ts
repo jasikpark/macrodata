@@ -29,7 +29,13 @@ describe("ambientProfile", () => {
   test("defaults match the hook's pre-profile constants", () => {
     clearEnv();
     expect(ambientProfile()).toEqual({
-      name: "ambient", legK: 40, rerankPool: 20, mmrLambda: 0.55, halfLifeDays: 30, floor: 0.5, limit: 3,
+      name: "ambient",
+      legK: 40,
+      rerankPool: 20,
+      mmrLambda: 0.55,
+      halfLifeDays: 30,
+      floor: 0.5,
+      limit: 3,
     });
   });
 

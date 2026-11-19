@@ -23,9 +23,23 @@
  * models, no index.
  */
 
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import {
-  recallDisabled, getCalibrationLog, getExcludePath, getInjectedPath, getMailboxDir, getWaiterLockPath,
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
+import {
+  recallDisabled,
+  getCalibrationLog,
+  getExcludePath,
+  getInjectedPath,
+  getMailboxDir,
+  getWaiterLockPath,
 } from "../src/recall/config.ts";
 import { envNum } from "../src/recall/env.ts";
 import { ambientProfile } from "../src/recall/profiles.ts";
@@ -39,7 +53,11 @@ const POLL_MS = envNum("MACRODATA_RECALL_WAITER_POLL_MS", 250, 10, 5_000);
 type Outcome = "served" | "deadline" | "covered";
 
 function readJson<T>(path: string, fallback: T): T {
-  try { return existsSync(path) ? (JSON.parse(readFileSync(path, "utf-8")) as T) : fallback; } catch { return fallback; }
+  try {
+    return existsSync(path) ? (JSON.parse(readFileSync(path, "utf-8")) as T) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 /**
@@ -57,8 +75,15 @@ function takeLock(path: string): boolean {
     } catch (e) {
       if ((e as { code?: string }).code !== "EEXIST") return false;
       const pid = Number(readFileSync(path, "utf-8"));
-      try { if (pid > 0) { process.kill(pid, 0); return false; } } catch {}
-      try { unlinkSync(path); } catch {}
+      try {
+        if (pid > 0) {
+          process.kill(pid, 0);
+          return false;
+        }
+      } catch {}
+      try {
+        unlinkSync(path);
+      } catch {}
     }
   }
   return false;
@@ -68,7 +93,11 @@ async function main(): Promise<void> {
   if (recallDisabled() || process.env.MACRODATA_RECALL_MODE === "sync") process.exit(0);
   const t0 = Date.now();
   let env: { session_id?: string; tool_name?: string } = {};
-  try { env = JSON.parse(await Bun.stdin.text()); } catch { process.exit(0); }
+  try {
+    env = JSON.parse(await Bun.stdin.text());
+  } catch {
+    process.exit(0);
+  }
   const sid = (env.session_id || "").replace(/[^A-Za-z0-9_-]/g, "");
   if (!sid) process.exit(0);
   mkdirSync(getMailboxDir(), { recursive: true });
@@ -76,21 +105,36 @@ async function main(): Promise<void> {
   const lock = getWaiterLockPath(sid);
   const log = (outcome: Outcome, claim?: Claim): void => {
     try {
-      appendFileSync(getCalibrationLog(), JSON.stringify({
-        ts: new Date().toISOString(), sid, event: "PostToolUse", tool: env.tool_name ?? null,
-        mode: "waiter", outcome, waitMs: Date.now() - t0,
-        search: (claim?.meta.servedSearch ?? "").slice(0, 300),
-        n: claim?.ready.length ?? 0,
-        scores: claim?.ready.map((h) => Number(h.score.toFixed(3))) ?? [],
-        sources: claim?.ready.map(srcLabel) ?? [],
-        drained: claim?.drained ?? 0, filteredInContext: claim?.filteredInContext ?? 0,
-        floorDropped: claim?.floorDropped ?? 0, drainError: claim?.drainError ?? false,
-      }) + "\n");
+      appendFileSync(
+        getCalibrationLog(),
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          sid,
+          event: "PostToolUse",
+          tool: env.tool_name ?? null,
+          mode: "waiter",
+          outcome,
+          waitMs: Date.now() - t0,
+          search: (claim?.meta.servedSearch ?? "").slice(0, 300),
+          n: claim?.ready.length ?? 0,
+          scores: claim?.ready.map((h) => Number(h.score.toFixed(3))) ?? [],
+          sources: claim?.ready.map(srcLabel) ?? [],
+          drained: claim?.drained ?? 0,
+          filteredInContext: claim?.filteredInContext ?? 0,
+          floorDropped: claim?.floorDropped ?? 0,
+          drainError: claim?.drainError ?? false,
+        }) + "\n",
+      );
     } catch {}
   };
-  if (!takeLock(lock)) { log("covered"); process.exit(0); }
+  if (!takeLock(lock)) {
+    log("covered");
+    process.exit(0);
+  }
   const release = (): void => {
-    try { if (readFileSync(lock, "utf-8") === String(process.pid)) unlinkSync(lock); } catch {}
+    try {
+      if (readFileSync(lock, "utf-8") === String(process.pid)) unlinkSync(lock);
+    } catch {}
   };
 
   const profile = ambientProfile();
@@ -98,7 +142,9 @@ async function main(): Promise<void> {
   while (Date.now() - t0 < WAIT_MS) {
     // The exclude the hook last wrote, plus anything injected since: a hit the
     // model has already seen must not come back through this side door.
-    const injected = readJson<({ c: string } | string)[]>(getInjectedPath(sid), []).map((e) => (typeof e === "string" ? e : e.c));
+    const injected = readJson<({ c: string } | string)[]>(getInjectedPath(sid), []).map((e) =>
+      typeof e === "string" ? e : e.c,
+    );
     const exclude = new Set<string>([...readJson<string[]>(getExcludePath(sid), []), ...injected]);
     const claim = claimInbox(sid, exclude, profile);
     if (claim.claimed) last = claim;
@@ -106,7 +152,12 @@ async function main(): Promise<void> {
       const now = new Date().toISOString();
       try {
         const prior = readJson<{ c: string; ts: string }[]>(getInjectedPath(sid), []);
-        atomicWrite(getInjectedPath(sid), JSON.stringify([...prior, ...claim.ready.map((h) => ({ c: h.content, ts: now }))].slice(-1000)));
+        atomicWrite(
+          getInjectedPath(sid),
+          JSON.stringify(
+            [...prior, ...claim.ready.map((h) => ({ c: h.content, ts: now }))].slice(-1000),
+          ),
+        );
       } catch {}
       recordAccess(claim.ready.map(memKey), "surfaced", now);
       log("served", claim);
@@ -114,9 +165,14 @@ async function main(): Promise<void> {
       // additionalContext only: on the async path Claude Code injects
       // systemMessage into the model's context too, so a debug copy there
       // would double the block.
-      process.stdout.write(JSON.stringify({
-        hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: recallBlock(claim.ready) },
-      }));
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PostToolUse",
+            additionalContext: recallBlock(claim.ready),
+          },
+        }),
+      );
       process.exit(0);
     }
     await Bun.sleep(POLL_MS);
@@ -127,6 +183,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((e) => {
-  console.error(`[macrodata-recall] waiter failed: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
+  console.error(
+    `[macrodata-recall] waiter failed: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`,
+  );
   process.exit(1);
 });

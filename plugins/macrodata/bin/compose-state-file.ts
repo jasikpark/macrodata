@@ -39,8 +39,10 @@ const BUDGETS: Record<string, Budget> = {};
 // Appended after the file content inside the wrapper tag. Used to bake
 // standing instructions into a section (e.g. flags surface directive).
 const SUFFIXES: Record<string, string> = {
-  "flags.md": "\n\nIf the 🔴 section above has items, surface them to the user at the start of your first reply — one line each — before addressing their prompt. Flags only reach the user when said out loud.",
-  "reminders.md": "\n\nThe `- [id] fired …` lines in this block are reminders that fired while no session was open. Relay them to the user at the start of your first reply with their fired-at times; once addressed, remove the line from state/reminders.md with the Edit tool.",
+  "flags.md":
+    "\n\nIf the 🔴 section above has items, surface them to the user at the start of your first reply — one line each — before addressing their prompt. Flags only reach the user when said out loud.",
+  "reminders.md":
+    "\n\nThe `- [id] fired …` lines in this block are reminders that fired while no session was open. Relay them to the user at the start of your first reply with their fired-at times; once addressed, remove the line from state/reminders.md with the Edit tool.",
 };
 
 // Files that emit nothing at all when absent or empty (no wrapper tag).

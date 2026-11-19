@@ -68,9 +68,20 @@ export function srcLabel(h: SearchResult): string {
  * that double-injects and double-counts recordAccess, which feeds recency
  * ranking. Exactly one rename wins; the loser's ENOENT means "nothing ready".
  */
-export function claimInbox(sid: string, exclude: Set<string>, profile: { floor: number; limit: number }): Claim {
+export function claimInbox(
+  sid: string,
+  exclude: Set<string>,
+  profile: { floor: number; limit: number },
+): Claim {
   const out: Claim = {
-    claimed: false, ready: [], meta: {}, drained: 0, filteredInContext: 0, filteredSrc: [], floorDropped: 0, drainError: false,
+    claimed: false,
+    ready: [],
+    meta: {},
+    drained: 0,
+    filteredInContext: 0,
+    filteredSrc: [],
+    floorDropped: 0,
+    drainError: false,
   };
   const inbox = sid ? getInboxPath(sid) : "";
   if (!inbox || !existsSync(inbox)) return out;
@@ -78,11 +89,17 @@ export function claimInbox(sid: string, exclude: Set<string>, profile: { floor: 
   // Only ENOENT means a concurrent fire won. Any other rename failure means the
   // inbox exists but can never be claimed, which would strand it forever while
   // the log shows drained:0.
-  try { renameSync(inbox, claim); out.claimed = true; }
-  catch (e) { if ((e as { code?: string }).code !== "ENOENT") out.drainError = true; }
+  try {
+    renameSync(inbox, claim);
+    out.claimed = true;
+  } catch (e) {
+    if ((e as { code?: string }).code !== "ENOENT") out.drainError = true;
+  }
   if (!out.claimed) return out;
   try {
-    const parsed = JSON.parse(readFileSync(claim, "utf-8")) as InboxMeta & { hits?: SearchResult[] };
+    const parsed = JSON.parse(readFileSync(claim, "utf-8")) as InboxMeta & {
+      hits?: SearchResult[];
+    };
     const raw = parsed.hits || [];
     out.drained = raw.length;
     const kept = raw.filter((h) => !exclude.has(h.content));
@@ -92,9 +109,13 @@ export function claimInbox(sid: string, exclude: Set<string>, profile: { floor: 
     // separate environments, and a tightened floor here must not be bypassed by
     // hits the worker admitted under a looser one. The typeof guards keep a
     // version-skewed inbox from crashing toFixed()/memKey downstream.
-    const floored = kept.filter((h) =>
-      typeof h.content === "string" && typeof h.source === "string" &&
-      typeof h.score === "number" && h.score >= profile.floor);
+    const floored = kept.filter(
+      (h) =>
+        typeof h.content === "string" &&
+        typeof h.source === "string" &&
+        typeof h.score === "number" &&
+        h.score >= profile.floor,
+    );
     out.floorDropped = kept.length - floored.length;
     out.ready = floored.slice(0, profile.limit);
     const { hits: _hits, ...meta } = parsed;
@@ -103,9 +124,13 @@ export function claimInbox(sid: string, exclude: Set<string>, profile: { floor: 
     out.drainError = true;
     // A malformed CLAIMED file is post-atomic-rename, so it is an anomaly worth
     // an autopsy (version skew? worker bug?); keep it as .bad.
-    try { renameSync(claim, `${claim}.bad`); } catch {}
+    try {
+      renameSync(claim, `${claim}.bad`);
+    } catch {}
   }
-  try { unlinkSync(claim); } catch {} // ENOENT when renamed to .bad
+  try {
+    unlinkSync(claim);
+  } catch {} // ENOENT when renamed to .bad
   return out;
 }
 
@@ -124,15 +149,24 @@ export function recallRow(h: SearchResult, now = Date.now()): string {
     const d = (now - Date.parse(ts)) / 86_400_000;
     return Number.isNaN(d) ? "evergreen" : d < 1 ? "<1d ago" : `${Math.round(d)}d ago`;
   };
-  const mmrSeg = h.mmrPick != null ? ` · mmr (#${h.mmrPick} · w#${h.wRank ?? "?"} · sim ${fmt(h.mmrSim, 2)})` : "";
+  const mmrSeg =
+    h.mmrPick != null
+      ? ` · mmr (#${h.mmrPick} · w#${h.wRank ?? "?"} · sim ${fmt(h.mmrSim, 2)})`
+      : "";
   // Raw content can quote the literal closing tag (the corpus holds web pages
   // and transcripts); escape it so a hit can't end the block early and pass
   // itself off as post-recall context.
-  const excerpt = h.content.replace(/\s+/g, " ").split("</macrodata-recall").join("<\\/macrodata-recall").slice(0, 220);
+  const excerpt = h.content
+    .replace(/\s+/g, " ")
+    .split("</macrodata-recall")
+    .join("<\\/macrodata-recall")
+    .slice(0, 220);
   return `- rerank ${h.score.toFixed(2)} · rrf ${fmt(h.rrf, 3)}${mmrSeg} · rec (${fmt(h.recency, 2)} · seen ${ageLabel(h.timestamp)}) — ${srcLabel(h)}\n  ${excerpt}`;
 }
 
 /** The model-facing block. RAW content is injected; scrubbing is query-only. */
 export function recallBlock(chunks: SearchResult[]): string {
-  return "<macrodata-recall>\n" + chunks.map((h) => recallRow(h)).join("\n") + "\n</macrodata-recall>";
+  return (
+    "<macrodata-recall>\n" + chunks.map((h) => recallRow(h)).join("\n") + "\n</macrodata-recall>"
+  );
 }

@@ -40,7 +40,7 @@ describe("mmrSelect", () => {
     // fresh covers different ground at a lower score. MMR must pick fresh.
     // junk exists so fresh is not the slate min — min-max normalization pins
     // the min to relevance 0, where no candidate can win on relevance at all.
-    const top = cand("webclient punycode decoder tooltip ariakit hostname", 0.030);
+    const top = cand("webclient punycode decoder tooltip ariakit hostname", 0.03);
     const dup = cand("webclient punycode decoder tooltip ariakit hostname component", 0.028);
     const fresh = cand("dnclient reconnect poll adaptive backoff rpc deadline", 0.012);
     const junk = cand("webclient punycode tooltip", 0.005);
@@ -86,7 +86,9 @@ describe("mmrSelect", () => {
 
   test("empty slate and k=0 both return empty", () => {
     expect(mmrSelect([], 5, 0.55)).toEqual([]);
-    expect(mmrSelect(slate(cand("alpha beta", 0.02), cand("gamma delta", 0.01)), 0, 0.55)).toEqual([]);
+    expect(mmrSelect(slate(cand("alpha beta", 0.02), cand("gamma delta", 0.01)), 0, 0.55)).toEqual(
+      [],
+    );
   });
 
   test("unsorted input: first pick is still the highest-w candidate", () => {
@@ -133,12 +135,14 @@ describe("mmrSelect", () => {
     // greedy path's stamped copies must carry it. The novel-but-weak candidate
     // that MMR admits shows wRank > k — the "MMR created this slot" signature
     // the calibration A/B keys on.
-    const top = cand("webclient punycode decoder tooltip ariakit hostname", 0.030);
+    const top = cand("webclient punycode decoder tooltip ariakit hostname", 0.03);
     const dup = cand("webclient punycode decoder tooltip ariakit hostname component", 0.028);
     const fresh = cand("dnclient reconnect poll adaptive backoff rpc deadline", 0.012);
     const junk = cand("webclient punycode tooltip", 0.005);
     const s = slate(top, dup, fresh, junk);
-    s.forEach((c, i) => { c.wRank = i + 1; });
+    s.forEach((c, i) => {
+      c.wRank = i + 1;
+    });
     const picked = mmrSelect(s, 2, 0.55);
     expect(picked[0].wRank).toBe(1);
     expect(picked[1].item.content).toBe(fresh.item.content);
@@ -149,7 +153,7 @@ describe("mmrSelect", () => {
     // With aggressive diversity, a low-w-but-novel candidate can be picked
     // second; the returned order must reflect pick order so downstream
     // diagnostics see what MMR actually did.
-    const top = cand("alpha beta gamma delta", 0.030);
+    const top = cand("alpha beta gamma delta", 0.03);
     const dup = cand("alpha beta gamma delta epsilon", 0.029);
     const fresh = cand("zeta eta theta iota", 0.005);
     const noise = cand("alpha beta gamma epsilon", 0.028);
@@ -157,7 +161,9 @@ describe("mmrSelect", () => {
     expect(picked[0].item.content).toBe(top.item.content);
     expect(picked[1].item.content).toBe(fresh.item.content);
     expect(picked.map((c) => c.item.content)).not.toEqual(
-      slate(top, dup, fresh, noise).slice(0, 3).map((c) => c.item.content),
+      slate(top, dup, fresh, noise)
+        .slice(0, 3)
+        .map((c) => c.item.content),
     );
   });
 });

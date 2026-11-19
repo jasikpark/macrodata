@@ -21,14 +21,19 @@ interface SwitchInputs {
   settings?: string;
 }
 
-const SAVED = ["MACRODATA_RECALL_DISABLE", "CLAUDE_PLUGIN_OPTION_RECALL_ENABLED", "CLAUDE_CONFIG_DIR"] as const;
+const SAVED = [
+  "MACRODATA_RECALL_DISABLE",
+  "CLAUDE_PLUGIN_OPTION_RECALL_ENABLED",
+  "CLAUDE_CONFIG_DIR",
+] as const;
 
 /** recallDisabled()'s verdict in-process and through the supervisor's subcommand. */
 function verdicts(inputs: SwitchInputs): { ts: boolean; sh: boolean } {
   const saved = Object.fromEntries(SAVED.map((k) => [k, process.env[k]]));
   const configDir = mkdtempSync(join(tmpdir(), "macrodata-switch-"));
   try {
-    if (inputs.settings !== undefined) writeFileSync(join(configDir, "settings.json"), inputs.settings);
+    if (inputs.settings !== undefined)
+      writeFileSync(join(configDir, "settings.json"), inputs.settings);
     const env: Record<string, string> = {
       MACRODATA_RECALL_DISABLE: inputs.disable ?? "",
       CLAUDE_PLUGIN_OPTION_RECALL_ENABLED: inputs.option ?? "",
@@ -82,25 +87,64 @@ describe("recall switch parsing", () => {
     ["option on in settings", { settings: plugin({ "macrodata@macrodata": opt(true) }) }, false],
     ["option off as a string", { settings: plugin({ "macrodata@macrodata": opt("false") }) }, true],
     ["any marketplace's entry", { settings: plugin({ "macrodata@fork": opt(false) }) }, true],
-    ["off in one install wins", { settings: plugin({ "macrodata@a": opt(true), "macrodata@b": opt(false) }) }, true],
+    [
+      "off in one install wins",
+      { settings: plugin({ "macrodata@a": opt(true), "macrodata@b": opt(false) }) },
+      true,
+    ],
     ["another plugin's option", { settings: plugin({ "other@macrodata": opt(false) }) }, false],
     ["unrecognized value", { settings: plugin({ "macrodata@macrodata": opt(0) }) }, false],
-    ["a value wrapped in an array", { settings: plugin({ "macrodata@macrodata": opt(["false"]) }) }, false],
-    ["the key outside options", { settings: plugin({ "macrodata@macrodata": { recall_enabled: false } }) }, false],
-    ["non-object options", { settings: plugin({ "macrodata@macrodata": { options: false } }) }, false],
+    [
+      "a value wrapped in an array",
+      { settings: plugin({ "macrodata@macrodata": opt(["false"]) }) },
+      false,
+    ],
+    [
+      "the key outside options",
+      { settings: plugin({ "macrodata@macrodata": { recall_enabled: false } }) },
+      false,
+    ],
+    [
+      "non-object options",
+      { settings: plugin({ "macrodata@macrodata": { options: false } }) },
+      false,
+    ],
     ["non-object entry", { settings: plugin({ "macrodata@m": false }) }, false],
     ["non-object pluginConfigs", { settings: JSON.stringify({ pluginConfigs: [false] }) }, false],
     ["a byte-order mark", { settings: "\uFEFF" + plugin({ "macrodata@m": opt(false) }) }, true],
     // Each of these is valid to jq; none is JSON, so the file counts as unreadable.
-    ["trailing junk", { option: "true", settings: plugin({ "macrodata@m": opt(false) }) + "}" }, false],
-    ["two documents", { option: "true", settings: plugin({ "macrodata@m": opt(false) }) + "{}" }, false],
-    ["a NaN literal", { option: "true", settings: '{"n":NaN,"pluginConfigs":{"macrodata@m":{"options":{"recall_enabled":false}}}}' }, false],
+    [
+      "trailing junk",
+      { option: "true", settings: plugin({ "macrodata@m": opt(false) }) + "}" },
+      false,
+    ],
+    [
+      "two documents",
+      { option: "true", settings: plugin({ "macrodata@m": opt(false) }) + "{}" },
+      false,
+    ],
+    [
+      "a NaN literal",
+      {
+        option: "true",
+        settings: '{"n":NaN,"pluginConfigs":{"macrodata@m":{"options":{"recall_enabled":false}}}}',
+      },
+      false,
+    ],
     // The file is read live because another session's exported copy can be stale.
-    ["settings on beats a stale exported off", { option: "false", settings: plugin({ "macrodata@m": opt(true) }) }, false],
+    [
+      "settings on beats a stale exported off",
+      { option: "false", settings: plugin({ "macrodata@m": opt(true) }) },
+      false,
+    ],
     ["exported off with no file entry", { option: "false" }, true],
     ["exported off with unreadable settings", { option: "false", settings: "{not json" }, true],
     ["exported on", { option: "true" }, false],
-    ["override beats settings on", { disable: "1", settings: plugin({ "macrodata@m": opt(true) }) }, true],
+    [
+      "override beats settings on",
+      { disable: "1", settings: plugin({ "macrodata@m": opt(true) }) },
+      true,
+    ],
   ])("%s", (_name, inputs, disabled) => {
     expect(verdicts(inputs)).toEqual({ ts: disabled, sh: disabled });
   });
@@ -143,10 +187,7 @@ describe("recall hook kill switch", () => {
 
   test("the recall_enabled option turns the hook off", () => {
     const configDir = mkdtempSync(join(tmpdir(), "macrodata-switch-"));
-    writeFileSync(
-      join(configDir, "settings.json"),
-      plugin({ "macrodata@macrodata": opt(false) }),
-    );
+    writeFileSync(join(configDir, "settings.json"), plugin({ "macrodata@macrodata": opt(false) }));
     try {
       expect(fire({ CLAUDE_CONFIG_DIR: configDir }).status).toBe(0);
       expect(existsSync(join(ctx.root, ".recall"))).toBe(false);

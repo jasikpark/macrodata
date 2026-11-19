@@ -35,7 +35,7 @@ export { getStateRoot } from "../src/config.js";
  */
 export function initializeStateRoot(): void {
   const stateRoot = getStateRoot();
-  
+
   // Create directories only - files created during onboarding
   const dirs = [
     stateRoot,
@@ -46,7 +46,7 @@ export function initializeStateRoot(): void {
     join(stateRoot, "entities", "projects"),
     join(stateRoot, "topics"),
   ];
-  
+
   for (const dir of dirs) {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
@@ -121,7 +121,7 @@ function getSchedules(): Schedule[] {
 
   const schedules: Schedule[] = [];
   try {
-    const files = readdirSync(remindersDir).filter(f => f.endsWith('.json'));
+    const files = readdirSync(remindersDir).filter((f) => f.endsWith(".json"));
     for (const file of files) {
       try {
         const content = readFileSync(join(remindersDir, file), "utf-8");
@@ -138,15 +138,19 @@ function getSchedules(): Schedule[] {
 
 interface FormatOptions {
   forCompaction?: boolean;
-  client?: { config: { providers: () => Promise<{ data?: { providers?: Array<{ id: string; models?: Record<string, unknown> }> } }> } };
+  client?: {
+    config: {
+      providers: () => Promise<{
+        data?: { providers?: Array<{ id: string; models?: Record<string, unknown> }> };
+      }>;
+    };
+  };
 }
 
 /**
  * Format memory context for injection into conversation
  */
-export async function formatContextForPrompt(
-  options: FormatOptions = {}
-): Promise<string | null> {
+export async function formatContextForPrompt(options: FormatOptions = {}): Promise<string | null> {
   const { forCompaction = false, client } = options;
   const stateRoot = getStateRoot();
   const identityPath = join(stateRoot, "state", "identity.md");
@@ -155,10 +159,10 @@ export async function formatContextForPrompt(
   // First run - return minimal context with onboarding pointer and detected user info
   if (isFirstRun) {
     if (forCompaction) return null;
-    
+
     // Detect user info to avoid multiple permission prompts during onboarding
     const userInfo = detectUser();
-    
+
     return `[MACRODATA]
 
 ## Status: First Run
@@ -193,9 +197,7 @@ Use this pre-detected info during onboarding instead of running detection script
   const schedules = getSchedules();
   const schedulesFormatted =
     schedules.length > 0
-      ? schedules
-          .map((s) => `- ${s.description} (${s.type}: ${s.expression})`)
-          .join("\n")
+      ? schedules.map((s) => `- ${s.description} (${s.type}: ${s.expression})`).join("\n")
       : "_No active schedules_";
 
   const sections = [
@@ -216,7 +218,9 @@ Use this pre-detected info during onboarding instead of running detection script
     // List state files
     const stateDir = join(stateRoot, "state");
     const stateFiles = existsSync(stateDir)
-      ? readdirSync(stateDir).filter(f => f.endsWith(".md")).map(f => `state/${f}`)
+      ? readdirSync(stateDir)
+          .filter((f) => f.endsWith(".md"))
+          .map((f) => `state/${f}`)
       : [];
 
     // List entity files (scan all subdirs dynamically)
@@ -227,7 +231,7 @@ Use this pre-detected info during onboarding instead of running detection script
         const dir = join(entitiesDir, subdir);
         try {
           if (!existsSync(dir) || !readdirSync(dir)) continue;
-          for (const f of readdirSync(dir).filter(f => f.endsWith(".md"))) {
+          for (const f of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
             entityFiles.push(`entities/${subdir}/${f}`);
           }
         } catch {
@@ -237,9 +241,8 @@ Use this pre-detected info during onboarding instead of running detection script
     }
 
     const allFiles = [...stateFiles, ...entityFiles];
-    const filesFormatted = allFiles.length > 0
-      ? allFiles.map(f => `- ${f}`).join("\n")
-      : "_No files yet_";
+    const filesFormatted =
+      allFiles.length > 0 ? allFiles.map((f) => `- ${f}`).join("\n") : "_No files yet_";
 
     // Read usage from shared file
     const usagePath = new URL("../USAGE.md", import.meta.url).pathname;
@@ -249,9 +252,7 @@ Use this pre-detected info during onboarding instead of running detection script
       sections.push(`<macrodata-usage>\n${usage}\n</macrodata-usage>`);
     }
 
-    sections.push(
-      `<macrodata-files root="${stateRoot}">\n${filesFormatted}\n</macrodata-files>`
-    );
+    sections.push(`<macrodata-files root="${stateRoot}">\n${filesFormatted}\n</macrodata-files>`);
 
     // Fetch available models for scheduling tools
     if (client) {
@@ -259,21 +260,21 @@ Use this pre-detected info during onboarding instead of running detection script
         const { data } = await client.config.providers();
         if (data?.providers) {
           // Collect all models with toolcall capability, excluding dated versions
-          type ModelInfo = { 
-            id: string; 
-            family?: string; 
+          type ModelInfo = {
+            id: string;
+            family?: string;
             release_date?: string;
             capabilities?: { toolcall?: boolean };
           };
           const allModels: { fullId: string; family: string; releaseDate: string }[] = [];
-          
+
           for (const provider of data.providers) {
             if (provider.models) {
               for (const [modelId, model] of Object.entries(provider.models)) {
                 const m = model as ModelInfo;
                 // Skip dated versions and models without toolcall
                 if (/-\d{8}$/.test(modelId) || !m.capabilities?.toolcall) continue;
-                
+
                 allModels.push({
                   fullId: `${provider.id}/${modelId}`,
                   family: m.family || `${provider.id}/${modelId}`,
@@ -282,19 +283,23 @@ Use this pre-detected info during onboarding instead of running detection script
               }
             }
           }
-          
+
           // Group by family and pick latest per family
-          const byFamily = new Map<string, typeof allModels[0]>();
+          const byFamily = new Map<string, (typeof allModels)[0]>();
           for (const model of allModels) {
             const existing = byFamily.get(model.family);
             if (!existing || model.releaseDate > existing.releaseDate) {
               byFamily.set(model.family, model);
             }
           }
-          
-          const models = Array.from(byFamily.values()).map(m => m.fullId).sort();
+
+          const models = Array.from(byFamily.values())
+            .map((m) => m.fullId)
+            .sort();
           if (models.length > 0) {
-            sections.push(`<macrodata-models>\nAvailable models for scheduling: ${models.join(", ")}\n</macrodata-models>`);
+            sections.push(
+              `<macrodata-models>\nAvailable models for scheduling: ${models.join(", ")}\n</macrodata-models>`,
+            );
           }
         }
       } catch {

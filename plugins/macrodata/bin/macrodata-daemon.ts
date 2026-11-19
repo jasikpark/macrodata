@@ -16,12 +16,43 @@
 import { watch } from "chokidar";
 import { execSync, spawn } from "child_process";
 import { configure, getLogger, jsonLinesFormatter } from "@logtape/logtape";
-import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, unlinkSync, renameSync } from "fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  appendFileSync,
+  mkdirSync,
+  readdirSync,
+  unlinkSync,
+  renameSync,
+} from "fs";
 import { join, basename } from "path";
 import { Cron } from "croner";
-import { getStateRoot, getEntitiesDir, getJournalDir, getIndexDir, getRemindersDir } from "../src/config.js";
-import { checkpointDelayMs, getCheckpointDir, parseCheckpointRequest, type CheckpointRequest } from "../src/checkpoint.js";
-import { formatReminderEntry, upsertReminderLine, buildHeadlessArgs, caffeinateArgs, resolveModel, resolveDelivery, cronTooFrequent, isSafeId, notificationText, isSymlinkPath } from "../src/reminders.js";
+import {
+  getStateRoot,
+  getEntitiesDir,
+  getJournalDir,
+  getIndexDir,
+  getRemindersDir,
+} from "../src/config.js";
+import {
+  checkpointDelayMs,
+  getCheckpointDir,
+  parseCheckpointRequest,
+  type CheckpointRequest,
+} from "../src/checkpoint.js";
+import {
+  formatReminderEntry,
+  upsertReminderLine,
+  buildHeadlessArgs,
+  caffeinateArgs,
+  resolveModel,
+  resolveDelivery,
+  cronTooFrequent,
+  isSafeId,
+  notificationText,
+  isSymlinkPath,
+} from "../src/reminders.js";
 
 // The indexing modules pull in @huggingface/transformers + vectra (multi-second
 // import). Load them lazily so the daemon writes its PID file and starts
@@ -168,10 +199,14 @@ function upsertReminderEntry(schedule: Schedule) {
 // takes the daemon down.
 function notifyUser(text: unknown, title: string) {
   try {
-    const proc = spawn("osascript", ["-e", `display notification "${notificationText(text)}" with title "${title}"`], {
-      stdio: "ignore",
-      detached: true,
-    });
+    const proc = spawn(
+      "osascript",
+      ["-e", `display notification "${notificationText(text)}" with title "${title}"`],
+      {
+        stdio: "ignore",
+        detached: true,
+      },
+    );
     proc.on("error", (err) => logError(`osascript notification failed: ${String(err)}`));
     proc.unref();
   } catch (err) {
@@ -203,11 +238,13 @@ function spawnHeadless(schedule: Schedule) {
     proc.on("exit", (code) =>
       code === 0
         ? log(`Headless ${schedule.id} completed`)
-        : logError(`Headless ${schedule.id} exited with code ${code}`)
+        : logError(`Headless ${schedule.id} exited with code ${code}`),
     );
     proc.unref();
     if (process.platform === "darwin" && proc.pid) holdSleepAssertion(proc.pid, schedule.id);
-    log(`Spawned headless claude --print for ${schedule.id} (model ${resolveModel(schedule.model)})`);
+    log(
+      `Spawned headless claude --print for ${schedule.id} (model ${resolveModel(schedule.model)})`,
+    );
   } catch (err) {
     logError(`Failed to spawn headless for ${schedule.id}: ${String(err)}`);
   }
@@ -217,7 +254,10 @@ function spawnHeadless(schedule: Schedule) {
 // DarkWakes; see caffeinateArgs for what the assertion does and doesn't block.
 function holdSleepAssertion(pid: number, id: string) {
   try {
-    const caffeinate = spawn("caffeinate", caffeinateArgs(pid), { stdio: "ignore", detached: true });
+    const caffeinate = spawn("caffeinate", caffeinateArgs(pid), {
+      stdio: "ignore",
+      detached: true,
+    });
     caffeinate.on("error", (err) => logError(`caffeinate failed for ${id}: ${String(err)}`));
     // A pid that already exited is rc=0, so nonzero means the assertion was refused.
     caffeinate.on("exit", (code) => {
@@ -231,7 +271,16 @@ function holdSleepAssertion(pid: number, id: string) {
 
 function ensureDirectories() {
   const entitiesDir = getEntitiesDir();
-  const dirs = [getDaemonDir(), getStateRoot(), getIndexDir(), entitiesDir, getJournalDir(), getRemindersDir(), join(entitiesDir, "people"), join(entitiesDir, "projects")];
+  const dirs = [
+    getDaemonDir(),
+    getStateRoot(),
+    getIndexDir(),
+    entitiesDir,
+    getJournalDir(),
+    getRemindersDir(),
+    join(entitiesDir, "people"),
+    join(entitiesDir, "projects"),
+  ];
   for (const dir of dirs) {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
@@ -241,13 +290,16 @@ function ensureDirectories() {
 }
 
 async function updateAllConversationIndexes() {
-  const { updateClaudeCodeConversations, updateOpenCodeConversations } = await loadConversationIndexers();
+  const { updateClaudeCodeConversations, updateOpenCodeConversations } =
+    await loadConversationIndexers();
 
   // Update Claude Code conversations
   try {
     const claude = await updateClaudeCodeConversations();
     if (claude.filesUpdated > 0) {
-      log(`Claude Code conversations: +${claude.filesUpdated} files (${claude.exchangeCount} total)`);
+      log(
+        `Claude Code conversations: +${claude.filesUpdated} files (${claude.exchangeCount} total)`,
+      );
     }
   } catch (err) {
     logError(`Claude Code conversation index failed: ${String(err)}`);
@@ -288,8 +340,8 @@ function loadAllSchedules(): Schedule[] {
 
   try {
     if (!existsSync(remindersDir)) return schedules;
-    
-    const files = readdirSync(remindersDir).filter(f => f.endsWith('.json'));
+
+    const files = readdirSync(remindersDir).filter((f) => f.endsWith(".json"));
     for (const file of files) {
       try {
         const content = readScheduleFileSafely(join(remindersDir, file));
@@ -300,7 +352,9 @@ function loadAllSchedules(): Schedule[] {
         // "../../.claude/settings" can never name a file outside reminders/.
         const id = basename(file, ".json");
         if (schedule.id !== id) {
-          logError(`Schedule ${file} declares id ${JSON.stringify(schedule.id)}; keying it by filename instead`);
+          logError(
+            `Schedule ${file} declares id ${JSON.stringify(schedule.id)}; keying it by filename instead`,
+          );
         }
         schedule.id = id;
         schedules.push(schedule);
@@ -318,7 +372,7 @@ function loadAllSchedules(): Schedule[] {
 function saveSchedule(schedule: Schedule) {
   const remindersDir = getRemindersDir();
   const filePath = join(remindersDir, `${schedule.id}.json`);
-  
+
   try {
     writeFileSync(filePath, JSON.stringify(schedule, null, 2));
   } catch (err) {
@@ -388,7 +442,9 @@ class MacrodataLocalDaemon {
             log(`Daemon already running (PID ${existingPid}), exiting`);
             return false;
           }
-          log(`PID ${existingPid} alive but not a macrodata daemon (${cmd || "unknown"}), reclaiming`);
+          log(
+            `PID ${existingPid} alive but not a macrodata daemon (${cmd || "unknown"}), reclaiming`,
+          );
         } catch {
           log(`Removing stale PID file (was ${existingPid || "empty"})`);
         }
@@ -473,7 +529,9 @@ class MacrodataLocalDaemon {
         const content = readScheduleFileSafely(path);
         if (content === null) return; // symlink refusal already logged
         const schedule = JSON.parse(content) as Schedule;
-        writePendingContext(`<macrodata-update type="schedule-added" id="${basename(path, ".json")}">${schedule.description}</macrodata-update>`);
+        writePendingContext(
+          `<macrodata-update type="schedule-added" id="${basename(path, ".json")}">${schedule.description}</macrodata-update>`,
+        );
       } catch {}
     });
 
@@ -489,7 +547,9 @@ class MacrodataLocalDaemon {
         const content = readScheduleFileSafely(path);
         if (content === null) return; // symlink refusal already logged
         const schedule = JSON.parse(content) as Schedule;
-        writePendingContext(`<macrodata-update type="schedule-updated" id="${basename(path, ".json")}">${schedule.description}</macrodata-update>`);
+        writePendingContext(
+          `<macrodata-update type="schedule-updated" id="${basename(path, ".json")}">${schedule.description}</macrodata-update>`,
+        );
       } catch {}
     });
 
@@ -570,7 +630,9 @@ class MacrodataLocalDaemon {
     // never went through the schedule tool's validation. A hot headless cron
     // would otherwise spawn unbounded (no coalescing).
     if (cronTooFrequent(schedule.expression)) {
-      logError(`Refusing too-frequent cron ${schedule.id} (${schedule.expression}): must be at least 2 minutes apart`);
+      logError(
+        `Refusing too-frequent cron ${schedule.id} (${schedule.expression}): must be at least 2 minutes apart`,
+      );
       return;
     }
     try {
@@ -671,7 +733,9 @@ class MacrodataLocalDaemon {
               ? `${sliced}\n[…truncated: ${cap} of ${raw.length} chars. This file is over budget — compact it.]`
               : sliced;
           const filename = basename(path);
-          writePendingContext(`<macrodata-update type="state" file="${filename}">\n${content}\n</macrodata-update>`);
+          writePendingContext(
+            `<macrodata-update type="state" file="${filename}">\n${content}\n</macrodata-update>`,
+          );
         } catch {}
         if (basename(path) === "flags.md") {
           this.debouncedNotifyRedFlags(path);
@@ -684,7 +748,13 @@ class MacrodataLocalDaemon {
         // NOTE: filter on the entities-relative path, NOT the absolute path —
         // the default store lives under ~/.config/macrodata, so an absolute
         // dotfile match would ignore the entire store.
-        if (relative.split("/").slice(0, -1).some((seg) => seg.startsWith("."))) return;
+        if (
+          relative
+            .split("/")
+            .slice(0, -1)
+            .some((seg) => seg.startsWith("."))
+        )
+          return;
         writePendingContext(`<macrodata-update type="entity" file="${relative}" />`);
         this.queueReindex(path);
       }
@@ -724,10 +794,17 @@ class MacrodataLocalDaemon {
     mkdirSync(dir, { recursive: true });
     // ignoreInitial: false so requests left by sessions that ended while no
     // daemon ran are picked up at startup.
-    this.checkpointWatcher = watch(dir, { ignoreInitial: false, persistent: true, followSymlinks: false, depth: 0 });
+    this.checkpointWatcher = watch(dir, {
+      ignoreInitial: false,
+      persistent: true,
+      followSymlinks: false,
+      depth: 0,
+    });
     this.checkpointWatcher.on("add", (path) => this.armCheckpoint(path));
     this.checkpointWatcher.on("change", (path) => this.armCheckpoint(path));
-    this.checkpointWatcher.on("error", (err) => logError(`Checkpoint watcher error: ${String(err)}`));
+    this.checkpointWatcher.on("error", (err) =>
+      logError(`Checkpoint watcher error: ${String(err)}`),
+    );
   }
 
   private stopCheckpoints() {
@@ -749,14 +826,19 @@ class MacrodataLocalDaemon {
     }
     if (!req) {
       logError(`Dropping unreadable checkpoint request: ${basename(path)}`);
-      try { unlinkSync(path); } catch {}
+      try {
+        unlinkSync(path);
+      } catch {}
       return;
     }
     const prev = this.checkpointTimers.get(path);
     if (prev) clearTimeout(prev);
     const wait = Math.max(0, req.ts + checkpointDelayMs(req.event) - Date.now());
     const armed = req;
-    this.checkpointTimers.set(path, setTimeout(() => void this.runCheckpoint(path, armed), wait));
+    this.checkpointTimers.set(
+      path,
+      setTimeout(() => void this.runCheckpoint(path, armed), wait),
+    );
   }
 
   private async runCheckpoint(path: string, req: CheckpointRequest) {

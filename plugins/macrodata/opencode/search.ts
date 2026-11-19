@@ -109,7 +109,7 @@ export async function searchMemory(
     limit?: number;
     type?: MemoryItemType;
     since?: string;
-  } = {}
+  } = {},
 ): Promise<SearchResult[]> {
   const { limit = 5, type, since } = options;
 

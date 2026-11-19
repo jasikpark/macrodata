@@ -13,9 +13,13 @@ import { join } from "path";
 import { homedir } from "os";
 import { spawn } from "child_process";
 import { memoryTools } from "./tools.js";
-import { formatContextForPrompt, consumePendingContext, initializeStateRoot, getStateRoot } from "./context.js";
+import {
+  formatContextForPrompt,
+  consumePendingContext,
+  initializeStateRoot,
+  getStateRoot,
+} from "./context.js";
 import { logger } from "./logger.js";
-
 
 /**
  * Check if a process with given PID is running
@@ -54,7 +58,7 @@ function ensureDaemonRunning(): void {
   const pidFile = join(homedir(), ".config", "macrodata", ".daemon.pid");
   const stateRoot = getStateRoot();
   const daemonScript = join(import.meta.dirname, "..", "bin", "macrodata-daemon.ts");
-  
+
   // Check if daemon is already running
   if (existsSync(pidFile)) {
     try {
@@ -66,16 +70,16 @@ function ensureDaemonRunning(): void {
       // Invalid PID file, continue to start daemon
     }
   }
-  
+
   // Start daemon - it writes its own PID file
   try {
     // Ensure config dir exists for PID file
     mkdirSync(join(homedir(), ".config", "macrodata"), { recursive: true });
-    
+
     const logFile = join(getStateRoot(), ".daemon.log");
     const out = openSync(logFile, "a");
     const err = openSync(logFile, "a");
-    
+
     const child = spawn("bun", ["run", daemonScript], {
       detached: true,
       stdio: ["ignore", out, err],
@@ -107,13 +111,13 @@ function installSkills(): void {
 
   // Copy each skill directory
   const skills = readdirSync(pluginSkillsDir, { withFileTypes: true })
-    .filter(d => d.isDirectory())
-    .map(d => d.name);
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
 
   for (const skill of skills) {
     const src = join(pluginSkillsDir, skill);
     const dest = join(globalSkillsDir, skill);
-    
+
     // Always update skills (overwrite existing)
     try {
       cpSync(src, dest, { recursive: true });

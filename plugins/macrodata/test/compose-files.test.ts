@@ -70,7 +70,9 @@ describe("compose-files", () => {
 
     test("an authored entity description renders inline; state files stay exempt", () => {
       setupMinimalState(ctx);
-      entity(ctx, "projects/billing-api.md", { description: "REST API service — auth, billing, webhooks" });
+      entity(ctx, "projects/billing-api.md", {
+        description: "REST API service — auth, billing, webhooks",
+      });
       // the entity is described and state files are exempt → no undescribed entities → no footer.
       expect(body(compose(ctx))).toMatchInlineSnapshot(`
 "- state/human.md
@@ -137,7 +139,10 @@ _1 entity has no \`description:\` frontmatter — add one for better recall._"
 
     test("a broken symlink in entities/ does not crash the manifest", () => {
       setupMinimalState(ctx);
-      symlinkSync(join(ctx.entitiesDir, "does-not-exist"), join(ctx.entitiesDir, "people", "dangling.md"));
+      symlinkSync(
+        join(ctx.entitiesDir, "does-not-exist"),
+        join(ctx.entitiesDir, "people", "dangling.md"),
+      );
       const out = compose(ctx);
       expect(out).toContain("<macrodata-files");
       expect(out).toContain("</macrodata-files>");
@@ -173,20 +178,17 @@ _1 entity has no \`description:\` frontmatter — add one for better recall._"
 
     test("property: footer count equals the number of files lacking a description", () => {
       fc.assert(
-        fc.property(
-          fc.array(fc.boolean(), { minLength: 1, maxLength: 30 }),
-          (hasDesc) => {
-            layEntities(
-              ctx,
-              hasDesc.map((has, i) => (has ? `desc ${i}` : null)),
-            );
-            const b = body(compose(ctx));
-            const undescribed = hasDesc.filter((h) => !h).length;
-            if (undescribed === 0) return !b.includes("frontmatter");
-            const m = b.match(/_(\d+) entit(?:y has|ies have) no/);
-            return m !== null && Number(m[1]) === undescribed;
-          },
-        ),
+        fc.property(fc.array(fc.boolean(), { minLength: 1, maxLength: 30 }), (hasDesc) => {
+          layEntities(
+            ctx,
+            hasDesc.map((has, i) => (has ? `desc ${i}` : null)),
+          );
+          const b = body(compose(ctx));
+          const undescribed = hasDesc.filter((h) => !h).length;
+          if (undescribed === 0) return !b.includes("frontmatter");
+          const m = b.match(/_(\d+) entit(?:y has|ies have) no/);
+          return m !== null && Number(m[1]) === undescribed;
+        }),
         { numRuns: 20 },
       );
     }, 30_000);

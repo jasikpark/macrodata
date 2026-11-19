@@ -22,7 +22,9 @@ import { loadAccessOverlay, memKey } from "./access.ts";
 import { CONTEXT_TOKENS, rankContext } from "./models.ts";
 
 const STOP = new Set(
-  "the a an is are was were be by of to in on for and or but with that this it as at from how do does did what why which when who whose into over under not no yes can could would should i we you they them their our your my me".split(" "),
+  "the a an is are was were be by of to in on for and or but with that this it as at from how do does did what why which when who whose into over under not no yes can could would should i we you they them their our your my me".split(
+    " ",
+  ),
 );
 
 function terms(s: string): string[] {
@@ -81,7 +83,14 @@ async function buildCorpus(): Promise<void> {
     if (content && it.vector?.length) contentVec!.set(content, it.vector);
     const tf = new Map<string, number>();
     for (const t of terms(content)) tf.set(t, (tf.get(t) ?? 0) + 1);
-    return { content, source: m.source as string, section: m.section as string | undefined, type: m.type as string, timestamp: m.timestamp as string | undefined, tf };
+    return {
+      content,
+      source: m.source as string,
+      section: m.section as string | undefined,
+      type: m.type as string,
+      timestamp: m.timestamp as string | undefined,
+      tf,
+    };
   });
   const df = new Map<string, number>();
   for (const d of corpus) for (const t of d.tf.keys()) df.set(t, (df.get(t) ?? 0) + 1);
@@ -106,7 +115,14 @@ export async function ftsSearch(query: string, k = 20): Promise<SearchResult[]> 
     .filter((x) => x.s > 0)
     .sort((a, b) => b.s - a.s)
     .slice(0, k)
-    .map((x) => ({ content: x.d.content, source: x.d.source, section: x.d.section, type: x.d.type, timestamp: x.d.timestamp, score: x.s }));
+    .map((x) => ({
+      content: x.d.content,
+      source: x.d.source,
+      section: x.d.section,
+      type: x.d.type,
+      timestamp: x.d.timestamp,
+      score: x.s,
+    }));
 }
 
 // Cross-encoder rerank IN-PROCESS via node-llama-cpp rankAll (replaces the
@@ -123,7 +139,10 @@ export async function rerank(query: string, docs: string[]): Promise<number[]> {
   const ctx = await rankContext();
   const q = ctx.model.tokenize(query).slice(0, CONTEXT_TOKENS / 2);
   const budget = CONTEXT_TOKENS - RANK_TEMPLATE_TOKENS - q.length;
-  return ctx.rankAll(q, docs.map((d) => ctx.model.tokenize(d.slice(0, 2000)).slice(0, budget)));
+  return ctx.rankAll(
+    q,
+    docs.map((d) => ctx.model.tokenize(d.slice(0, 2000)).slice(0, budget)),
+  );
 }
 
 export interface PoolCandidate {
@@ -152,7 +171,9 @@ export interface PoolCandidate {
 // because journal redundancy is often PARAPHRASE — same fact, different
 // words — which token overlap cannot see.
 function cosine(a: number[], b: number[]): number {
-  let dot = 0, na = 0, nb = 0;
+  let dot = 0,
+    na = 0,
+    nb = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     na += a[i] * a[i];
@@ -186,7 +207,8 @@ export function mmrSelect(slate: PoolCandidate[], k: number, lambda: number): Po
   // NaN or negative lambda would corrupt or INVERT the scoring (a negative
   // relevance weight rewards redundancy); clamp to pure-diversity instead.
   if (!(lambda >= 0)) lambda = 0;
-  let wMax = -Infinity, wMin = Infinity;
+  let wMax = -Infinity,
+    wMin = Infinity;
   for (const c of slate) {
     if (c.w > wMax) wMax = c.w;
     if (c.w < wMin) wMin = c.w;
@@ -327,7 +349,11 @@ export async function pipelineSearch(
     if (c.timestamp) return c.timestamp; // journal: created_at
     if (seedCache.has(c.source)) return seedCache.get(c.source);
     let ts: string | undefined;
-    try { ts = statSync(join(entitiesDir, c.source)).birthtime.toISOString(); } catch { ts = undefined; }
+    try {
+      ts = statSync(join(entitiesDir, c.source)).birthtime.toISOString();
+    } catch {
+      ts = undefined;
+    }
     seedCache.set(c.source, ts);
     return ts;
   };
@@ -358,9 +384,20 @@ export async function pipelineSearch(
   // Seed is precomputed once per candidate (not in the sort comparator) to avoid
   // redundant statSync calls.
   const slate = [...fused.values()]
-    .map((x) => { const rec = recency(lastAccessed(x.item)); return { item: x.item, rrf: x.rrf, rec, w: x.rrf * rec, vector: contentVec?.get(x.item.content) } as PoolCandidate; })
+    .map((x) => {
+      const rec = recency(lastAccessed(x.item));
+      return {
+        item: x.item,
+        rrf: x.rrf,
+        rec,
+        w: x.rrf * rec,
+        vector: contentVec?.get(x.item.content),
+      } as PoolCandidate;
+    })
     .sort((a, b) => b.w - a.w);
-  slate.forEach((c, i) => { c.wRank = i + 1; });
+  slate.forEach((c, i) => {
+    c.wRank = i + 1;
+  });
   const candidates = mmrSelect(slate, pool, lambda);
 
   // Rerank the pool; the PURE cross-encoder score is the final score. Carry the
@@ -369,7 +406,10 @@ export async function pipelineSearch(
   // final. Stamp effective last_accessed so the age label shows the real age.
   let scores: number[];
   try {
-    scores = await rerank(rerankQuery || query, candidates.map((c) => c.item.content));
+    scores = await rerank(
+      rerankQuery || query,
+      candidates.map((c) => c.item.content),
+    );
   } catch (e) {
     // The two recall legs above degrade into each other; this stage has nothing
     // to degrade to. `floor` and the final ordering are both defined in terms of
@@ -382,13 +422,25 @@ export async function pipelineSearch(
     return [];
   }
   return finalizeHits(
-    candidates.map((c, i) => ({ ...c.item, score: scores[i], rrf: c.rrf, recency: c.rec, wRank: c.wRank, mmrPick: c.mmr?.pick, mmrSim: c.mmr?.maxSim, timestamp: lastAccessed(c.item) })),
+    candidates.map((c, i) => ({
+      ...c.item,
+      score: scores[i],
+      rrf: c.rrf,
+      recency: c.rec,
+      wRank: c.wRank,
+      mmrPick: c.mmr?.pick,
+      mmrSim: c.mmr?.maxSim,
+      timestamp: lastAccessed(c.item),
+    })),
     { floor, limit },
   );
 }
 
 /** Final stage: drop hits under the profile's floor, rank by rerank score, cap at its limit. */
-export function finalizeHits<T extends { score: number }>(hits: T[], profile: Pick<RetrievalProfile, "floor" | "limit">): T[] {
+export function finalizeHits<T extends { score: number }>(
+  hits: T[],
+  profile: Pick<RetrievalProfile, "floor" | "limit">,
+): T[] {
   return hits
     .filter((h) => h.score >= profile.floor)
     .sort((a, b) => b.score - a.score)

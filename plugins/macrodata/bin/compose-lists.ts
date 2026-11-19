@@ -65,7 +65,9 @@ function loadJournal(): string {
         firstLine.length > JOURNAL_ENTRY_CAP
           ? dropLoneHighSurrogate(firstLine.slice(0, JOURNAL_ENTRY_CAP)) + "…"
           : firstLine;
-      return [`- [${fmt.format(new Date(timestamp))}] [${neutralizeTags(topic)}] ${neutralizeTags(snippet)}`];
+      return [
+        `- [${fmt.format(new Date(timestamp))}] [${neutralizeTags(topic)}] ${neutralizeTags(snippet)}`,
+      ];
     });
     if (!bullets.length) return "_No recent journal entries_";
     return bullets.join("\n") + "\n" + JOURNAL_FOOTER;

@@ -398,7 +398,7 @@ describe("corpus projection", () => {
     // and "." is truthy, so the type landed as the literal string "." instead
     // of falling through to the "entities" default — the fallback was
     // unreachable for exactly the case it was meant to cover.
-    test("a failure at the entities root itself is typed \"entities\", not \".\"", () => {
+    test('a failure at the entities root itself is typed "entities", not "."', () => {
       chmodSync(ctx.entitiesDir, 0o000);
       try {
         const proj = corpus.scanCorpus();

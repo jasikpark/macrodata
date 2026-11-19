@@ -64,7 +64,11 @@ async function main(): Promise<void> {
   } else if (!process.stdin.isTTY) {
     const raw = await Bun.stdin.text();
     if (raw.trim()) {
-      try { env = JSON.parse(raw); } catch { emitSilent(); }
+      try {
+        env = JSON.parse(raw);
+      } catch {
+        emitSilent();
+      }
     }
   }
 
@@ -106,7 +110,10 @@ async function main(): Promise<void> {
     } else {
       // Tool path: fold in the current tool's intent (the just-issued action).
       const intent = buildHookQuery(env);
-      if (intent) { search = `${intent}\n${search}`.slice(0, 6000); rerankQuery = `${intent} ${rerankQuery}`.slice(0, 900); }
+      if (intent) {
+        search = `${intent}\n${search}`.slice(0, 6000);
+        rerankQuery = `${intent} ${rerankQuery}`.slice(0, 900);
+      }
     }
   } else {
     search = buildHookQuery(env);
@@ -134,14 +141,20 @@ async function main(): Promise<void> {
   const loadInjected = (): Inj[] => {
     if (!injectedFile || !existsSync(injectedFile)) return [];
     try {
-      return (JSON.parse(readFileSync(injectedFile, "utf-8")) as unknown[])
-        .map((e) => (typeof e === "string" ? { c: e, ts: "" } : (e as Inj))); // legacy string[] → ts-less
-    } catch { return []; }
+      return (JSON.parse(readFileSync(injectedFile, "utf-8")) as unknown[]).map((e) =>
+        typeof e === "string" ? { c: e, ts: "" } : (e as Inj),
+      ); // legacy string[] → ts-less
+    } catch {
+      return [];
+    }
   };
   // Resolve the compaction window BEFORE persistInjected — that closure reads
   // windowStartTs, so it must be in scope first (no temporal-dead-zone trap).
   // Comes from the SAME transcript parse as the query build (analyzeTranscript).
-  const { windowStartTs, authoredKeys } = ta ?? { windowStartTs: "", authoredKeys: new Set<string>() };
+  const { windowStartTs, authoredKeys } = ta ?? {
+    windowStartTs: "",
+    authoredKeys: new Set<string>(),
+  };
   const persistInjected = (chunks: SearchResult[]): void => {
     if (!injectedFile) return;
     try {
@@ -167,10 +180,14 @@ async function main(): Promise<void> {
     // delta in-window: a ts-less (legacy) or pre-window injection is treated as NOT in
     // context (re-eligible) — conservative, under-cull. Lexical ISO compare (canonical
     // `…Z`+ms invariant; mismatch fails toward dropping = under-cull-safe).
-    ...loadInjected().filter((e) => e.ts && (!windowStartTs || e.ts >= windowStartTs)).map((e) => e.c),
+    ...loadInjected()
+      .filter((e) => e.ts && (!windowStartTs || e.ts >= windowStartTs))
+      .map((e) => e.c),
     ...authoredKeys,
   ]);
-  try { if (excludeFile) atomicWrite(excludeFile, JSON.stringify([...excludeSet])); } catch {} // stay silent on ENOSPC/EACCES (matches every other write here)
+  try {
+    if (excludeFile) atomicWrite(excludeFile, JSON.stringify([...excludeSet]));
+  } catch {} // stay silent on ENOSPC/EACCES (matches every other write here)
 
   // Calibration log. `extra` carries mode + timing (sync: pipeMs; async:
   // offPathMs/queryToServeMs/fastMs) so the jsonl records both paths uniformly.
@@ -188,29 +205,39 @@ async function main(): Promise<void> {
       // was just enqueued and will surface as the served query of a later drain.
       const logSearch = servedQuery?.search ?? search;
       const logRerank = servedQuery?.rerankQuery ?? rerankQuery;
-      appendFileSync(getCalibrationLog(), JSON.stringify({
-        // sid segments fires by session — without it the N2 blind-cycle
-        // adjacency test can't tell a real post-injection blackout from two
-        // unrelated sessions interleaved in this shared flat log.
-        ts: new Date().toISOString(), sid: sid || null, event, tool: env.tool_name ?? null,
-        search: logSearch.slice(0, 300), rerankQuery: logRerank.slice(0, 200),
-        n: chunks.length, ms: Date.now() - t0,
-        scores: chunks.map((h) => Number(h.score.toFixed(3))), // back-compat: final score
-        sources: chunks.map(srcLabel),
-        // Per-STAGE breakdown so calibration sweeps can see WHY a hit ranked, not just
-        // the conflated final: rerank (final cross-encoder), rrf (fused recall), recency factor.
-        hits: chunks.map((h) => ({
-          src: srcLabel(h),
-          rerank: Number(h.score.toFixed(3)),
-          rrf: h.rrf != null ? Number(h.rrf.toFixed(4)) : null,
-          recency: h.recency != null ? Number(h.recency.toFixed(3)) : null,
-          wRank: h.wRank ?? null,
-          mmrPick: h.mmrPick ?? null,
-          mmrSim: h.mmrSim != null ? Number(h.mmrSim.toFixed(3)) : null,
-          ageDays: h.timestamp ? Math.round((Date.now() - Date.parse(h.timestamp)) / 86_400_000) : null,
-        })),
-        ...extra,
-      }) + "\n");
+      appendFileSync(
+        getCalibrationLog(),
+        JSON.stringify({
+          // sid segments fires by session — without it the N2 blind-cycle
+          // adjacency test can't tell a real post-injection blackout from two
+          // unrelated sessions interleaved in this shared flat log.
+          ts: new Date().toISOString(),
+          sid: sid || null,
+          event,
+          tool: env.tool_name ?? null,
+          search: logSearch.slice(0, 300),
+          rerankQuery: logRerank.slice(0, 200),
+          n: chunks.length,
+          ms: Date.now() - t0,
+          scores: chunks.map((h) => Number(h.score.toFixed(3))), // back-compat: final score
+          sources: chunks.map(srcLabel),
+          // Per-STAGE breakdown so calibration sweeps can see WHY a hit ranked, not just
+          // the conflated final: rerank (final cross-encoder), rrf (fused recall), recency factor.
+          hits: chunks.map((h) => ({
+            src: srcLabel(h),
+            rerank: Number(h.score.toFixed(3)),
+            rrf: h.rrf != null ? Number(h.rrf.toFixed(4)) : null,
+            recency: h.recency != null ? Number(h.recency.toFixed(3)) : null,
+            wRank: h.wRank ?? null,
+            mmrPick: h.mmrPick ?? null,
+            mmrSim: h.mmrSim != null ? Number(h.mmrSim.toFixed(3)) : null,
+            ageDays: h.timestamp
+              ? Math.round((Date.now() - Date.parse(h.timestamp)) / 86_400_000)
+              : null,
+          })),
+          ...extra,
+        }) + "\n",
+      );
     } catch {}
   };
 
@@ -224,10 +251,12 @@ async function main(): Promise<void> {
     // One row format for both surfaces, so the human sees exactly what the model got.
     const debugBlock = chunks.map((h) => recallRow(h)).join("\n");
     const visible = `[macrodata-recall] ${chunks.length} hit(s) from ${env.tool_name ?? event} · recency ${AMBIENT.halfLifeDays}d half-life · ${tag}\n${debugBlock}`;
-    process.stdout.write(JSON.stringify({
-      systemMessage: visible,
-      hookSpecificOutput: { hookEventName: event, additionalContext: recallBlock(chunks) },
-    }));
+    process.stdout.write(
+      JSON.stringify({
+        systemMessage: visible,
+        hookSpecificOutput: { hookEventName: event, additionalContext: recallBlock(chunks) },
+      }),
+    );
     process.exit(0);
   };
 
@@ -242,8 +271,16 @@ async function main(): Promise<void> {
   if (event === "Stop") {
     if (sid) {
       try {
-        atomicWrite(getRequestPath(sid),
-          JSON.stringify({ sid, search, rerankQuery, ts: new Date().toISOString(), primedBy: "Stop" }));
+        atomicWrite(
+          getRequestPath(sid),
+          JSON.stringify({
+            sid,
+            search,
+            rerankQuery,
+            ts: new Date().toISOString(),
+            primedBy: "Stop",
+          }),
+        );
       } catch {}
       logCalibration([], { mode: "stop-prime" });
     }
@@ -260,8 +297,12 @@ async function main(): Promise<void> {
       claimInbox(sid, excludeSet, AMBIENT);
     // Enqueue THIS turn's context for the worker (latest-wins; worker consumes).
     if (sid) {
-      try { atomicWrite(getRequestPath(sid),
-        JSON.stringify({ sid, search, rerankQuery, ts: new Date().toISOString() })); } catch {}
+      try {
+        atomicWrite(
+          getRequestPath(sid),
+          JSON.stringify({ sid, search, rerankQuery, ts: new Date().toISOString() }),
+        );
+      } catch {}
     }
     // Outside the ready check: the prune above is the growth bound, and a fire
     // that injects nothing is exactly the fire that has entries to drop — a
@@ -284,7 +325,18 @@ async function main(): Promise<void> {
         `query ${clk(meta.requestedAt)} → served ${clk(meta.servedAt)} (${span})`;
       logCalibration(
         ready,
-        { mode: "async", offPathMs: offPath, queryToServeMs: span, fastMs, drained, filteredInContext, filteredSrc, floorDropped, excludeSize: excludeSet.size, drainError },
+        {
+          mode: "async",
+          offPathMs: offPath,
+          queryToServeMs: span,
+          fastMs,
+          drained,
+          filteredInContext,
+          filteredSrc,
+          floorDropped,
+          excludeSize: excludeSet.size,
+          drainError,
+        },
         { search: meta.servedSearch, rerankQuery: meta.servedRerankQuery },
       );
       emitHits(ready, tag);
@@ -302,14 +354,25 @@ async function main(): Promise<void> {
       // undefined fields fall back to this fire's query, which is then correct.
       logCalibration(
         [],
-        { mode: "async-enqueue", fastMs, drained, filteredInContext, filteredSrc, floorDropped, excludeSize: excludeSet.size, drainError },
+        {
+          mode: "async-enqueue",
+          fastMs,
+          drained,
+          filteredInContext,
+          filteredSrc,
+          floorDropped,
+          excludeSize: excludeSet.size,
+          drainError,
+        },
         { search: meta.servedSearch, rerankQuery: meta.servedRerankQuery },
       );
       const visible = `[macrodata-recall] queued from ${env.tool_name ?? event} · reranking off-path, nothing ready yet (this fire ${fastMs}ms)`;
-      process.stdout.write(JSON.stringify({
-        systemMessage: visible,
-        hookSpecificOutput: { hookEventName: event },
-      }));
+      process.stdout.write(
+        JSON.stringify({
+          systemMessage: visible,
+          hookSpecificOutput: { hookEventName: event },
+        }),
+      );
       process.exit(0);
     }
     emitSilent();
@@ -336,6 +399,8 @@ async function main(): Promise<void> {
 // throw prints one attributed line + the stack and exits 1 (non-blocking,
 // user-visible) instead of surfacing as a bare unhandled-rejection dump.
 main().catch((e) => {
-  console.error(`[macrodata-recall] hook failed (unexpected): ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
+  console.error(
+    `[macrodata-recall] hook failed (unexpected): ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`,
+  );
   process.exit(1);
 });

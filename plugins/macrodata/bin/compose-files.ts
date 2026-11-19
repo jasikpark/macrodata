@@ -52,7 +52,10 @@ function frontmatterDescription(absPath: string): string | null {
   for (const line of lines.slice(1, end)) {
     const m = /^description:\s*(.*)$/i.exec(line);
     if (!m) continue;
-    let v = m[1].trim().replace(/^["']|["']$/g, "").trim();
+    let v = m[1]
+      .trim()
+      .replace(/^["']|["']$/g, "")
+      .trim();
     if (!v) return null;
     if (v.length > DESC_CAP) v = v.slice(0, DESC_CAP - 1) + "…";
     return neutralizeTags(v);

@@ -50,7 +50,7 @@ function getTodayJournalPath(): string {
 export async function logJournal(
   topic: string,
   content: string,
-  metadata?: { source?: string; intent?: string }
+  metadata?: { source?: string; intent?: string },
 ): Promise<void> {
   ensureDirectories();
 

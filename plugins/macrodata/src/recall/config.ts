@@ -34,10 +34,13 @@ export { getStateRoot, getEntitiesDir, getJournalDir } from "../config.ts";
  *      read; a user-file entry outranks it here.
  */
 export function recallDisabled(): boolean {
-  if (["1", "true", "yes", "on"].includes(flagWord(process.env.MACRODATA_RECALL_DISABLE))) return true;
+  if (["1", "true", "yes", "on"].includes(flagWord(process.env.MACRODATA_RECALL_DISABLE)))
+    return true;
   const live = liveRecallEnabled();
   if (live !== undefined) return !live;
-  return ["0", "false", "no", "off"].includes(flagWord(process.env.CLAUDE_PLUGIN_OPTION_RECALL_ENABLED));
+  return ["0", "false", "no", "off"].includes(
+    flagWord(process.env.CLAUDE_PLUGIN_OPTION_RECALL_ENABLED),
+  );
 }
 
 function flagWord(v: string | undefined): string {
@@ -60,7 +63,9 @@ function liveRecallEnabled(): boolean | undefined {
   if (!isRecord(configs)) return undefined;
   const values = Object.entries(configs)
     .filter(([key]) => key.startsWith("macrodata@"))
-    .map(([, entry]) => (isRecord(entry) && isRecord(entry.options) ? entry.options.recall_enabled : undefined))
+    .map(([, entry]) =>
+      isRecord(entry) && isRecord(entry.options) ? entry.options.recall_enabled : undefined,
+    )
     .filter((v) => v === true || v === false || v === "true" || v === "false");
   if (values.length === 0) return undefined;
   return !values.some((v) => v === false || v === "false");

@@ -21,11 +21,11 @@ export const logger = {
   log(message: string): void {
     appendFileSync(LOG_FILE, formatMessage("INFO", message));
   },
-  
+
   error(message: string): void {
     appendFileSync(LOG_FILE, formatMessage("ERROR", message));
   },
-  
+
   warn(message: string): void {
     appendFileSync(LOG_FILE, formatMessage("WARN", message));
   },

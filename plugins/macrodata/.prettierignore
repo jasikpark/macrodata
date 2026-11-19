@@ -1,0 +1,4 @@
+# gest owns these files; reformatting them churns its store.
+.gest/
+# Prose and model prompts, formatted by hand.
+*.md
