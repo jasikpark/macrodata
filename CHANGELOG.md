@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.1
+
+### Patch Changes
+
+- [#109](https://github.com/jasikpark/macrodata/pull/109) [`6bd4513`](https://github.com/jasikpark/macrodata/commit/6bd45139ce2112e572bef32f5ba808ad26b0fce7) Thanks [@jasikpark](https://github.com/jasikpark)! - Conversation indexing reads only what each transcript gained since the last pass. It used to re-read and re-embed a changed transcript from the start, so every reindex of a long session re-embedded all of it. A prompt still waiting for its reply, or a line still being written, is picked up on a later pass. `conversations-state.json` is now replaced atomically, so a crash mid-write no longer leaves it unparsable, which would have forced every transcript to be re-embedded.
+
+- [#107](https://github.com/jasikpark/macrodata/pull/107) [`44c7907`](https://github.com/jasikpark/macrodata/commit/44c79073211de737457ff0aec5f6b1065aa6c270) Thanks [@jasikpark](https://github.com/jasikpark)! - Conversation search now sees exchanges indexed after its MCP server started. Each server cached `index.json` on first use and never reloaded it, so a session's `search_conversations` missed every exchange indexed later, whether by a PreCompact reindex, `manage_index`, or another session's server. The cache now reloads whenever the file on disk has changed.
+
 ## 0.15.0
 
 ### Minor Changes
