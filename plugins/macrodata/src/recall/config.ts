@@ -115,6 +115,11 @@ export function getExcludePath(sid: string): string {
   return join(getMailboxDir(), `exclude-${sid}.json`);
 }
 
+/** Pid of the session's live recall waiter, so a burst of tool calls runs one waiter. */
+export function getWaiterLockPath(sid: string): string {
+  return join(getMailboxDir(), `waiter-${sid}.lock`);
+}
+
 /**
  * Spawn-time mutex for the worker, claimed exclusively at startup.
  *

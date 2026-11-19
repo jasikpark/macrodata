@@ -46,7 +46,8 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, mkdirSync, rmSync, statSync, watch } from "fs";
 import { join } from "path";
 import { configure, getConsoleSink, getLogger, jsonLinesFormatter } from "@logtape/logtape";
-import { envNum, pipelineSearch } from "./fts.ts";
+import { envNum } from "./env.ts";
+import { pipelineSearch } from "./fts.ts";
 import { ambientProfile } from "./profiles.ts";
 import { TIMER_MAX_MS, WEDGED, withDeadline } from "./deadline.ts";
 import { getIndexDir, getMailboxDir, getRequestPath, getInboxPath, getExcludePath, getWorkerPidPath, getSpawnStampPath, getReindexHaltedPath } from "./config.ts";

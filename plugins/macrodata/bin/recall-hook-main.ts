@@ -25,16 +25,16 @@
  *          or:  bun run bin/recall-hook.ts --query "what is porrima"
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "fs";
 import { pipelineSearch } from "../src/recall/fts.ts";
 import { ambientProfile } from "../src/recall/profiles.ts";
 import type { SearchResult } from "../src/recall/indexer.ts";
 import { buildHookQuery, analyzeTranscript, scrubOperationalNoise } from "../src/recall/query.ts";
 import { memKey, recordAccess } from "../src/recall/access.ts";
+import { atomicWrite, claimInbox, recallBlock, recallRow, srcLabel } from "../src/recall/inbox.ts";
 import {
   getCalibrationLog,
   getExcludePath,
-  getInboxPath,
   getInjectedPath,
   getMailboxDir,
   getRequestPath,
@@ -69,6 +69,7 @@ async function main(): Promise<void> {
   }
 
   const event = env.hook_event_name ?? "PostToolUse";
+  const sid = (env.session_id || "").replace(/[^A-Za-z0-9_-]/g, "");
 
   // Mode: async (default) keeps models strictly in the worker; sync is the
   // explicit debug override (inline pipeline = per-fire model load). The old
@@ -113,21 +114,11 @@ async function main(): Promise<void> {
   }
   if (search.length < MIN_QUERY_CHARS) emitSilent();
 
-  const sid = (env.session_id || "").replace(/[^A-Za-z0-9_-]/g, "");
   // Both dirs are created up front: every write below assumes they exist, and on
   // a fresh state root nothing else has made them yet.
   mkdirSync(getMailboxDir(), { recursive: true });
   const injectedFile = sid ? getInjectedPath(sid) : "";
   const excludeFile = sid ? getExcludePath(sid) : "";
-  const atomicWrite = (path: string, data: string): void => {
-    // pid-unique tmp: parallel tool calls fire concurrent same-sid hooks, and
-    // a shared tmp path lets two writers interleave (write is not atomic
-    // across processes) before one renames torn bytes into place. rename
-    // itself is atomic; the tmp file must be private to this writer.
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, data);
-    renameSync(tmp, path);
-  };
 
   // ---- Unified in-context EXCLUDE (Porrima inContextIds = frozen ∪ delta) ----
   // EXACT, content-keyed, scoped to the live COMPACTION WINDOW, and excluded in the
@@ -181,13 +172,6 @@ async function main(): Promise<void> {
   ]);
   try { if (excludeFile) atomicWrite(excludeFile, JSON.stringify([...excludeSet])); } catch {} // stay silent on ENOSPC/EACCES (matches every other write here)
 
-  // Source label for logs + display: always carry the file, qualified by the
-  // section when present. A bare `section ?? source` collapses two files
-  // sharing a section title ("Notes", "Status") into one indistinguishable
-  // label — fatal for blackout forensics, which exist to identify WHICH hit
-  // the exclude suppressed.
-  const srcLabel = (h: SearchResult): string => (h.section ? `${h.source} › ${h.section}` : h.source);
-
   // Calibration log. `extra` carries mode + timing (sync: pipeMs; async:
   // offPathMs/queryToServeMs/fastMs) so the jsonl records both paths uniformly.
   const logCalibration = (
@@ -237,46 +221,12 @@ async function main(): Promise<void> {
     // Record an access event per injected chunk (step 2: "surfaced" = touched).
     // This is the single injection point for both sync + async-drain paths.
     recordAccess(chunks.map(memKey), "surfaced", new Date().toISOString());
-    // Age visibility: show each hit's age. Recency is a PRE-rerank candidate-
-    // selection bias (Porrima placement), so the displayed score is the pure
-    // cross-encoder relevance — an old hit with a high score survived on merit,
-    // which is the gentler behavior we want to see. Entities are evergreen.
-    // Age shown = effective last_accessed (surfacing bumps the clock — Porrima
-    // semantics), NOT the content-created date. Intentional; labeled "seen" below.
-    const ageLabel = (ts?: string): string => {
-      if (!ts) return "evergreen";
-      const d = (Date.now() - Date.parse(ts)) / 86_400_000;
-      return Number.isNaN(d) ? "evergreen" : d < 1 ? "<1d ago" : `${Math.round(d)}d ago`;
-    };
-    const halfLife = AMBIENT.halfLifeDays;
-    // One row format for BOTH surfaces (model additionalContext + human
-    // systemMessage): per-STAGE numbers so neither reader judges calibration on
-    // the conflated final. rerank = final cross-encoder; rrf = fused recall score
-    // (pre-rerank); rec = recency factor (0-1, pre-rerank selection only); "seen" =
-    // effective last_accessed age that rec decays from (surfacing bumps it —
-    // Porrima semantics).
-    // mmr segment: pick order + redundancy penalty at pick time. Omitted (not
-    // defaulted) when absent — absence means MMR was bypassed for that slate.
-    // An absent stage value renders as "?" (unknown — e.g. a version-skewed
-    // inbox), never as a fabricated 0/1 that reads as a measured score.
-    const fmt = (v: number | undefined, digits: number) => (v != null ? v.toFixed(digits) : "?");
-    // w# = pre-MMR rank by retrieval+recency weight — the counterfactual
-    // plain-top-k position. w# above the pool size = MMR created this slot.
-    const mmrSeg = (h: SearchResult) =>
-      h.mmrPick != null ? ` · mmr (#${h.mmrPick} · w#${h.wRank ?? "?"} · sim ${fmt(h.mmrSim, 2)})` : "";
-    // Raw content can quote the literal closing tag (the corpus holds web pages
-    // and transcripts); escape it so a hit can't terminate the model-facing
-    // block early and pass itself off as post-recall context.
-    const excerpt = (s: string) =>
-      s.replace(/\s+/g, " ").split("</macrodata-recall").join("<\\/macrodata-recall").slice(0, 220);
-    const row = (h: SearchResult) =>
-      `- rerank ${h.score.toFixed(2)} · rrf ${fmt(h.rrf, 3)}${mmrSeg(h)} · rec (${fmt(h.recency, 2)} · seen ${ageLabel(h.timestamp)}) — ${srcLabel(h)}\n  ${excerpt(h.content)}`;
-    const block = "<macrodata-recall>\n" + chunks.map(row).join("\n") + "\n</macrodata-recall>";
-    const debugBlock = chunks.map(row).join("\n");
-    const visible = `[macrodata-recall] ${chunks.length} hit(s) from ${env.tool_name ?? event} · recency ${halfLife}d half-life · ${tag}\n${debugBlock}`;
+    // One row format for both surfaces, so the human sees exactly what the model got.
+    const debugBlock = chunks.map((h) => recallRow(h)).join("\n");
+    const visible = `[macrodata-recall] ${chunks.length} hit(s) from ${env.tool_name ?? event} · recency ${AMBIENT.halfLifeDays}d half-life · ${tag}\n${debugBlock}`;
     process.stdout.write(JSON.stringify({
       systemMessage: visible,
-      hookSpecificOutput: { hookEventName: event, additionalContext: block },
+      hookSpecificOutput: { hookEventName: event, additionalContext: recallBlock(chunks) },
     }));
     process.exit(0);
   };
@@ -304,83 +254,10 @@ async function main(): Promise<void> {
   // THIS query for the worker, exit fast. The slow rerank never blocks the tool;
   // results surface one fire later (3fz competitive injection).
   if (MODE === "async") {
-    const inbox = sid ? getInboxPath(sid) : "";
-    let ready: SearchResult[] = [];
-    let meta: { requestedAt?: string; servedAt?: string; pipelineMs?: number; servedSearch?: string; servedRerankQuery?: string } = {};
-    // Drain accounting (feeds calibration): `drained` = hits the worker had
-    // waiting; `filteredInContext` = how many of those the in-context exclude
-    // dropped before injection. A one-cycle blind spot (the N2 post-injection
-    // blackout) shows up here as drained>0 with filteredInContext===drained and
-    // n:0 — the signature that was previously unattributable in the soak logs.
-    let drained = 0;
-    let filteredInContext = 0;
-    // WHICH hits the exclude suppressed (source labels, <= worker limit) — a
-    // blackout row needs identities, not just a count, to tell true N2 (the
-    // just-injected chunk re-won) from an exclude false positive.
-    let filteredSrc: string[] = [];
-    // Hits the floor re-check (or a malformed score) dropped after the exclude
-    // accounting — without this counter a floor-dropped hit leaves a drain row
-    // (drained>0, filteredInContext<drained, n:0) matching no documented
-    // signature, and a mixed row would fail the N2 test even when N2 fired.
-    let floorDropped = 0;
-    // A malformed claimed-inbox parse would otherwise log as drained:0 — byte-
-    // identical to "worker hadn't served yet" — misattributing a destroyed
-    // result to worker latency. (A rename ENOENT is NOT this: that's a
-    // concurrent fire winning the claim, handled silently below.)
-    let drainError = false;
-    if (inbox && existsSync(inbox)) {
-      // Claim-by-rename BEFORE reading: parallel tool calls fire concurrent
-      // same-sid hooks (the reason atomicWrite's tmp is pid-unique), and a
-      // bare read→unlink would let two fires drain the same complete inbox —
-      // double-injecting, double-counting recordAccess (which feeds back into
-      // recency ranking), and landing duplicate calibration rows. rename is
-      // atomic: exactly one fire wins; the loser's ENOENT means "nothing
-      // ready", not an error.
-      const claim = `${inbox}.${process.pid}.claim`;
-      let claimed = false;
-      // Only ENOENT means "a concurrent fire won the claim". Any other rename
-      // failure (EACCES/EROFS/...) means the inbox exists but can never be
-      // claimed — without the flag that strands the inbox forever while the
-      // log shows drained:0, the exact worker-latency misattribution the
-      // drainError flag exists to prevent.
-      try { renameSync(inbox, claim); claimed = true; }
-      catch (e) { if ((e as { code?: string }).code !== "ENOENT") drainError = true; }
-      if (claimed) {
-        try {
-          const parsed = JSON.parse(readFileSync(claim, "utf-8")) as
-            { requestedAt?: string; servedAt?: string; pipelineMs?: number; servedSearch?: string; servedRerankQuery?: string; hits: SearchResult[] };
-          const raw = parsed.hits || [];
-          drained = raw.length;
-          const kept = raw.filter((h) => !excludeSet.has(h.content));
-          filteredInContext = drained - kept.length;
-          filteredSrc = raw.filter((h) => excludeSet.has(h.content)).map(srcLabel);
-          // Re-apply this process's ambient floor too, not just its limit: hook and worker
-          // read separate environments, and on skew a tightened hook floor must
-          // not be bypassed by hits the worker admitted under its looser one.
-          // The typeof guards keep a version-skewed inbox (string scores,
-          // missing content/source) from reaching h.score.toFixed(),
-          // memKey's sha1 update, or persistInjected downstream — each of
-          // which would crash the hook (a skewed inbox is an EXPECTED case —
-          // degrade, don't squeak), and persistInjected runs
-          // BEFORE emitHits, so a crash there would also write a phantom
-          // exclude for content the model never saw.
-          const floored = kept.filter((h) =>
-            typeof h.content === "string" && typeof h.source === "string" &&
-            typeof h.score === "number" && h.score >= AMBIENT.floor);
-          floorDropped = kept.length - floored.length;
-          ready = floored.slice(0, AMBIENT.limit);
-          meta = parsed;
-        } catch {
-          drainError = true;
-          // Keep the evidence: a malformed CLAIMED file is post-atomic-rename,
-          // so it's an anomaly worth an autopsy (version skew? worker bug?) —
-          // unlinking it would leave the drainError row undiagnosable. The
-          // .bad file joins the deferred tmp/claim litter sweep.
-          try { renameSync(claim, `${claim}.bad`); } catch {}
-        }
-        try { unlinkSync(claim); } catch {} // no-op (ENOENT) when renamed to .bad
-      }
-    }
+    // Drain accounting (drained, filteredInContext, filteredSrc, floorDropped,
+    // drainError) feeds calibration; see Claim in src/recall/inbox.ts.
+    const { ready, meta, drained, filteredInContext, filteredSrc, floorDropped, drainError } =
+      claimInbox(sid, excludeSet, AMBIENT);
     // Enqueue THIS turn's context for the worker (latest-wins; worker consumes).
     if (sid) {
       try { atomicWrite(getRequestPath(sid),

@@ -163,6 +163,11 @@
 					{
 						"type": "command",
 						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-hook.ts"
+					},
+					{
+						"type": "command",
+						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-waiter.ts",
+						"async": true
 					}
 				]
 			}
