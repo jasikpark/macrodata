@@ -82,7 +82,13 @@ function runHook(root: string, arg: string, extraEnv: Record<string, string> = {
   const r = spawnSync("bash", [HOOK, arg], {
     encoding: "utf-8",
     input: "", // prompt-submit reads session_id off stdin; give it a closed one
-    env: { ...process.env, MACRODATA_RECALL_DISABLE: "", MACRODATA_ROOT: root, CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT, ...extraEnv },
+    env: {
+      ...process.env,
+      MACRODATA_RECALL_DISABLE: "",
+      MACRODATA_ROOT: root,
+      CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT,
+      ...extraEnv,
+    },
   });
   return { stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -286,7 +292,9 @@ describe("recall worker version lifecycle", () => {
     const installed = await spawnFakeWorker(mineCmd(ctx.root), ctx.root);
     const stale = await spawnFakeWorker(staleCmd(ctx.root), ctx.root);
 
-    const { stdout, stderr } = runHook(ctx.root, "recall-worker", { MACRODATA_RECALL_DISABLE: " TRUE " });
+    const { stdout, stderr } = runHook(ctx.root, "recall-worker", {
+      MACRODATA_RECALL_DISABLE: " TRUE ",
+    });
 
     expect(await waitGone(installed)).toBe(true);
     expect(await waitGone(stale)).toBe(true);
@@ -333,7 +341,9 @@ describe("recall worker version lifecycle", () => {
     const settings = join(process.env.CLAUDE_CONFIG_DIR ?? ctx.root, "settings.json");
     writeFileSync(
       settings,
-      JSON.stringify({ pluginConfigs: { "macrodata@macrodata": { options: { recall_enabled: false } } } }),
+      JSON.stringify({
+        pluginConfigs: { "macrodata@macrodata": { options: { recall_enabled: false } } },
+      }),
     );
     try {
       runHook(ctx.root, "prompt-submit", { CLAUDE_PLUGIN_OPTION_RECALL_ENABLED: "true" });

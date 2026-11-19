@@ -137,7 +137,12 @@ describe("recall worker single-instance claim", () => {
     const mailbox = join(root, ".recall", "mailbox");
     mkdirSync(mailbox, { recursive: true });
     const old = new Date(Date.now() - 8 * 24 * 60 * 60_000);
-    const orphans = ["inbox-gone.json", "exclude-gone.json", "injected-gone.json", "request-gone.json.1234.tmp"];
+    const orphans = [
+      "inbox-gone.json",
+      "exclude-gone.json",
+      "injected-gone.json",
+      "request-gone.json.1234.tmp",
+    ];
     for (const f of orphans) {
       writeFileSync(join(mailbox, f), "{}");
       utimesSync(join(mailbox, f), old, old);

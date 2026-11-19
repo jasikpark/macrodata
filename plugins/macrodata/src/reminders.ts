@@ -101,7 +101,8 @@ export function isSafeId(id: string): boolean {
  */
 export function onceExpressionError(expression: string, now: Date = new Date()): string | null {
   const t = new Date(expression).getTime();
-  if (Number.isNaN(t)) return `"${expression}" is not a valid date — use an ISO datetime like 2026-01-31T10:00:00`;
+  if (Number.isNaN(t))
+    return `"${expression}" is not a valid date — use an ISO datetime like 2026-01-31T10:00:00`;
   if (t <= now.getTime()) return `${expression} is already in the past`;
   return null;
 }
@@ -126,9 +127,7 @@ export function notificationText(text: unknown): string {
  * legitimate payload text (code, etc.) survives.
  */
 export function neutralizeTags(s: string): string {
-  return s
-    .replace(/<\/macrodata/g, "&lt;/macrodata")
-    .replace(/<macrodata/g, "&lt;macrodata");
+  return s.replace(/<\/macrodata/g, "&lt;/macrodata").replace(/<macrodata/g, "&lt;macrodata");
 }
 
 export interface ReminderInput {
@@ -159,7 +158,9 @@ export function formatReminderEntry(s: ReminderInput, firedAt: Date): string {
   const id = safeId(s.id);
   const pad = (n: number) => String(n).padStart(2, "0");
   const when = `${firedAt.getFullYear()}-${pad(firedAt.getMonth() + 1)}-${pad(firedAt.getDate())} ${pad(firedAt.getHours())}:${pad(firedAt.getMinutes())}`;
-  const payload = neutralizeTags(s.payload).replace(/[\r\n]+/g, " / ").trim();
+  const payload = neutralizeTags(s.payload)
+    .replace(/[\r\n]+/g, " / ")
+    .trim();
   return `- [${id}] fired ${when} — ${payload}`;
 }
 

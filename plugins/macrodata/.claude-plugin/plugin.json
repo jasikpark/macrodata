@@ -1,225 +1,218 @@
 {
-	"name": "macrodata",
-	"version": "0.15.0",
-	"description": "Stateful agent tools for Claude Code. Learns who you are, remembers what you're working on, schedules tasks, maintains itself.",
-	"author": {
-		"name": "Caleb Jasik",
-		"url": "https://jasik.xyz"
-	},
-	"repository": "https://github.com/jasikpark/macrodata",
-	"license": "MIT",
-	"keywords": [
-		"memory",
-		"context",
-		"local"
-	],
-	"userConfig": {
-		"recall_enabled": {
-			"type": "boolean",
-			"title": "Ambient recall",
-			"description": "Run the background recall worker (about 1.2 GB of RAM) that surfaces related memories as you work. Turn off on memory-constrained machines; the memory tools keep working.",
-			"default": true
-		}
-	},
-	"hooks": {
-		"SessionStart": [
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/ensure-deps.sh"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/macrodata-hook.sh session-start"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-reindex-hook.ts"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts flags.md"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts reminders.md"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts identity.md"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts today.md"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts human.md"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts workspace.md"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-lists.ts"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/inject-usage.sh"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/inject-files.sh"
-					}
-				]
-			}
-		],
-		"UserPromptSubmit": [
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/macrodata-hook.sh prompt-submit"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "${CLAUDE_PLUGIN_ROOT}/bin/suggest-memory-tools.sh",
-						"timeout": 5
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-hook.ts"
-					}
-				]
-			}
-		],
-		"PostToolUse": [
-			{
-				"matcher": "Write|Edit|MultiEdit|mcp__plugin_macrodata_macrodata__log_journal|mcp__plugin_macrodata_macrodata__save_conversation_summary",
-				"hooks": [
-					{
-						"type": "command",
-						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-reindex-hook.ts"
-					}
-				]
-			},
-			{
-				"matcher": "Read|WebSearch|WebFetch",
-				"hooks": [
-					{
-						"type": "command",
-						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-hook.ts"
-					},
-					{
-						"type": "command",
-						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-waiter.ts",
-						"async": true
-					}
-				]
-			}
-		],
-		"Stop": [
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-hook.ts"
-					}
-				]
-			},
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/checkpoint-hook.ts",
-						"async": true
-					}
-				]
-			}
-		],
-		"SessionEnd": [
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/checkpoint-hook.ts"
-					}
-				]
-			}
-		],
-		"PreCompact": [
-			{
-				"hooks": [
-					{
-						"type": "command",
-						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/checkpoint-hook.ts"
-					}
-				]
-			}
-		]
-	},
-	"mcpServers": {
-		"macrodata": {
-			"command": "bun",
-			"args": [
-				"run",
-				"${CLAUDE_PLUGIN_ROOT}/src/index.ts"
-			],
-			"alwaysLoad": true
-		}
-	}
+  "name": "macrodata",
+  "version": "0.15.0",
+  "description": "Stateful agent tools for Claude Code. Learns who you are, remembers what you're working on, schedules tasks, maintains itself.",
+  "author": {
+    "name": "Caleb Jasik",
+    "url": "https://jasik.xyz"
+  },
+  "repository": "https://github.com/jasikpark/macrodata",
+  "license": "MIT",
+  "keywords": ["memory", "context", "local"],
+  "userConfig": {
+    "recall_enabled": {
+      "type": "boolean",
+      "title": "Ambient recall",
+      "description": "Run the background recall worker (about 1.2 GB of RAM) that surfaces related memories as you work. Turn off on memory-constrained machines; the memory tools keep working.",
+      "default": true
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/ensure-deps.sh"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/macrodata-hook.sh session-start"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-reindex-hook.ts"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts flags.md"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts reminders.md"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts identity.md"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts today.md"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts human.md"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-state-file.ts workspace.md"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compose-lists.ts"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/inject-usage.sh"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/inject-files.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/macrodata-hook.sh prompt-submit"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/suggest-memory-tools.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-hook.ts"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|mcp__plugin_macrodata_macrodata__log_journal|mcp__plugin_macrodata_macrodata__save_conversation_summary",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-reindex-hook.ts"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|WebSearch|WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-hook.ts"
+          },
+          {
+            "type": "command",
+            "command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-waiter.ts",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-hook.ts"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/checkpoint-hook.ts",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/checkpoint-hook.ts"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/checkpoint-hook.ts"
+          }
+        ]
+      }
+    ]
+  },
+  "mcpServers": {
+    "macrodata": {
+      "command": "bun",
+      "args": ["run", "${CLAUDE_PLUGIN_ROOT}/src/index.ts"],
+      "alwaysLoad": true
+    }
+  }
 }

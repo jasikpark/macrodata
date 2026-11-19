@@ -71,12 +71,17 @@ export function detectUser(): UserInfo {
   // Code directories that exist
   const home = homedir();
   const possibleDirs = [
-    "Repos", "repos", "Code", "code", "Projects", "projects", 
-    "Developer", "dev", "src"
+    "Repos",
+    "repos",
+    "Code",
+    "code",
+    "Projects",
+    "projects",
+    "Developer",
+    "dev",
+    "src",
   ];
-  const codeDirs = possibleDirs
-    .map(dir => join(home, dir))
-    .filter(dir => existsSync(dir));
+  const codeDirs = possibleDirs.map((dir) => join(home, dir)).filter((dir) => existsSync(dir));
 
   return {
     username,

@@ -13,8 +13,11 @@
 import { getLlama, resolveModelFile } from "node-llama-cpp";
 
 /** Recorded in the recall index, which refuses writes from a different model. */
-export const EMBED_URI = process.env.MACRODATA_EMBED_MODEL ?? "hf:Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0";
-const RERANK_URI = process.env.MACRODATA_RERANK_MODEL ?? "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf";
+export const EMBED_URI =
+  process.env.MACRODATA_EMBED_MODEL ?? "hf:Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0";
+const RERANK_URI =
+  process.env.MACRODATA_RERANK_MODEL ??
+  "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf";
 
 // Memoize the promise but DROP it on rejection: a transient load failure (offline
 // with a cold HF cache, Metal allocation under pressure) must not brick the
@@ -45,7 +48,9 @@ function breaker<T>(load: () => Promise<T>, label: string): () => Promise<T> {
   let openUntil = 0;
   return async () => {
     if (failures >= MAX_CONSECUTIVE && Date.now() < openUntil) {
-      throw new Error(`[models] ${label} circuit open after ${failures} consecutive load failures; retrying after cooldown`);
+      throw new Error(
+        `[models] ${label} circuit open after ${failures} consecutive load failures; retrying after cooldown`,
+      );
     }
     try {
       const v = await load();
@@ -55,7 +60,9 @@ function breaker<T>(load: () => Promise<T>, label: string): () => Promise<T> {
       failures++;
       if (failures >= MAX_CONSECUTIVE) {
         openUntil = Date.now() + COOLDOWN_MS;
-        console.error(`[models] ${label} failed ${failures}x consecutively — circuit open ${COOLDOWN_MS / 60_000}min (weights may have leaked; restart the worker to reclaim)`);
+        console.error(
+          `[models] ${label} failed ${failures}x consecutively — circuit open ${COOLDOWN_MS / 60_000}min (weights may have leaked; restart the worker to reclaim)`,
+        );
       }
       throw e;
     }
@@ -77,7 +84,9 @@ const llama = memoAsync(() => getLlama());
 // retry path already tolerates and the warn makes visible.
 async function disposeBounded(model: { dispose(): Promise<void> }, label: string): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), 10_000); });
+  const timeout = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), 10_000);
+  });
   // The rejection handler is attached BEFORE the race, not in a catch around
   // it: when the timeout wins, the still-pending dispose promise leaves the
   // race unobserved, and a wedge that eventually ERRORS (the most plausible
@@ -85,10 +94,18 @@ async function disposeBounded(model: { dispose(): Promise<void> }, label: string
   // that kills the long-lived worker long after this function returned.
   const disposed = model.dispose().then(
     () => "ok" as const,
-    (de) => { console.warn(`[models] ${label} model dispose failed after context-init error (weights may leak): ${String(de)}`); return "ok" as const; },
+    (de) => {
+      console.warn(
+        `[models] ${label} model dispose failed after context-init error (weights may leak): ${String(de)}`,
+      );
+      return "ok" as const;
+    },
   );
   const winner = await Promise.race([disposed, timeout]);
-  if (winner === "timeout") console.warn(`[models] ${label} model dispose timed out after context-init error (weights may leak)`);
+  if (winner === "timeout")
+    console.warn(
+      `[models] ${label} model dispose timed out after context-init error (weights may leak)`,
+    );
   clearTimeout(timer);
 }
 

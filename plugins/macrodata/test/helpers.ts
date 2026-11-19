@@ -106,7 +106,7 @@ A test agent for integration testing.
 
 - Be concise
 - Test thoroughly
-`
+`,
   );
 
   // Create today file
@@ -117,7 +117,7 @@ A test agent for integration testing.
 ## Now
 
 Running integration tests.
-`
+`,
   );
 
   // Create human file
@@ -126,7 +126,7 @@ Running integration tests.
     `# Human
 
 Test user for integration testing.
-`
+`,
   );
 
   // Create workspace file
@@ -137,19 +137,14 @@ Test user for integration testing.
 ## Active
 
 - Integration testing
-`
+`,
   );
 }
 
 /**
  * Create a test journal entry
  */
-export function addJournalEntry(
-  ctx: TestContext,
-  topic: string,
-  content: string,
-  date?: Date
-) {
+export function addJournalEntry(ctx: TestContext, topic: string, content: string, date?: Date) {
   const entryDate = date || new Date();
   const dateStr = entryDate.toISOString().split("T")[0];
   const journalPath = join(ctx.journalDir, `${dateStr}.jsonl`);
@@ -174,12 +169,7 @@ export function addJournalEntry(
 /**
  * Create a test entity file
  */
-export function addEntityFile(
-  ctx: TestContext,
-  type: string,
-  name: string,
-  content: string
-) {
+export function addEntityFile(ctx: TestContext, type: string, name: string, content: string) {
   const dir = join(ctx.entitiesDir, type);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${name}.md`), content);
@@ -197,7 +187,7 @@ export function addReminder(
     description: string;
     payload: string;
     agent?: "claude" | "opencode";
-  }
+  },
 ) {
   const reminder = {
     id,
@@ -206,10 +196,7 @@ export function addReminder(
     createdAt: new Date().toISOString(),
   };
 
-  writeFileSync(
-    join(ctx.remindersDir, `${id}.json`),
-    JSON.stringify(reminder, null, 2)
-  );
+  writeFileSync(join(ctx.remindersDir, `${id}.json`), JSON.stringify(reminder, null, 2));
 }
 
 /** Path of the recall worker macrodata-hook.sh would spawn, and its ps marker. */
@@ -251,7 +238,7 @@ export function recallWorkersFor(root: string): { pid: number; cmd: string }[] {
 export async function spawnFakeRecallWorker(
   fakeCmd: string,
   root: string,
-  body = "sleep 30"
+  body = "sleep 30",
 ): Promise<number> {
   const before = new Set(recallWorkersFor(root).map((w) => w.pid));
   const script = JSON.stringify(body);
@@ -274,10 +261,7 @@ export async function spawnFakeRecallWorker(
  * and rerank models, and the hook runs on every event they exercise.
  */
 export function seedHealthyRecallWorker(ctx: TestContext): Promise<number> {
-  return spawnFakeRecallWorker(
-    `bun run ${RECALL_WORKER} ${RECALL_SENTINEL} ${ctx.root}`,
-    ctx.root
-  );
+  return spawnFakeRecallWorker(`bun run ${RECALL_WORKER} ${RECALL_SENTINEL} ${ctx.root}`, ctx.root);
 }
 
 /** SIGKILL anything claiming `root`, fake or real. Unique roots keep this local. */

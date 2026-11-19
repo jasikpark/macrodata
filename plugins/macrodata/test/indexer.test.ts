@@ -47,7 +47,7 @@ describe("indexer", () => {
         const stats = await indexer.getIndexStats();
         expect(stats.itemCount).toBe(1);
       },
-      { timeout: 30000 }
+      { timeout: 30000 },
     );
 
     test("indexed entries are searchable", async () => {
@@ -92,7 +92,7 @@ Software engineer at Acme Corp.
 ## Notes
 
 Works on frontend development.
-`
+`,
       );
 
       addEntityFile(
@@ -108,7 +108,7 @@ A widget for managing widgets.
 ## Status
 
 In progress.
-`
+`,
       );
 
       const result = await indexer.rebuildIndex();
@@ -130,7 +130,7 @@ Backend developer specializing in Rust and Go.
 ## Notes
 
 Loves systems programming and performance optimization.
-`
+`,
       );
 
       await indexer.rebuildIndex();
@@ -174,7 +174,7 @@ Loves systems programming and performance optimization.
         ctx,
         "topics",
         "raft",
-        "# Raft\n\n## Summary\n\nRaft is a consensus algorithm for managing a replicated log."
+        "# Raft\n\n## Summary\n\nRaft is a consensus algorithm for managing a replicated log.",
       );
       await indexer.rebuildIndex();
       const results = await indexer.searchMemory("consensus algorithm replicated log", {
@@ -324,7 +324,7 @@ DevOps engineer.
 ## Skills
 
 Kubernetes, Docker, CI/CD pipelines.
-`
+`,
       );
 
       await indexer.indexEntityFile(filePath);

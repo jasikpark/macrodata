@@ -24,7 +24,9 @@ await configure({
 async function main() {
   try {
     const result = await updateConversationIndex();
-    console.log(`Indexed conversations: ${result.filesUpdated} updated, ${result.skipped} skipped, ${result.exchangeCount} total`);
+    console.log(
+      `Indexed conversations: ${result.filesUpdated} updated, ${result.skipped} skipped, ${result.exchangeCount} total`,
+    );
   } catch (err) {
     console.error("Failed to index conversations:", err);
     process.exit(1);

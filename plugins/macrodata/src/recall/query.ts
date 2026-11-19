@@ -11,7 +11,11 @@
 
 // A path → its topic words (last segment, de-cased, stopword-stripped).
 function pathToTopicWords(p: string): string {
-  const seg = p.split(/[\\/]+/).filter(Boolean).pop() ?? p;
+  const seg =
+    p
+      .split(/[\\/]+/)
+      .filter(Boolean)
+      .pop() ?? p;
   return (
     " " +
     seg
@@ -29,7 +33,10 @@ export function scrubOperationalNoise(text: string | undefined): string {
   return text
     .replace(/```[\s\S]*?```/g, " ") // fenced code
     .replace(/<\/?[a-z_][^>]*>/gi, " ") // xml-ish tags
-    .replace(/\b[\w./-]+\.(ts|tsx|js|jsx|md|json|jsonl|sh|py|go|rs|gguf|toml|yaml|yml)\b/gi, pathToTopicWords)
+    .replace(
+      /\b[\w./-]+\.(ts|tsx|js|jsx|md|json|jsonl|sh|py|go|rs|gguf|toml|yaml|yml)\b/gi,
+      pathToTopicWords,
+    )
     .replace(/\/(?:api|v\d)\/[\w./:-]+/gi, " ")
     .replace(/(?:^|\s)(?:\.{0,2}\/|~\/|\/)[\w./-]+/g, pathToTopicWords) // bare paths
     .replace(/\b(?:--?[a-z][\w-]*)/gi, " ") // CLI flags
@@ -41,8 +48,17 @@ export function scrubOperationalNoise(text: string | undefined): string {
 
 // Semantic fields across common tools — the intent, ordered most→least topical.
 const SIGNAL_FIELDS = [
-  "query", "q", "search", "prompt", "description",
-  "pattern", "command", "url", "file_path", "path", "content",
+  "query",
+  "q",
+  "search",
+  "prompt",
+  "description",
+  "pattern",
+  "command",
+  "url",
+  "file_path",
+  "path",
+  "content",
 ];
 
 interface HookEnvelope {
@@ -74,7 +90,12 @@ export function buildHookQuery(env: HookEnvelope, maxChars = 1000): string {
 
 import { readFileSync } from "fs";
 
-interface Msg { role: string; thinking: string; text: string; tool: string }
+interface Msg {
+  role: string;
+  thinking: string;
+  text: string;
+  tool: string;
+}
 
 function clamp(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) : s;
@@ -93,17 +114,24 @@ interface TranscriptScan {
 // and the CURRENT window's authored keys (cleared at each compact boundary).
 function scanTranscript(transcriptPath: string, maxMessages: number): TranscriptScan {
   let raw: string;
-  try { raw = readFileSync(transcriptPath, "utf-8"); } catch {
+  try {
+    raw = readFileSync(transcriptPath, "utf-8");
+  } catch {
     return { msgs: [], windowStartTs: "", authoredKeys: new Set() };
   }
   const merged: Msg[] = [];
-  let firstTs = "", boundaryTs = "";
+  let firstTs = "",
+    boundaryTs = "";
   let authoredKeys = new Set<string>();
 
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     let e: any;
-    try { e = JSON.parse(line); } catch { continue; }
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
     if (!firstTs && e.timestamp) firstTs = e.timestamp;
 
     // STRUCTURED-FIELD boundary check (NOT a substring scan): the boundary is a
@@ -112,7 +140,8 @@ function scanTranscript(transcriptPath: string, maxMessages: number): Transcript
     // the over-cull trap where prose merely CONTAINING the marker false-matches
     // (confirmed 2026-06-24). Guard each marker by entry TYPE.
     const isSummary = e.isCompactSummary === true && e.type === "user";
-    const isBoundarySys = (e.subtype === "compact_boundary" || e.compactMetadata) && e.type === "system";
+    const isBoundarySys =
+      (e.subtype === "compact_boundary" || e.compactMetadata) && e.type === "system";
     if (isSummary || isBoundarySys) {
       // Authoritative boundary ts = the isCompactSummary USER entry; fall back to
       // the system entry's ts only if the summary lacks one. Last-wins.
@@ -124,7 +153,9 @@ function scanTranscript(transcriptPath: string, maxMessages: number): Transcript
     if (e.type !== "user" && e.type !== "assistant") continue;
     const content = e.message?.content;
     if (content == null) continue;
-    let thinking = "", text = "", tool = "";
+    let thinking = "",
+      text = "",
+      tool = "";
     if (typeof content === "string") {
       text = content; // a real user prompt
     } else if (Array.isArray(content)) {
@@ -136,8 +167,13 @@ function scanTranscript(transcriptPath: string, maxMessages: number): Transcript
           tool += " " + toolIntent(b.input);
           // Frozen-set capture: journal entries I authored in the current window,
           // keyed `[topic] content` byte-identical to the indexed form.
-          if (e.type === "assistant" && String(b.name || "").endsWith("log_journal") && b.input
-              && typeof b.input.topic === "string" && typeof b.input.content === "string") {
+          if (
+            e.type === "assistant" &&
+            String(b.name || "").endsWith("log_journal") &&
+            b.input &&
+            typeof b.input.topic === "string" &&
+            typeof b.input.content === "string"
+          ) {
             authoredKeys.add(`[${b.input.topic}] ${b.input.content}`);
           }
         }
@@ -180,7 +216,10 @@ function scanTranscript(transcriptPath: string, maxMessages: number): Transcript
 // `[topic] content`, byte-identical to how indexer.ts stores a journal entry, so it
 // exact-matches a recall candidate's content. EXACT only (no substring/cosine) — we suppress
 // ONLY what we provably produced; anything uncertain is injected (under-cull, never over-cull).
-export function inContextWindow(transcriptPath: string): { windowStartTs: string; authoredKeys: Set<string> } {
+export function inContextWindow(transcriptPath: string): {
+  windowStartTs: string;
+  authoredKeys: Set<string>;
+} {
   const { windowStartTs, authoredKeys } = scanTranscript(transcriptPath, 0);
   return { windowStartTs, authoredKeys };
 }
@@ -205,7 +244,11 @@ export function analyzeTranscript(
   authoredKeys: Set<string>;
 } {
   const scan = scanTranscript(transcriptPath, opts.maxMessages ?? 12);
-  return { query: queryFromMsgs(scan.msgs, opts), windowStartTs: scan.windowStartTs, authoredKeys: scan.authoredKeys };
+  return {
+    query: queryFromMsgs(scan.msgs, opts),
+    windowStartTs: scan.windowStartTs,
+    authoredKeys: scan.authoredKeys,
+  };
 }
 
 function queryFromMsgs(
@@ -219,21 +262,32 @@ function queryFromMsgs(
   const searchParts: string[] = [];
   for (const m of recent) {
     if (m.role === "user") searchParts.push(clamp(m.text, 1200));
-    else searchParts.push([clamp(m.thinking, 800), clamp(m.text, 1000), m.tool].filter(Boolean).join(" "));
+    else
+      searchParts.push(
+        [clamp(m.thinking, 800), clamp(m.text, 1000), m.tool].filter(Boolean).join(" "),
+      );
   }
   const searchRaw = scrubOperationalNoise(searchParts.join("\n"));
-  const search = searchRaw.length > searchChars ? searchRaw.slice(searchRaw.length - searchChars) : searchRaw;
+  const search =
+    searchRaw.length > searchChars ? searchRaw.slice(searchRaw.length - searchChars) : searchRaw;
 
   // TIGHT rerank query — latest assistant trajectory + user prompt with decay.
   const latestAsst = [...recent].reverse().find((m) => m.role === "assistant");
   const latestUser = [...recent].reverse().find((m) => m.role === "user");
   const traj = latestAsst
-    ? scrubOperationalNoise([clamp(latestAsst.thinking, 400), clamp(latestAsst.text, 300), latestAsst.tool].filter(Boolean).join(" "))
+    ? scrubOperationalNoise(
+        [clamp(latestAsst.thinking, 400), clamp(latestAsst.text, 300), latestAsst.tool]
+          .filter(Boolean)
+          .join(" "),
+      )
     : "";
   const userQ = scrubOperationalNoise(latestUser?.text ?? "");
   // Decay the user prompt once the agent has a substantial trajectory.
   const userBudget = traj.length >= 200 ? 135 : 405;
-  const rerank = clamp([clamp(userQ, userBudget), clamp(traj, 525)].filter(Boolean).join(" "), rerankChars);
+  const rerank = clamp(
+    [clamp(userQ, userBudget), clamp(traj, 525)].filter(Boolean).join(" "),
+    rerankChars,
+  );
 
   // Depth of the latest assistant message — for the Stop path's triviality gate.
   const latest = latestAsst

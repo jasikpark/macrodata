@@ -31,7 +31,10 @@ const LOG = () => getAccessLog();
 // still can't reach the output. Step 3 adds "referenced" (the agent actually used
 // it — loop-free) and can drop "surfaced" here via the env override.
 const REFRESH_KINDS = new Set(
-  (process.env.MACRODATA_RECALL_REFRESH_KINDS ?? "surfaced").split(",").map((s) => s.trim()).filter(Boolean),
+  (process.env.MACRODATA_RECALL_REFRESH_KINDS ?? "surfaced")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
 );
 
 export function memKey(r: SearchResult): string {
@@ -82,10 +85,12 @@ export function loadAccessOverlay(): Map<string, AccessStat> {
       // toISOString, canonical `…Z`+ms) so lexical == chronological. A backward clock
       // step could mis-set firstSeen/lastAccessed → under-recall (safe direction).
       if (e.ts < s.firstSeen) s.firstSeen = e.ts;
-      if (e.kind && REFRESH_KINDS.has(e.kind) && (!s.lastAccessed || e.ts > s.lastAccessed)) s.lastAccessed = e.ts;
+      if (e.kind && REFRESH_KINDS.has(e.kind) && (!s.lastAccessed || e.ts > s.lastAccessed))
+        s.lastAccessed = e.ts;
       m.set(e.key, s);
     }
   } catch {}
-  if (malformed > 0) console.warn(`[Access] skipped ${malformed} malformed event line(s) in ${log}`);
+  if (malformed > 0)
+    console.warn(`[Access] skipped ${malformed} malformed event line(s) in ${log}`);
   return m;
 }

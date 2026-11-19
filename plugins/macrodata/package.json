@@ -3,6 +3,37 @@
   "version": "0.5.0",
   "private": true,
   "description": "Stateful agent tools for OpenCode. Learns who you are, remembers what you're working on, schedules tasks, maintains itself.",
+  "keywords": [
+    "agent",
+    "autonomous",
+    "claude-code",
+    "journal",
+    "local",
+    "memory",
+    "opencode",
+    "plugin",
+    "semantic-search"
+  ],
+  "homepage": "https://github.com/jasikpark/macrodata#readme",
+  "bugs": {
+    "url": "https://github.com/jasikpark/macrodata/issues"
+  },
+  "license": "MIT",
+  "author": "Caleb Jasik <calebjasik@jasik.xyz> (https://jasik.xyz)",
+  "contributors": [
+    "Matt Kane (https://mk.gg)"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jasikpark/macrodata.git",
+    "directory": "plugins/macrodata"
+  },
+  "files": [
+    "opencode",
+    "src",
+    "bin",
+    "USAGE.md"
+  ],
   "type": "module",
   "main": "opencode/index.ts",
   "scripts": {
@@ -12,32 +43,8 @@
     "check": "oxlint --type-aware --type-check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
-    "format": "oxfmt"
-  },
-  "keywords": [
-    "opencode",
-    "claude-code",
-    "plugin",
-    "memory",
-    "agent",
-    "autonomous",
-    "local",
-    "journal",
-    "semantic-search"
-  ],
-  "author": "Caleb Jasik <calebjasik@jasik.xyz> (https://jasik.xyz)",
-  "contributors": [
-    "Matt Kane (https://mk.gg)"
-  ],
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/jasikpark/macrodata.git",
-    "directory": "plugins/macrodata"
-  },
-  "homepage": "https://github.com/jasikpark/macrodata#readme",
-  "bugs": {
-    "url": "https://github.com/jasikpark/macrodata/issues"
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
@@ -51,9 +58,6 @@
     "vectra": "^0.9.0",
     "zod": "^3.24.1"
   },
-  "trustedDependencies": [
-    "node-llama-cpp"
-  ],
   "devDependencies": {
     "@types/bun": "latest",
     "bun-types": "^1.2.2",
@@ -69,10 +73,7 @@
       "experimental.session.compacting"
     ]
   },
-  "files": [
-    "opencode",
-    "src",
-    "bin",
-    "USAGE.md"
+  "trustedDependencies": [
+    "node-llama-cpp"
   ]
 }

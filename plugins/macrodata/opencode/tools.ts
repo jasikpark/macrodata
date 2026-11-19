@@ -14,11 +14,7 @@ import {
   getRecentSummaries,
   saveConversationSummary,
 } from "./journal.js";
-import {
-  searchMemory,
-  rebuildMemoryIndex,
-  getMemoryIndexStats,
-} from "./search.js";
+import { searchMemory, rebuildMemoryIndex, getMemoryIndexStats } from "./search.js";
 import {
   searchConversations,
   rebuildConversationIndex,
@@ -43,8 +39,8 @@ function loadAllSchedules(): Schedule[] {
 
   try {
     if (!existsSync(remindersDir)) return schedules;
-    
-    const files = readdirSync(remindersDir).filter(f => f.endsWith('.json'));
+
+    const files = readdirSync(remindersDir).filter((f) => f.endsWith(".json"));
     for (const file of files) {
       try {
         const content = readFileSync(join(remindersDir, file), "utf-8");
@@ -72,7 +68,7 @@ function saveSchedule(schedule: Schedule): void {
 function deleteScheduleFile(id: string): boolean {
   const remindersDir = getRemindersDir();
   const filePath = join(remindersDir, `${id}.json`);
-  
+
   try {
     if (existsSync(filePath)) {
       unlinkSync(filePath);
@@ -87,7 +83,8 @@ function deleteScheduleFile(id: string): boolean {
 // --- Journal Tools ---
 
 export const logJournalTool = tool({
-  description: "Write a journal entry. Use this to record observations, decisions, or things to remember.",
+  description:
+    "Write a journal entry. Use this to record observations, decisions, or things to remember.",
   args: {
     topic: tool.schema.string().describe("Short topic/category for the entry"),
     content: tool.schema.string().describe("The journal entry content"),
@@ -124,12 +121,32 @@ export const saveConversationSummaryTool = tool({
   description: "Save a summary of the current conversation for context recovery in future sessions",
   args: {
     summary: tool.schema.string().describe("Brief summary of what was discussed/accomplished"),
-    keyDecisions: tool.schema.array(tool.schema.string()).optional().describe("Important decisions made"),
-    openThreads: tool.schema.array(tool.schema.string()).optional().describe("Topics to follow up on"),
-    learnedPatterns: tool.schema.array(tool.schema.string()).optional().describe("New patterns learned about the user"),
-    unhelpfulFiles: tool.schema.array(tool.schema.string()).optional().describe("Answer this one first, and name specific paths. Memory files loaded at session start or surfaced by recall that did not inform the work — including any that were wrong or superseded. Nothing else in the system can tell a stale file from a live one."),
-    helpfulFiles: tool.schema.array(tool.schema.string()).optional().describe("Memory files that measurably changed the work this session. Give paths."),
-    notes: tool.schema.string().optional().describe("Freeform notes for anything that doesn't fit structured fields"),
+    keyDecisions: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Important decisions made"),
+    openThreads: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Topics to follow up on"),
+    learnedPatterns: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("New patterns learned about the user"),
+    unhelpfulFiles: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe(
+        "Answer this one first, and name specific paths. Memory files loaded at session start or surfaced by recall that did not inform the work — including any that were wrong or superseded. Nothing else in the system can tell a stale file from a live one.",
+      ),
+    helpfulFiles: tool.schema
+      .array(tool.schema.string())
+      .optional()
+      .describe("Memory files that measurably changed the work this session. Give paths."),
+    notes: tool.schema
+      .string()
+      .optional()
+      .describe("Freeform notes for anything that doesn't fit structured fields"),
   },
   async execute(args) {
     if (!args.summary) {
@@ -164,10 +181,14 @@ export const getRecentSummariesTool = tool({
 // --- Search Tools ---
 
 export const searchMemoryTool = tool({
-  description: "Semantic search over your history - journal, state files, projects, people. Use to find relevant context.",
+  description:
+    "Semantic search over your history - journal, state files, projects, people. Use to find relevant context.",
   args: {
     query: tool.schema.string().describe("Natural language query to search for"),
-    type: tool.schema.enum(["journal", "state", "project", "person", "meeting", "topic"]).optional().describe("Filter by content type"),
+    type: tool.schema
+      .enum(["journal", "state", "project", "person", "meeting", "topic"])
+      .optional()
+      .describe("Filter by content type"),
     limit: tool.schema.number().optional().describe("Maximum results to return (default: 5)"),
     since: tool.schema.string().optional().describe("Only include items after this ISO date"),
   },
@@ -248,7 +269,8 @@ export const searchConversationsTool = tool({
 // --- Index Tools ---
 
 export const rebuildMemoryIndexTool = tool({
-  description: "Rebuild the semantic search index from scratch. Use if index seems stale or corrupted.",
+  description:
+    "Rebuild the semantic search index from scratch. Use if index seems stale or corrupted.",
   args: {},
   async execute() {
     // Rebuild memory index synchronously (fast)
@@ -288,17 +310,28 @@ export const getMemoryIndexStatsTool = tool({
 // --- Reminder Tools ---
 
 export const scheduleReminderTool = tool({
-  description: "Schedule a recurring reminder using cron syntax. Examples: '0 9 * * *' = 9am daily, '0 */2 * * *' = every 2 hours. IMPORTANT: Check the current time before using this tool to ensure accurate scheduling.",
+  description:
+    "Schedule a recurring reminder using cron syntax. Examples: '0 9 * * *' = 9am daily, '0 */2 * * *' = every 2 hours. IMPORTANT: Check the current time before using this tool to ensure accurate scheduling.",
   args: {
     id: tool.schema.string().describe("Unique reminder identifier"),
-    cronExpression: tool.schema.string().describe("Cron expression (e.g., '0 9 * * *' for 9am daily)"),
+    cronExpression: tool.schema
+      .string()
+      .describe("Cron expression (e.g., '0 9 * * *' for 9am daily)"),
     description: tool.schema.string().describe("What this reminder is for"),
     payload: tool.schema.string().describe("Message to process when reminder fires"),
-    model: tool.schema.string().optional().describe("Model to use for this reminder (see macrodata-models in context for available options)"),
+    model: tool.schema
+      .string()
+      .optional()
+      .describe(
+        "Model to use for this reminder (see macrodata-models in context for available options)",
+      ),
   },
   async execute(args) {
     if (!args.id || !args.cronExpression || !args.description || !args.payload) {
-      return JSON.stringify({ success: false, error: "Requires 'id', 'cronExpression', 'description', and 'payload'" });
+      return JSON.stringify({
+        success: false,
+        error: "Requires 'id', 'cronExpression', 'description', and 'payload'",
+      });
     }
 
     const schedule: Schedule = {
@@ -322,17 +355,26 @@ export const scheduleReminderTool = tool({
 });
 
 export const scheduleOnceTool = tool({
-  description: "Schedule a one-shot reminder at a specific date/time. The reminder fires once and is automatically removed. IMPORTANT: Check the current time before using this tool to ensure accurate scheduling.",
+  description:
+    "Schedule a one-shot reminder at a specific date/time. The reminder fires once and is automatically removed. IMPORTANT: Check the current time before using this tool to ensure accurate scheduling.",
   args: {
     id: tool.schema.string().describe("Unique reminder identifier"),
     datetime: tool.schema.string().describe("ISO 8601 datetime (e.g., '2026-01-06T10:00:00')"),
     description: tool.schema.string().describe("What this reminder is for"),
     payload: tool.schema.string().describe("Message to process when reminder fires"),
-    model: tool.schema.string().optional().describe("Model to use for this reminder (see macrodata-models in context for available options)"),
+    model: tool.schema
+      .string()
+      .optional()
+      .describe(
+        "Model to use for this reminder (see macrodata-models in context for available options)",
+      ),
   },
   async execute(args) {
     if (!args.id || !args.datetime || !args.description || !args.payload) {
-      return JSON.stringify({ success: false, error: "Requires 'id', 'datetime', 'description', and 'payload'" });
+      return JSON.stringify({
+        success: false,
+        error: "Requires 'id', 'datetime', 'description', and 'payload'",
+      });
     }
 
     const schedule: Schedule = {
@@ -386,7 +428,8 @@ export const listRemindersTool = tool({
 // --- Related Items Tool ---
 
 export const getRelatedTool = tool({
-  description: "Get entries related to a specific memory item. Useful for exploring associative connections in your memory.",
+  description:
+    "Get entries related to a specific memory item. Useful for exploring associative connections in your memory.",
   args: {
     id: tool.schema.string().describe("The ID of the memory item to find related entries for"),
   },

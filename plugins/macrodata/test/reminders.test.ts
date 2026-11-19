@@ -7,11 +7,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import {
-  createTestContext,
-  addReminder,
-  type TestContext,
-} from "./helpers";
+import { createTestContext, addReminder, type TestContext } from "./helpers";
 import { getRemindersDir } from "../src/config";
 
 describe("reminders", () => {
@@ -58,9 +54,7 @@ describe("reminders", () => {
         payload: "Do something",
       });
 
-      const files = readdirSync(ctx.remindersDir).filter((f) =>
-        f.endsWith(".json")
-      );
+      const files = readdirSync(ctx.remindersDir).filter((f) => f.endsWith(".json"));
       expect(files.length).toBe(2);
       expect(files).toContain("reminder-a.json");
       expect(files).toContain("reminder-b.json");
@@ -84,9 +78,7 @@ describe("reminders", () => {
       expect(remindersDir1).not.toBe(remindersDir2);
 
       // Second context should have empty reminders
-      const files2 = readdirSync(remindersDir2).filter((f) =>
-        f.endsWith(".json")
-      );
+      const files2 = readdirSync(remindersDir2).filter((f) => f.endsWith(".json"));
       expect(files2.length).toBe(0);
 
       ctx2.cleanup();

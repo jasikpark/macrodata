@@ -36,9 +36,8 @@ async function loadCrossEncoder(): Promise<void> {
   if (loading) return loading;
 
   loading = (async () => {
-    const { AutoTokenizer, AutoModelForSequenceClassification } = await import(
-      "@huggingface/transformers"
-    );
+    const { AutoTokenizer, AutoModelForSequenceClassification } =
+      await import("@huggingface/transformers");
     const [tokenizer, model] = await Promise.all([
       AutoTokenizer.from_pretrained(MODEL_ID),
       AutoModelForSequenceClassification.from_pretrained(MODEL_ID, { dtype: "q8" }),

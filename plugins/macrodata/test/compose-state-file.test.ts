@@ -19,7 +19,9 @@ function compose(ctx: TestContext, file: string): string {
 
 // Inner content of the <macrodata-TAG> wrapper.
 function body(output: string, tag: string): string {
-  return output.match(new RegExp(`<macrodata-${tag}>\\n([\\s\\S]*)\\n</macrodata-${tag}>`))?.[1] ?? "";
+  return (
+    output.match(new RegExp(`<macrodata-${tag}>\\n([\\s\\S]*)\\n</macrodata-${tag}>`))?.[1] ?? ""
+  );
 }
 
 function writeState(ctx: TestContext, name: string, content: string) {

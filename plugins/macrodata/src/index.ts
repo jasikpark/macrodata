@@ -19,7 +19,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { configure, getLogger, jsonLinesFormatter } from "@logtape/logtape";
 import { z } from "zod";
-import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync } from "fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  appendFileSync,
+  mkdirSync,
+  readdirSync,
+} from "fs";
 import { join, basename } from "path";
 import {
   searchMemory as doSearchMemory,
@@ -113,16 +120,14 @@ function ensureDirectories() {
   }
 }
 
-
-
 function loadAllSchedules(): Schedule[] {
   const remindersDir = getRemindersDir();
   const schedules: Schedule[] = [];
 
   try {
     if (!existsSync(remindersDir)) return schedules;
-    
-    const files = readdirSync(remindersDir).filter(f => f.endsWith('.json'));
+
+    const files = readdirSync(remindersDir).filter((f) => f.endsWith(".json"));
     for (const file of files) {
       try {
         const content = readFileSync(join(remindersDir, file), "utf-8");
@@ -220,7 +225,7 @@ server.tool(
         },
       ],
     };
-  }
+  },
 );
 
 // Tool: get_recent_journal
@@ -233,11 +238,11 @@ server.tool(
   },
   async ({ count, topic }) => {
     let entries = getRecentJournalEntries(Math.min(count * 2, 100)); // Get more to filter
-    
+
     if (topic) {
-      entries = entries.filter(e => e.topic === topic);
+      entries = entries.filter((e) => e.topic === topic);
     }
-    
+
     entries = entries.slice(0, count);
 
     return {
@@ -248,7 +253,7 @@ server.tool(
         },
       ],
     };
-  }
+  },
 );
 
 // Tool: search_memory
@@ -257,7 +262,12 @@ server.tool(
   "Semantic search across journal entries and entity files. Returns ranked results.",
   {
     query: z.string().describe("Natural language search query"),
-    type: z.string().optional().describe("Filter by content type: 'journal' or an entity folder name (people, projects, topics, …). Omit or 'all' for everything."),
+    type: z
+      .string()
+      .optional()
+      .describe(
+        "Filter by content type: 'journal' or an entity folder name (people, projects, topics, …). Omit or 'all' for everything.",
+      ),
     since: z.string().optional().describe("Only include items after this ISO date"),
     limit: z.number().default(5).describe("Maximum results to return"),
   },
@@ -325,7 +335,7 @@ server.tool(
         ],
       };
     }
-  }
+  },
 );
 
 // Tool: manage_index
@@ -335,7 +345,11 @@ server.tool(
   "Manage search indexes. Target 'memory' for journal/entities, 'conversations' for past Claude Code sessions.",
   {
     target: z.enum(["memory", "conversations"]).describe("Which index to manage"),
-    action: z.enum(["rebuild", "update", "stats"]).describe("'rebuild' re-scans all sources and upserts (does NOT purge records for deleted/renamed files — delete the index dir first for a truly clean rebuild), 'update' for incremental (conversations only), 'stats' to get counts"),
+    action: z
+      .enum(["rebuild", "update", "stats"])
+      .describe(
+        "'rebuild' re-scans all sources and upserts (does NOT purge records for deleted/renamed files — delete the index dir first for a truly clean rebuild), 'update' for incremental (conversations only), 'stats' to get counts",
+      ),
   },
   async ({ target, action }) => {
     try {
@@ -343,44 +357,74 @@ server.tool(
         if (action === "rebuild" || action === "update") {
           const result = await rebuildIndex();
           return {
-            content: [{ type: "text" as const, text: `Memory index rebuilt. Indexed ${result.itemCount} items.` }],
+            content: [
+              {
+                type: "text" as const,
+                text: `Memory index rebuilt. Indexed ${result.itemCount} items.`,
+              },
+            ],
           };
         } else {
           const stats = await getIndexStats();
           return {
-            content: [{ type: "text" as const, text: `Memory index contains ${stats.itemCount} items.` }],
+            content: [
+              { type: "text" as const, text: `Memory index contains ${stats.itemCount} items.` },
+            ],
           };
         }
       } else {
         if (action === "rebuild") {
           // Run in background - don't wait
           rebuildConversationIndex()
-            .then((result) => logger.info("conversation index rebuilt", { exchanges: result.exchangeCount }))
-            .catch((err) => logger.error("conversation index rebuild failed", { error: String(err) }));
+            .then((result) =>
+              logger.info("conversation index rebuilt", { exchanges: result.exchangeCount }),
+            )
+            .catch((err) =>
+              logger.error("conversation index rebuild failed", { error: String(err) }),
+            );
           return {
-            content: [{ type: "text" as const, text: `Conversation index rebuild started in background.` }],
+            content: [
+              { type: "text" as const, text: `Conversation index rebuild started in background.` },
+            ],
           };
         } else if (action === "update") {
           // Incremental update - also background
           updateConversationIndex()
-            .then((result) => logger.info("conversation index updated", { filesUpdated: result.filesUpdated, skipped: result.skipped, exchanges: result.exchangeCount }))
-            .catch((err) => logger.error("conversation index update failed", { error: String(err) }));
+            .then((result) =>
+              logger.info("conversation index updated", {
+                filesUpdated: result.filesUpdated,
+                skipped: result.skipped,
+                exchanges: result.exchangeCount,
+              }),
+            )
+            .catch((err) =>
+              logger.error("conversation index update failed", { error: String(err) }),
+            );
           return {
-            content: [{ type: "text" as const, text: `Conversation index update started in background.` }],
+            content: [
+              { type: "text" as const, text: `Conversation index update started in background.` },
+            ],
           };
         } else {
           const stats = await getConversationIndexStats();
           return {
-            content: [{ type: "text" as const, text: `Conversation index contains ${stats.exchangeCount} exchanges.` }],
+            content: [
+              {
+                type: "text" as const,
+                text: `Conversation index contains ${stats.exchangeCount} exchanges.`,
+              },
+            ],
           };
         }
       }
     } catch (err) {
       return {
-        content: [{ type: "text" as const, text: `Failed to ${action} ${target} index: ${String(err)}` }],
+        content: [
+          { type: "text" as const, text: `Failed to ${action} ${target} index: ${String(err)}` },
+        ],
       };
     }
-  }
+  },
 );
 
 // Tool: schedule
@@ -393,14 +437,32 @@ server.tool(
     // id becomes a filename and an XML attribute when the reminder fires, so
     // constrain it to a safe charset (no path separators, quotes, or glob
     // metacharacters). The daemon re-sanitizes on read for defense in depth.
-    id: z.string().regex(SAFE_ID_RE, "id must be 1-64 chars of [A-Za-z0-9_-]").describe("Unique identifier for this reminder"),
-    expression: z.string().describe("Cron expression (e.g., '0 9 * * *') or ISO datetime (e.g., '2026-01-31T10:00:00')"),
+    id: z
+      .string()
+      .regex(SAFE_ID_RE, "id must be 1-64 chars of [A-Za-z0-9_-]")
+      .describe("Unique identifier for this reminder"),
+    expression: z
+      .string()
+      .describe(
+        "Cron expression (e.g., '0 9 * * *') or ISO datetime (e.g., '2026-01-31T10:00:00')",
+      ),
     description: z.string().describe("What this reminder is for"),
     payload: z.string().describe("Message to process when reminder fires"),
     // No quotes/spaces/angle brackets — keeps it safe inside the reminder's
     // model="..." attribute; the daemon maps it to a known Agent-tool alias.
-    model: z.string().regex(/^[A-Za-z0-9/_.-]{1,64}$/, "model must be 1-64 chars of [A-Za-z0-9/_.-]").optional().describe("Model to use (e.g., 'anthropic/claude-opus-4-6' for deep thinking tasks). Omitting it — or passing an unrecognized value — defaults to haiku."),
-    delivery: z.enum(["notify", "headless"]).default("notify").describe("Pick by intent — both modes are first-class. 'notify' (default): a nudge meant to reach the human — the daemon posts a macOS notification at fire time and surfaces the reminder in active sessions via state/reminders.md; no model runs. Write the payload as a message to the user. 'headless': an unattended job — the daemon spawns a detached `claude --print` on the tick, with no session open. Write the payload as instructions to an agent. Headless runs unsupervised (and no-ops while the machine is asleep — e.g. a laptop on battery), so give it a payload you trust to run without review — that's a constraint to design around, not a reason to avoid it."),
+    model: z
+      .string()
+      .regex(/^[A-Za-z0-9/_.-]{1,64}$/, "model must be 1-64 chars of [A-Za-z0-9/_.-]")
+      .optional()
+      .describe(
+        "Model to use (e.g., 'anthropic/claude-opus-4-6' for deep thinking tasks). Omitting it — or passing an unrecognized value — defaults to haiku.",
+      ),
+    delivery: z
+      .enum(["notify", "headless"])
+      .default("notify")
+      .describe(
+        "Pick by intent — both modes are first-class. 'notify' (default): a nudge meant to reach the human — the daemon posts a macOS notification at fire time and surfaces the reminder in active sessions via state/reminders.md; no model runs. Write the payload as a message to the user. 'headless': an unattended job — the daemon spawns a detached `claude --print` on the tick, with no session open. Write the payload as instructions to an agent. Headless runs unsupervised (and no-ops while the machine is asleep — e.g. a laptop on battery), so give it a payload you trust to run without review — that's a constraint to design around, not a reason to avoid it.",
+      ),
   },
   async ({ type, id, expression, description, payload, model, delivery }) => {
     // Reject sub-2-minute cron cadences: macrodata has no use for them, and a
@@ -453,7 +515,7 @@ server.tool(
         },
       ],
     };
-  }
+  },
 );
 
 // Tool: list_reminders
@@ -475,7 +537,10 @@ server.tool(
   "remove_reminder",
   "Remove a scheduled reminder",
   {
-    id: z.string().regex(SAFE_ID_RE, "id must be 1-64 chars of [A-Za-z0-9_-]").describe("ID of the reminder to remove"),
+    id: z
+      .string()
+      .regex(SAFE_ID_RE, "id must be 1-64 chars of [A-Za-z0-9_-]")
+      .describe("ID of the reminder to remove"),
   },
   async ({ id }) => {
     const removed = deleteScheduleFile(id);
@@ -488,7 +553,7 @@ server.tool(
         },
       ],
     };
-  }
+  },
 );
 
 // Tool: save_conversation_summary
@@ -505,7 +570,7 @@ server.tool(
       .array(z.string())
       .optional()
       .describe(
-        "Answer this one first, and name specific paths. Memory files loaded at session start or surfaced by recall that did not inform the work — including any that were wrong or superseded. Nothing else in the system can tell a stale file from a live one."
+        "Answer this one first, and name specific paths. Memory files loaded at session start or surfaced by recall that did not inform the work — including any that were wrong or superseded. Nothing else in the system can tell a stale file from a live one.",
       ),
     helpfulFiles: z
       .array(z.string())
@@ -513,7 +578,15 @@ server.tool(
       .describe("Memory files that measurably changed the work this session. Give paths."),
     notes: z.string().optional().describe("Freeform notes"),
   },
-  async ({ summary, keyDecisions, openThreads, learnedPatterns, unhelpfulFiles, helpfulFiles, notes }) => {
+  async ({
+    summary,
+    keyDecisions,
+    openThreads,
+    learnedPatterns,
+    unhelpfulFiles,
+    helpfulFiles,
+    notes,
+  }) => {
     ensureDirectories();
 
     const parts = [summary];
@@ -549,7 +622,7 @@ server.tool(
         },
       ],
     };
-  }
+  },
 );
 
 // Tool: get_recent_summaries
@@ -562,7 +635,7 @@ server.tool(
   async ({ count }) => {
     // Get recent journal entries filtered by topic
     let entries = getRecentJournalEntries(count * 3);
-    entries = entries.filter(e => e.topic === "conversation-summary").slice(0, count);
+    entries = entries.filter((e) => e.topic === "conversation-summary").slice(0, count);
 
     if (entries.length === 0) {
       return {
@@ -583,7 +656,7 @@ server.tool(
         },
       ],
     };
-  }
+  },
 );
 
 // Tool: search_conversations
@@ -592,15 +665,22 @@ server.tool(
   "search_conversations",
   "Search past Claude Code conversations for similar problems/solutions. By default searches current project first, with recent conversations weighted higher.",
   {
-    query: z.string().describe("What to search for (e.g., 'fixing TypeScript errors', 'performance optimization')"),
-    projectOnly: z.boolean().default(false).describe("Only search current project (default: search all but boost current)"),
+    query: z
+      .string()
+      .describe(
+        "What to search for (e.g., 'fixing TypeScript errors', 'performance optimization')",
+      ),
+    projectOnly: z
+      .boolean()
+      .default(false)
+      .describe("Only search current project (default: search all but boost current)"),
     limit: z.number().default(5).describe("Maximum results to return"),
   },
   async ({ query, projectOnly, limit }) => {
     try {
       // Get current project from CWD environment (set by hook)
       const currentProject = process.env.CLAUDE_PROJECT_DIR;
-      
+
       const results = await searchConversations(query, {
         currentProject,
         projectOnly,
@@ -619,13 +699,15 @@ server.tool(
       }
 
       // Format results: metadata + user prompt only (not full response)
-      const formatted = results.map((r, i) => {
-        const date = new Date(r.exchange.timestamp).toLocaleDateString();
-        const branch = r.exchange.branch ? ` (${r.exchange.branch})` : "";
-        return `[${i + 1}] ${r.exchange.project}${branch} - ${date}
+      const formatted = results
+        .map((r, i) => {
+          const date = new Date(r.exchange.timestamp).toLocaleDateString();
+          const branch = r.exchange.branch ? ` (${r.exchange.branch})` : "";
+          return `[${i + 1}] ${r.exchange.project}${branch} - ${date}
     "${r.exchange.userPrompt.slice(0, 200)}${r.exchange.userPrompt.length > 200 ? "..." : ""}"
     Session: ${r.exchange.sessionId}`;
-      }).join("\n\n");
+        })
+        .join("\n\n");
 
       return {
         content: [
@@ -645,10 +727,10 @@ server.tool(
         ],
       };
     }
-  }
+  },
 );
 
-// Tool: expand_conversation  
+// Tool: expand_conversation
 server.tool(
   "expand_conversation",
   "Load full context from a past conversation. Use after search_conversations to see the complete exchange.",
@@ -676,10 +758,12 @@ server.tool(
 
       const result = await expandConversation(fullPath, messageUuid || "", contextMessages);
 
-      const formatted = result.messages.map(m => {
-        const prefix = m.role === "user" ? "User" : "Assistant";
-        return `**${prefix}**: ${m.content}`;
-      }).join("\n\n---\n\n");
+      const formatted = result.messages
+        .map((m) => {
+          const prefix = m.role === "user" ? "User" : "Assistant";
+          return `**${prefix}**: ${m.content}`;
+        })
+        .join("\n\n---\n\n");
 
       const header = `Project: ${result.project}${result.branch ? ` (${result.branch})` : ""}\n\n`;
 
@@ -701,9 +785,8 @@ server.tool(
         ],
       };
     }
-  }
+  },
 );
-
 
 // Start server
 async function main() {

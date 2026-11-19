@@ -13,9 +13,18 @@ import { createTestContext, type TestContext } from "./helpers";
 
 const WAITER = join(import.meta.dir, "..", "bin", "recall-waiter.ts");
 const SID = "s1";
-const ENVELOPE = JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Read", session_id: SID });
+const ENVELOPE = JSON.stringify({
+  hook_event_name: "PostToolUse",
+  tool_name: "Read",
+  session_id: SID,
+});
 
-const hit = (content: string, score = 0.9) => ({ content, source: "journal/2026-11-18.jsonl", type: "journal", score });
+const hit = (content: string, score = 0.9) => ({
+  content,
+  source: "journal/2026-11-18.jsonl",
+  type: "journal",
+  score,
+});
 
 describe("recall waiter", () => {
   let ctx: TestContext;
@@ -29,7 +38,10 @@ describe("recall waiter", () => {
 
   const inbox = () => join(mailbox, `inbox-${SID}.json`);
   const serve = (hits: unknown[]) =>
-    writeFileSync(inbox(), JSON.stringify({ requestedAt: "2026-11-18T23:00:00.000Z", servedSearch: "q", hits }));
+    writeFileSync(
+      inbox(),
+      JSON.stringify({ requestedAt: "2026-11-18T23:00:00.000Z", servedSearch: "q", hits }),
+    );
   const env = (extra: Record<string, string> = {}) => ({
     ...process.env,
     MACRODATA_ROOT: ctx.root,
@@ -41,9 +53,13 @@ describe("recall waiter", () => {
   });
   const wait = (extra?: Record<string, string>) =>
     spawnSync("bun", ["run", WAITER], { input: ENVELOPE, env: env(extra), encoding: "utf-8" });
-  const context = (stdout: string): string => JSON.parse(stdout).hookSpecificOutput.additionalContext;
+  const context = (stdout: string): string =>
+    JSON.parse(stdout).hookSpecificOutput.additionalContext;
   const rows = () =>
-    readFileSync(join(ctx.root, ".recall", "calibration.jsonl"), "utf-8").trim().split("\n").map((l) => JSON.parse(l));
+    readFileSync(join(ctx.root, ".recall", "calibration.jsonl"), "utf-8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
 
   test("a served result is emitted as additionalContext and consumed", () => {
     serve([hit("Orbit staging deploys freeze on Fridays")]);
@@ -55,12 +71,16 @@ describe("recall waiter", () => {
     expect(JSON.parse(r.stdout).systemMessage).toBeUndefined();
     expect(existsSync(inbox())).toBe(false);
     const injected = JSON.parse(readFileSync(join(mailbox, `injected-${SID}.json`), "utf-8"));
-    expect(injected.map((e: { c: string }) => e.c)).toEqual(["Orbit staging deploys freeze on Fridays"]);
+    expect(injected.map((e: { c: string }) => e.c)).toEqual([
+      "Orbit staging deploys freeze on Fridays",
+    ]);
     expect(rows().at(-1)).toMatchObject({ mode: "waiter", outcome: "served", n: 1 });
   });
 
   test("a result that lands mid-wait is picked up", async () => {
-    const child = spawn("bun", ["run", WAITER], { env: env({ MACRODATA_RECALL_WAITER_WAIT_MS: "5000" }) });
+    const child = spawn("bun", ["run", WAITER], {
+      env: env({ MACRODATA_RECALL_WAITER_WAIT_MS: "5000" }),
+    });
     let stdout = "";
     child.stdout.on("data", (d) => (stdout += d));
     child.stdin.end(ENVELOPE);
@@ -87,7 +107,10 @@ describe("recall waiter", () => {
   });
 
   test("hits this session injected since the last exclude write are not re-injected", () => {
-    writeFileSync(join(mailbox, `injected-${SID}.json`), JSON.stringify([{ c: "just injected", ts: "2026-11-18T23:00:00.000Z" }]));
+    writeFileSync(
+      join(mailbox, `injected-${SID}.json`),
+      JSON.stringify([{ c: "just injected", ts: "2026-11-18T23:00:00.000Z" }]),
+    );
     serve([hit("just injected")]);
     expect(wait().stdout).toBe("");
   });

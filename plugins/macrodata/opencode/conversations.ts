@@ -21,7 +21,8 @@ import { getStateRoot } from "./context.js";
 import { logger } from "./logger.js";
 
 const OPENCODE_DB_PATH =
-  process.env.MACRODATA_OPENCODE_DB_PATH || join(homedir(), ".local", "share", "opencode", "opencode.db");
+  process.env.MACRODATA_OPENCODE_DB_PATH ||
+  join(homedir(), ".local", "share", "opencode", "opencode.db");
 const EMBEDDING_DIMENSIONS = 384;
 
 // Reuse embedding pipeline from search.ts
@@ -356,7 +357,7 @@ export async function searchConversations(
     currentProject?: string;
     limit?: number;
     projectOnly?: boolean;
-  } = {}
+  } = {},
 ): Promise<ConversationSearchResult[]> {
   const { currentProject, limit = 5, projectOnly = false } = options;
 

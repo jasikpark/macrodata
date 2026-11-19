@@ -22,7 +22,9 @@ export function envNum(name: string, fallback: number, min: number, max = Infini
   // for.
   if (!Number.isFinite(n) || n < min || n > max) {
     const range = max === Infinity ? `>= ${min}` : `between ${min} and ${max}`;
-    console.warn(`[recall] ${name}="${raw}" invalid (need a finite number ${range}); using ${fallback}`);
+    console.warn(
+      `[recall] ${name}="${raw}" invalid (need a finite number ${range}); using ${fallback}`,
+    );
     return fallback;
   }
   return n;

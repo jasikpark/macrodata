@@ -70,8 +70,18 @@ describe("SessionStart integration", () => {
     ctx = createTestContext();
     // A complete, deterministic mock store.
     setupMinimalState(ctx); // identity/today/human/workspace
-    addJournalEntry(ctx, "release", "shipped the sharded SessionStart hooks", new Date("2026-05-29T15:00:00Z"));
-    addJournalEntry(ctx, "note", "per-file hooks each get their own 10K envelope", new Date("2026-05-29T14:00:00Z"));
+    addJournalEntry(
+      ctx,
+      "release",
+      "shipped the sharded SessionStart hooks",
+      new Date("2026-05-29T15:00:00Z"),
+    );
+    addJournalEntry(
+      ctx,
+      "note",
+      "per-file hooks each get their own 10K envelope",
+      new Date("2026-05-29T14:00:00Z"),
+    );
     addReminder(ctx, "morning", {
       type: "cron",
       expression: "0 9 * * *",
