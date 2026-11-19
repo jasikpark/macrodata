@@ -206,6 +206,34 @@ describe("conversation index", () => {
     expect(embedded).toEqual(["proj: n #0"]);
   });
 
+  test("a named transcript is read wherever it is, and no other file is", async () => {
+    writeSession(projectDir, "a", 2);
+    await conversations.updateConversationIndex();
+    writeSession(projectDir, "a", 3);
+
+    // Under another CLAUDE_CONFIG_DIR than this process scans, as a session
+    // started with its own config dir would write it.
+    const elsewhere = join(ctx.root, "other-config", "projects", "-tmp-other");
+    mkdirSync(elsewhere, { recursive: true });
+    writeSession(elsewhere, "b", 2);
+
+    embedded.length = 0;
+    const result = await conversations.updateConversationIndex({ files: [join(elsewhere, "b.jsonl")] });
+    expect(result).toEqual({ exchangeCount: 2, filesUpdated: 1, skipped: 0 });
+    expect(embedded).toEqual(["other: b #0", "other: b #1"]);
+
+    // a.jsonl's growth was not read, and its state survives for the next full pass.
+    embedded.length = 0;
+    await conversations.updateConversationIndex();
+    expect(embedded).toEqual(["proj: a #2"]);
+
+    // That full pass did not see b.jsonl, but kept its offset.
+    appendFileSync(join(elsewhere, "b.jsonl"), sessionText("b", 2, 3));
+    embedded.length = 0;
+    await conversations.updateConversationIndex({ files: [join(elsewhere, "b.jsonl")] });
+    expect(embedded).toEqual(["other: b #2"]);
+  });
+
   describe("an appended transcript", () => {
     const file = () => join(projectDir, "s.jsonl");
     const prompts = () => embedded.map((t) => t.split(": ")[1]);
