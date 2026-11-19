@@ -108,8 +108,10 @@ async function getConversationIndex(): Promise<AtomicLocalIndex> {
   const currentIndexDir = getIndexDir();
   const currentIndexPath = join(currentIndexDir, "conversations");
 
-  // Invalidate cache if path changed
-  if (convIndex && convIndexPath !== currentIndexPath) {
+  // The daemon's checkpoint pass and other sessions' MCP servers rewrite
+  // index.json; a long-lived server that kept its first load would never see
+  // their exchanges.
+  if (convIndex && (convIndexPath !== currentIndexPath || !convIndex.isCurrent())) {
     convIndex = null;
     convIndexPath = null;
   }

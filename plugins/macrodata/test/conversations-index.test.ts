@@ -15,6 +15,7 @@ import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { LocalIndex } from "vectra";
 import { AtomicLocalIndex } from "../src/recall/atomic-index.ts";
+import { getIndexDir } from "../src/config.ts";
 
 const embedded: string[] = [];
 // Set to N to make the embedder throw once N texts have been embedded.
@@ -158,5 +159,19 @@ describe("conversation index", () => {
       ),
       { numRuns: 50 },
     );
+  });
+
+  test("a search sees exchanges another process committed after this one loaded", async () => {
+    writeSession(projectDir, "a", 2);
+    await conversations.updateConversationIndex();
+    expect(await conversations.getConversationIndexStats()).toEqual({ exchangeCount: 2 });
+
+    // Stands in for the daemon's checkpoint pass: a separate instance, as in another process.
+    const other = new AtomicLocalIndex(join(getIndexDir(), "conversations"));
+    await other.beginUpdate();
+    await other.upsertItem({ id: "other-1", vector: [1, 0, 0, 0], metadata: {} });
+    await other.endUpdate();
+
+    expect(await conversations.getConversationIndexStats()).toEqual({ exchangeCount: 3 });
   });
 });
