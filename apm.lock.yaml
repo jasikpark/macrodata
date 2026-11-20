@@ -1,0 +1,106 @@
+lockfile_version: '1'
+apm_version: 0.36.1
+dependencies:
+- repo_url: inanna-malick/agent-skills
+  name: proptest-praxis
+  host: github.com
+  resolved_commit: fa2ce23d66a155833e227860699da18044341b3e
+  resolved_ref: fa2ce23d66a155833e227860699da18044341b3e
+  version: unknown
+  virtual_path: skills/proptest-praxis
+  is_virtual: true
+  package_type: claude_skill
+  deployed_files:
+  - .agents/skills/proptest-praxis
+  - .agents/skills/proptest-praxis/LICENSE
+  - .agents/skills/proptest-praxis/SKILL.md
+  - .agents/skills/proptest-praxis/agents/openai.yaml
+  - .claude/skills/proptest-praxis
+  - .claude/skills/proptest-praxis/LICENSE
+  - .claude/skills/proptest-praxis/SKILL.md
+  - .claude/skills/proptest-praxis/agents/openai.yaml
+  deployed_file_hashes:
+    .agents/skills/proptest-praxis/LICENSE: sha256:47dd520c38b3660a3b661385ff4397b9c32dfbf53af313b3b5f85de8667e6fbc
+    .agents/skills/proptest-praxis/SKILL.md: sha256:ff68a6cc83f39418ad50d8d821cba243d67a4aa653ad1def8f4fc89f5124cceb
+    .agents/skills/proptest-praxis/agents/openai.yaml: sha256:452c8fbf8b44c46880ca7f85c54e99aa41d3b44909f3185c8ef4e67c89d57a86
+    .claude/skills/proptest-praxis/LICENSE: sha256:47dd520c38b3660a3b661385ff4397b9c32dfbf53af313b3b5f85de8667e6fbc
+    .claude/skills/proptest-praxis/SKILL.md: sha256:ff68a6cc83f39418ad50d8d821cba243d67a4aa653ad1def8f4fc89f5124cceb
+    .claude/skills/proptest-praxis/agents/openai.yaml: sha256:452c8fbf8b44c46880ca7f85c54e99aa41d3b44909f3185c8ef4e67c89d57a86
+  content_hash: sha256:71144b2fd905b8c0b0686e69e1aaab9e75bbdce5c601595eb524fca2a7c9f50a
+  carried_licenses:
+  - path: LICENSE
+    source: LICENSE
+    hash: sha256:47dd520c38b3660a3b661385ff4397b9c32dfbf53af313b3b5f85de8667e6fbc
+deployments:
+- kind: project-relative
+  target: agent-skills
+  value: .agents/skills/proptest-praxis
+  runtime: null
+  scope: project
+  owners:
+  - inanna-malick/agent-skills/skills/proptest-praxis
+  active_owner: inanna-malick/agent-skills/skills/proptest-praxis
+  content_hash: null
+- kind: project-relative
+  target: agent-skills
+  value: .agents/skills/proptest-praxis/LICENSE
+  runtime: null
+  scope: project
+  owners:
+  - inanna-malick/agent-skills/skills/proptest-praxis
+  active_owner: inanna-malick/agent-skills/skills/proptest-praxis
+  content_hash: sha256:47dd520c38b3660a3b661385ff4397b9c32dfbf53af313b3b5f85de8667e6fbc
+- kind: project-relative
+  target: agent-skills
+  value: .agents/skills/proptest-praxis/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - inanna-malick/agent-skills/skills/proptest-praxis
+  active_owner: inanna-malick/agent-skills/skills/proptest-praxis
+  content_hash: sha256:ff68a6cc83f39418ad50d8d821cba243d67a4aa653ad1def8f4fc89f5124cceb
+- kind: project-relative
+  target: agent-skills
+  value: .agents/skills/proptest-praxis/agents/openai.yaml
+  runtime: null
+  scope: project
+  owners:
+  - inanna-malick/agent-skills/skills/proptest-praxis
+  active_owner: inanna-malick/agent-skills/skills/proptest-praxis
+  content_hash: sha256:452c8fbf8b44c46880ca7f85c54e99aa41d3b44909f3185c8ef4e67c89d57a86
+- kind: project-relative
+  target: claude
+  value: .claude/skills/proptest-praxis
+  runtime: null
+  scope: project
+  owners:
+  - inanna-malick/agent-skills/skills/proptest-praxis
+  active_owner: inanna-malick/agent-skills/skills/proptest-praxis
+  content_hash: null
+- kind: project-relative
+  target: claude
+  value: .claude/skills/proptest-praxis/LICENSE
+  runtime: null
+  scope: project
+  owners:
+  - inanna-malick/agent-skills/skills/proptest-praxis
+  active_owner: inanna-malick/agent-skills/skills/proptest-praxis
+  content_hash: sha256:47dd520c38b3660a3b661385ff4397b9c32dfbf53af313b3b5f85de8667e6fbc
+- kind: project-relative
+  target: claude
+  value: .claude/skills/proptest-praxis/SKILL.md
+  runtime: null
+  scope: project
+  owners:
+  - inanna-malick/agent-skills/skills/proptest-praxis
+  active_owner: inanna-malick/agent-skills/skills/proptest-praxis
+  content_hash: sha256:ff68a6cc83f39418ad50d8d821cba243d67a4aa653ad1def8f4fc89f5124cceb
+- kind: project-relative
+  target: claude
+  value: .claude/skills/proptest-praxis/agents/openai.yaml
+  runtime: null
+  scope: project
+  owners:
+  - inanna-malick/agent-skills/skills/proptest-praxis
+  active_owner: inanna-malick/agent-skills/skills/proptest-praxis
+  content_hash: sha256:452c8fbf8b44c46880ca7f85c54e99aa41d3b44909f3185c8ef4e67c89d57a86

@@ -52,6 +52,8 @@ bun test test/indexer.test.ts   # a single file
 
 Two daemon tests (`SIGHUP reload`, `detects new schedules at runtime`) are `Bun.sleep`-timed and flake under full-suite CPU load; they pass in isolation. Re-run them isolated before treating either as a real failure.
 
+The `proptest-praxis` skill (managed via [APM](https://github.com/microsoft/apm) in `apm.yml` and deployed to both `.agents/skills/` and `.claude/skills/`) covers model-based property testing investigations and reducing findings to standalone regression tests.
+
 ## Releasing (changesets — versioning only, no npm publish)
 
 Releases are automated with [changesets](https://github.com/changesets/changesets), **version-only**: it never publishes to npm (the plugin installs via the Claude Code marketplace, and the package is `private`). The flow:

@@ -1,0 +1,9 @@
+name: macrodata
+version: 0.1.0
+description: Development skills for working on macrodata
+targets:
+  - claude
+  - agent-skills
+dependencies:
+  apm:
+    - inanna-malick/agent-skills/skills/proptest-praxis#fa2ce23d66a155833e227860699da18044341b3e # main
