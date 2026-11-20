@@ -6,6 +6,7 @@
   "type": "module",
   "main": "opencode/index.ts",
   "scripts": {
+    "preinstall": "bun -e 'if (!process.env.npm_config_user_agent?.startsWith(\"bun/\")) process.exit(1)' 2>/dev/null || npx -y only-allow bun",
     "start": "bun run src/index.ts",
     "daemon": "bun run bin/macrodata-daemon.ts",
     "test": "bun test",

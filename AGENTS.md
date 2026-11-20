@@ -69,7 +69,7 @@ The installed plugin picks up a release via `/plugin update` + `/reload-plugins`
 ## Conventions & gotchas
 
 - **VCS:** `jj` (colocated with git). Open PRs ready, not draft — solo repo.
-- **bun, not pnpm.** CI installs, lints and tests with bun against `bun.lock` (`bun install --frozen-lockfile`, `bun run check`, `bun test`). Running pnpm in `plugins/macrodata/` (`pnpm check`, `pnpm install`) rewrites `pnpm-lock.yaml` and creates a `pnpm-workspace.yaml` whose `allowBuilds:` list holds "set this to true or false" placeholders for `node-llama-cpp`, `onnxruntime-node` and `protobufjs`. jj snapshots both into the working commit, so check `jj diff --stat` before pushing.
+- **bun, not pnpm.** CI installs, lints and tests with bun against `bun.lock` (`bun install --frozen-lockfile`, `bun run check`, `bun test`). Both `package.json` files enforce `bun` via `preinstall` (`only-allow bun`).
 - **Entity types are folder names.** The `entities/<subdir>/` directory names ARE the indexable type set: `rebuildIndex`/`indexEntityFile` (`src/indexer.ts`) and the `search_memory` type filter (`src/index.ts`) all derive the type from the live folder list. Don't reintroduce a hardcoded type union — new categories must index automatically.
 - **`manage_index` rebuild is upsert-only.** It re-scans and updates but does NOT purge records for deleted/renamed files: the daemon and MCP server are separate processes sharing one lock-free Vectra index, so a destructive rebuild would race. For a clean rebuild, delete the index dir (`rm -rf <root>/.index`) and rebuild.
 - **`plugins/macrodata/opencode/` is a vestigial upstream variant**, not maintained here — don't assume it tracks `src/`.

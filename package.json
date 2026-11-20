@@ -8,6 +8,7 @@
 		"plugins/*"
 	],
 	"scripts": {
+		"preinstall": "bun -e 'if (!process.env.npm_config_user_agent?.startsWith(\"bun/\")) process.exit(1)' 2>/dev/null || npx -y only-allow bun",
 		"version": "bun run scripts/version.ts"
 	},
 	"devDependencies": {
