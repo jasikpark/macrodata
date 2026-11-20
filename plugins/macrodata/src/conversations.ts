@@ -266,6 +266,7 @@ function isNoiseContent(content: string): boolean {
       content.startsWith("<context_status>") ||
       content.startsWith("<state_files>") ||
       content.startsWith("<system-reminder>") ||
+      content.startsWith("<task-notification>") ||
       content.startsWith("## Current State Files") ||
       content.startsWith("Base directory for this skill:")) {
     return true;

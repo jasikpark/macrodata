@@ -190,6 +190,22 @@ describe("conversation index", () => {
     expect(await conversations.getConversationIndexStats()).toEqual({ exchangeCount: 3 });
   });
 
+  test("a background-task notification is not indexed as a prompt", async () => {
+    const notification =
+      JSON.stringify({
+        type: "user",
+        sessionId: "n",
+        uuid: "n-task",
+        message: { content: "<task-notification>\n<task-id>b1</task-id>\n</task-notification>" },
+      }) + "\n";
+    writeFileSync(
+      join(projectDir, "n.jsonl"),
+      userLine("n", 0) + replyLine(0) + notification + replyLine(1),
+    );
+    await conversations.updateConversationIndex();
+    expect(embedded).toEqual(["proj: n #0"]);
+  });
+
   describe("an appended transcript", () => {
     const file = () => join(projectDir, "s.jsonl");
     const prompts = () => embedded.map((t) => t.split(": ")[1]);
