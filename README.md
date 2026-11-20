@@ -47,6 +47,16 @@ Periodically consolidates scattered learnings into structured knowledge. Pattern
 
 Scheduled reflection that runs while you're away. Reviews recent activity, notices patterns, updates state files, and prepares for tomorrow. Researches best practices. The agent maintains itself.
 
+### Skills
+
+Off by default; turn on **Memory skills** (`skills_enabled`) in `/config`. Skills kept in the memory store at `skills/<name>/SKILL.md` are linked into `~/.claude/skills/` at session start, so they're versioned with the rest of your memory. A skill whose frontmatter says `status: archived` is unlinked; `active` or `probation` (or no status) stays linked.
+
+Only links the plugin made are ever changed or removed; a hand-made skill or another installer's link with the same name is left alone, with a warning. To move an existing hand-made skill into the store:
+
+```bash
+bun run <plugin dir>/bin/skills-sync.ts adopt <name>
+```
+
 ## Security
 
 Some autonomous agent systems run their own shell, execute third-party skills, and expose APIs - creating prompt injection vectors, credential leaks, and remote code execution risks.
