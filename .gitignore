@@ -6,3 +6,6 @@ dist/
 .gest/
 .DS_Store
 .claude/settings.local.json
+
+# APM dependencies
+apm_modules/
