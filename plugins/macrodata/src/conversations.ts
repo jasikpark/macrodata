@@ -21,9 +21,10 @@ import {
   openSync,
   readSync,
   closeSync,
+  lstatSync,
 } from "fs";
 import { createHash } from "crypto";
-import { join, basename } from "path";
+import { join, basename, dirname } from "path";
 import { homedir } from "os";
 import { getLogger } from "@logtape/logtape";
 import { embed, embedBatch } from "./embeddings.js";
@@ -424,15 +425,37 @@ function parseConversationFile(
   return { exchanges, offset };
 }
 
-/**
- * Scan all Claude project directories for conversation files
- */
-function* scanConversationFiles(): Generator<{
+interface ScannedFile {
   filePath: string;
   projectPath: string;
   mtime: number;
   size: number;
-}> {
+}
+
+/**
+ * The given transcripts, each `<projects dir>/<encoded project>/<session>.jsonl`
+ * wherever its projects dir is. A path that is not a regular file is skipped.
+ */
+function* namedConversationFiles(paths: string[]): Generator<ScannedFile> {
+  for (const filePath of paths) {
+    const file = basename(filePath);
+    if (!file.endsWith(".jsonl") || file.startsWith("agent-")) continue;
+    let st;
+    try {
+      st = lstatSync(filePath);
+    } catch {
+      continue;
+    }
+    if (!st.isFile()) continue;
+    const projectPath = decodeProjectPath(basename(dirname(filePath)));
+    yield { filePath, projectPath, mtime: st.mtimeMs, size: st.size };
+  }
+}
+
+/**
+ * Scan all Claude project directories for conversation files
+ */
+function* scanConversationFiles(): Generator<ScannedFile> {
   const root = projectsDir();
   if (!existsSync(root)) {
     return;
@@ -541,13 +564,20 @@ async function rebuildUnserialized(): Promise<{ exchangeCount: number }> {
 }
 
 /**
- * Incrementally update the conversation index (only changed files)
+ * Incrementally update the conversation index (only changed files).
+ *
+ * With `files`, only those transcripts are read, from wherever they are, and
+ * exchangeCount covers only them; state for every other file is left as is.
  */
-export function updateConversationIndex(): Promise<{ exchangeCount: number; filesUpdated: number; skipped: number }> {
-  return serialized(updateUnserialized);
+export function updateConversationIndex(
+  options: { files?: string[] } = {},
+): Promise<{ exchangeCount: number; filesUpdated: number; skipped: number }> {
+  return serialized(() => updateUnserialized(options.files));
 }
 
-async function updateUnserialized(): Promise<{ exchangeCount: number; filesUpdated: number; skipped: number }> {
+async function updateUnserialized(
+  files?: string[],
+): Promise<{ exchangeCount: number; filesUpdated: number; skipped: number }> {
   logger.info("starting incremental update");
   const startTime = Date.now();
 
@@ -583,7 +613,9 @@ async function updateUnserialized(): Promise<{ exchangeCount: number; filesUpdat
   };
 
   try {
-    for (const { filePath, projectPath, mtime, size } of scanConversationFiles()) {
+    for (const { filePath, projectPath, mtime, size } of files
+      ? namedConversationFiles(files)
+      : scanConversationFiles()) {
       currentFiles.add(filePath);
       const cached = state.files[filePath];
 
@@ -636,9 +668,10 @@ async function updateUnserialized(): Promise<{ exchangeCount: number; filesUpdat
     throw err;
   }
 
-  // Clean up deleted files from state (but don't remove from index - they may still be useful)
-  for (const filePath of Object.keys(state.files)) {
-    if (!currentFiles.has(filePath)) {
+  // Drop state for deleted files (their exchanges stay in the index). A file a
+  // checkpoint named from outside this scan's projects dir is not deleted.
+  for (const filePath of files ? [] : Object.keys(state.files)) {
+    if (!currentFiles.has(filePath) && !existsSync(filePath)) {
       delete state.files[filePath];
     }
   }
