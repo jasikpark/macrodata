@@ -19,6 +19,12 @@
 			"title": "Ambient recall",
 			"description": "Run the background recall worker (about 1.2 GB of RAM) that surfaces related memories as you work. Turn off on memory-constrained machines; the memory tools keep working.",
 			"default": true
+		},
+		"skills_enabled": {
+			"type": "boolean",
+			"title": "Memory skills",
+			"description": "Link the skills in your memory store (skills/<name>/SKILL.md) into ~/.claude/skills at session start. Never overwrites a skill it didn't link.",
+			"default": false
 		}
 	},
 	"hooks": {
@@ -44,6 +50,14 @@
 					{
 						"type": "command",
 						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/recall-reindex-hook.ts"
+					}
+				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "bun run ${CLAUDE_PLUGIN_ROOT}/bin/skills-sync.ts"
 					}
 				]
 			},

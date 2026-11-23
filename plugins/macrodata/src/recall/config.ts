@@ -13,10 +13,8 @@
  * keep its leading dot to stay that way.
  */
 
-import { readFileSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
-import { getStateRoot } from "../config.ts";
+import { getStateRoot, livePluginOption } from "../config.ts";
 
 export { getStateRoot, getEntitiesDir, getJournalDir } from "../config.ts";
 
@@ -35,39 +33,13 @@ export { getStateRoot, getEntitiesDir, getJournalDir } from "../config.ts";
  */
 export function recallDisabled(): boolean {
   if (["1", "true", "yes", "on"].includes(flagWord(process.env.MACRODATA_RECALL_DISABLE))) return true;
-  const live = liveRecallEnabled();
+  const live = livePluginOption("recall_enabled");
   if (live !== undefined) return !live;
   return ["0", "false", "no", "off"].includes(flagWord(process.env.CLAUDE_PLUGIN_OPTION_RECALL_ENABLED));
 }
 
 function flagWord(v: string | undefined): string {
   return (v ?? "").trim().toLowerCase();
-}
-
-/**
- * recall_enabled across every macrodata@<marketplace> entry, where Claude Code
- * stores it: pluginConfigs[<plugin id>].options.<key>. An explicit false wins.
- */
-function liveRecallEnabled(): boolean | undefined {
-  let configs: unknown;
-  try {
-    const dir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
-    const text = readFileSync(join(dir, "settings.json"), "utf-8").replace(/^\uFEFF/, "");
-    configs = JSON.parse(text)?.pluginConfigs;
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(configs)) return undefined;
-  const values = Object.entries(configs)
-    .filter(([key]) => key.startsWith("macrodata@"))
-    .map(([, entry]) => (isRecord(entry) && isRecord(entry.options) ? entry.options.recall_enabled : undefined))
-    .filter((v) => v === true || v === false || v === "true" || v === "false");
-  if (values.length === 0) return undefined;
-  return !values.some((v) => v === false || v === "false");
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 /** Alias kept for recall entry points that predate the shared resolver. */
