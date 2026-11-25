@@ -181,8 +181,11 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 // intent.) Input order doesn't matter; lambda >= 1 degenerates to plain top-k
 // (same short-circuit as Porrima).
 export function mmrSelect(slate: PoolCandidate[], k: number, lambda: number): PoolCandidate[] {
-  if (slate.length <= k) return slate.slice(0, k);
-  if (lambda >= 1) return [...slate].sort((a, b) => b.w - a.w).slice(0, k);
+  const cap = Math.floor(k);
+  if (!(cap > 0) || slate.length === 0) return [];
+  if (slate.length <= cap || lambda >= 1) {
+    return [...slate].sort((a, b) => b.w - a.w).slice(0, cap);
+  }
   // NaN or negative lambda would corrupt or INVERT the scoring (a negative
   // relevance weight rewards redundancy); clamp to pure-diversity instead.
   if (!(lambda >= 0)) lambda = 0;
@@ -196,11 +199,12 @@ export function mmrSelect(slate: PoolCandidate[], k: number, lambda: number): Po
   const tokens = new Map<PoolCandidate, Set<string>>(
     slate.map((c) => [c, new Set(terms(c.item.content))]),
   );
-  // Cosine only for a well-formed pair: a dim-mismatched or NaN-bearing vector
-  // (possible after an embedding-model change without an index wipe) must not
-  // yield sim 0 and read as maximally novel — degrade that pair to Jaccard.
+  // Cosine only for a non-empty, well-formed pair: an empty, dim-mismatched or
+  // NaN-bearing vector (possible after an embedding-model change without an
+  // index wipe) must not yield sim 0 and read as maximally novel — degrade that
+  // pair to Jaccard.
   const sim = (a: PoolCandidate, b: PoolCandidate): number => {
-    if (a.vector && b.vector && a.vector.length === b.vector.length) {
+    if (a.vector && b.vector && a.vector.length > 0 && a.vector.length === b.vector.length) {
       const c = cosine(a.vector, b.vector);
       if (Number.isFinite(c)) return c;
     }
@@ -214,7 +218,7 @@ export function mmrSelect(slate: PoolCandidate[], k: number, lambda: number): Po
   const selected: PoolCandidate[] = [];
   const pickSim: number[] = [];
   const remaining = [...slate];
-  while (selected.length < k && remaining.length > 0) {
+  while (selected.length < cap && remaining.length > 0) {
     if (selected.length === 0) {
       let first = 0;
       for (let i = 1; i < remaining.length; i++) if (remaining[i].w > remaining[first].w) first = i;
@@ -389,8 +393,10 @@ export async function pipelineSearch(
 
 /** Final stage: drop hits under the profile's floor, rank by rerank score, cap at its limit. */
 export function finalizeHits<T extends { score: number }>(hits: T[], profile: Pick<RetrievalProfile, "floor" | "limit">): T[] {
+  const cap = Math.floor(profile.limit);
+  if (!(cap > 0)) return [];
   return hits
     .filter((h) => h.score >= profile.floor)
     .sort((a, b) => b.score - a.score)
-    .slice(0, profile.limit);
+    .slice(0, cap);
 }

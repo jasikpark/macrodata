@@ -3,7 +3,7 @@
  * no index/models needed; synthetic candidates only.
  */
 import { describe, expect, test } from "bun:test";
-import { mmrSelect, type PoolCandidate } from "../src/recall/fts.ts";
+import { finalizeHits, mmrSelect, type PoolCandidate } from "../src/recall/fts.ts";
 
 function cand(content: string, w: number): PoolCandidate {
   return {
@@ -159,5 +159,63 @@ describe("mmrSelect", () => {
     expect(picked.map((c) => c.item.content)).not.toEqual(
       slate(top, dup, fresh, noise).slice(0, 3).map((c) => c.item.content),
     );
+  });
+
+  test("empty vectors [] degrade to Jaccard instead of scoring cosine 0", () => {
+    // Empty arrays satisfy `a.vector.length === b.vector.length` (0 === 0), so
+    // an unguarded cosine([], []) returns 0 (maximally novel) and lets dup keep
+    // its slot instead of falling back to token overlap like buildCorpus does.
+    const top = { ...cand("webclient punycode decoder tooltip ariakit hostname", 0.030), vector: [] };
+    const dup = { ...cand("webclient punycode decoder tooltip ariakit hostname component", 0.028), vector: [] };
+    const fresh = { ...cand("dnclient reconnect poll adaptive backoff rpc deadline", 0.012), vector: [] };
+    const junk = { ...cand("webclient punycode tooltip", 0.005), vector: [] };
+    const picked = mmrSelect(slate(top, dup, fresh, junk), 2, 0.55);
+    expect(picked[0].item.content).toBe(top.item.content);
+    expect(picked[1].item.content).toBe(fresh.item.content);
+  });
+
+  test("unsorted small slates (slate.length <= k) still return candidates ordered by w", () => {
+    const unsorted = [
+      cand("eta theta iota", 0.01),
+      cand("alpha beta gamma", 0.03),
+      cand("delta epsilon zeta", 0.02),
+    ];
+    expect(mmrSelect(unsorted, 3, 0.55).map((c) => c.w)).toEqual([0.03, 0.02, 0.01]);
+    expect(mmrSelect(unsorted, 5, 0.55).map((c) => c.w)).toEqual([0.03, 0.02, 0.01]);
+    expect(mmrSelect(unsorted, 3, 1).map((c) => c.w)).toEqual([0.03, 0.02, 0.01]);
+  });
+
+  test("negative or NaN k returns empty across bypass and greedy paths", () => {
+    const s = slate(
+      cand("alpha beta gamma", 0.03),
+      cand("delta epsilon zeta", 0.02),
+      cand("eta theta iota", 0.01),
+    );
+    for (const k of [-1, -5, Number.NaN, 0.5]) {
+      expect(mmrSelect(s, k, 0.55)).toEqual([]);
+      expect(mmrSelect(s, k, 1)).toEqual([]);
+    }
+  });
+});
+
+describe("finalizeHits", () => {
+  test("drops hits below floor, sorts descending by score, and caps at limit", () => {
+    const hits = [
+      { id: "low", score: 0.2 },
+      { id: "mid", score: 0.6 },
+      { id: "top", score: 0.9 },
+      { id: "cut", score: 0.5 },
+    ];
+    expect(finalizeHits(hits, { floor: 0.4, limit: 2 }).map((h) => h.id)).toEqual(["top", "mid"]);
+  });
+
+  test("non-positive or NaN limit returns empty instead of slicing from the end", () => {
+    const hits = [
+      { id: "a", score: 0.9 },
+      { id: "b", score: 0.8 },
+    ];
+    for (const limit of [0, -1, -2, Number.NaN, 0.5]) {
+      expect(finalizeHits(hits, { floor: 0.4, limit })).toEqual([]);
+    }
   });
 });
