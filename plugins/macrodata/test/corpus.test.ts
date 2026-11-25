@@ -72,6 +72,49 @@ describe("corpus projection", () => {
       expect(again).toEqual(snap);
     });
 
+    test("ignores CRLF blank lines and whitespace-only lines in valid journals", () => {
+      mkdirSync(ctx.journalDir, { recursive: true });
+      const crlf = join(ctx.journalDir, "crlf-blanks.jsonl");
+      writeFileSync(
+        crlf,
+        [
+          "\r\n",
+          JSON.stringify({ timestamp: "2026-09-18T10:00:00.000Z", topic: "a", content: "one" }),
+          "",
+          "   ",
+          "\t",
+          JSON.stringify({ timestamp: "2026-09-18T11:00:00.000Z", topic: "b", content: "two" }),
+          "  \t ",
+        ].join("\r\n") + "\r\n",
+      );
+
+      const snap = corpus.projectJournalFile(crlf);
+      expect(snap.status).toBe("ok");
+      expect(snap.error).toBeUndefined();
+      expect(snap.items.map((i) => ({ id: i.id, content: i.content }))).toEqual([
+        { id: "journal-crlf-blanks.jsonl-0", content: "[a] one" },
+        { id: "journal-crlf-blanks.jsonl-1", content: "[b] two" },
+      ]);
+
+      const wsOnly = join(ctx.journalDir, "blank.jsonl");
+      writeFileSync(wsOnly, "  \r\n\t\r\n   ");
+      const emptySnap = corpus.projectJournalFile(wsOnly);
+      expect(emptySnap.status).toBe("ok");
+      expect(emptySnap.items).toEqual([]);
+      expect(emptySnap.heldFrom).toBeUndefined();
+    });
+
+    test("trailing whitespace after a newline-terminated malformed line still marks the journal incomplete", () => {
+      mkdirSync(ctx.journalDir, { recursive: true });
+      const file = join(ctx.journalDir, "trailing-ws-bad.jsonl");
+      writeFileSync(file, "{not json\n   ");
+
+      const snap = corpus.projectJournalFile(file);
+      expect(snap.status).toBe("incomplete");
+      expect(snap.heldFrom).toBeUndefined();
+      expect(String(snap.error)).toContain("malformed");
+    });
+
     test("a malformed line marks the source incomplete but keeps valid lines", () => {
       mkdirSync(ctx.journalDir, { recursive: true });
       const file = join(ctx.journalDir, "mixed.jsonl");
