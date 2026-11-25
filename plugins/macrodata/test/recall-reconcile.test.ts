@@ -146,7 +146,7 @@ describe("recall reconciliation", () => {
     const r = await recall.reconcileCorpus();
 
     expect(r.pruned).toBe(2);
-    expect(ids()).toEqual(["people-bob-preamble"]);
+    expect(ids()).toEqual(["entity:people/bob.md:preamble"]);
   });
 
   test("removing a section prunes that section only", async () => {
@@ -157,7 +157,7 @@ describe("recall reconciliation", () => {
     const r = await recall.reconcileCorpus();
 
     expect(r).toMatchObject({ pruned: 1, embedded: 0 });
-    expect(ids()).toEqual(["people-alice-1", "people-alice-preamble"]);
+    expect(ids()).toEqual(["entity:people/alice.md:1", "entity:people/alice.md:preamble"]);
   });
 
   test("a rename converges: old ids gone, new ids present", async () => {
@@ -168,7 +168,7 @@ describe("recall reconciliation", () => {
     const r = await recall.reconcileCorpus();
 
     expect(r).toMatchObject({ pruned: 1, embedded: 0, relabeled: 1 });
-    expect(ids()).toEqual(["people-alicia-preamble"]);
+    expect(ids()).toEqual(["entity:people/alicia.md:preamble"]);
   });
 
   test("a category move converges on the new type and source", async () => {
@@ -180,7 +180,7 @@ describe("recall reconciliation", () => {
     await recall.reconcileCorpus();
 
     expect(onDisk()).toEqual([
-      { id: "projects-alice-preamble", source: "projects/alice.md", timestamp: undefined },
+      { id: "entity:projects/alice.md:preamble", source: "projects/alice.md", timestamp: undefined },
     ]);
   });
 
@@ -217,7 +217,7 @@ describe("recall reconciliation", () => {
 
     expect(String(await recall.reconcileCorpus().catch((e) => e))).toContain("--full");
     expect(await recall.rebuildIndex()).toMatchObject({ itemCount: 1 });
-    expect(ids()).toEqual(["people-alice-preamble"]);
+    expect(ids()).toEqual(["entity:people/alice.md:preamble"]);
   });
 
   test("a commit records the embedding model, and an unrecorded index is adopted", async () => {
@@ -260,7 +260,7 @@ describe("recall reconciliation", () => {
     writeFileSync(indexPath(), '{"items": [');
     const r = await recall.reconcileCorpus({ heal: true });
     expect(r.setAside).toContain("index.json.corrupt-");
-    expect(ids()).toEqual(["people-alice-preamble"]);
+    expect(ids()).toEqual(["entity:people/alice.md:preamble"]);
   });
 
   test("a commit by another process is reloaded, not overwritten", async () => {
@@ -269,7 +269,7 @@ describe("recall reconciliation", () => {
     await recall.reconcileCorpus();
     // Another writer drops bob's vector; this process's cached copy still has it.
     const raw = JSON.parse(readFileSync(indexPath(), "utf-8"));
-    raw.items = raw.items.filter((it: { id: string }) => !it.id.startsWith("people-bob"));
+    raw.items = raw.items.filter((it: { id: string }) => !it.id.startsWith("entity:people/bob.md:"));
     writeFileSync(indexPath(), JSON.stringify(raw));
     embedded.length = 0;
 
@@ -335,7 +335,7 @@ describe("recall reconciliation", () => {
       "fulfilled",
       "fulfilled",
     ]);
-    expect(ids()).toEqual(["journal-2026-09-23.jsonl-0", "people-alice-preamble"]);
+    expect(ids()).toEqual(["entity:people/alice.md:preamble", "journal-2026-09-23.jsonl-0"]);
   });
 
   test("a search racing a reindex's cache reset still gets an index", async () => {
@@ -363,6 +363,42 @@ describe("recall reconciliation", () => {
     expect(ids()).toEqual(["journal-2026-09-23.jsonl-0"]);
   });
 
+  test("hyphen-boundary entity categories and entities/journal/ reconcile without colliding, and legacy entity ids relabel in place", async () => {
+    put(entity("people-archive/dana.md"), "# Archived Dana\n");
+    put(entity("people/archive-dana.md"), "# Active Dana\n");
+    put(entity("journal/2026-09-23.jsonl.md"), "# Journal Entity\n\n## Sec\n\nEntity body.\n");
+    put(journal("2026-09-23.jsonl"), [line("t", "j0"), line("t", "j1")].join("\n") + "\n");
+
+    const r = await recall.reconcileCorpus();
+    expect(r).toMatchObject({ itemCount: 6, embedded: 6, pruned: 0, complete: true });
+    expect(ids()).toEqual([
+      "entity:journal/2026-09-23.jsonl.md:1",
+      "entity:journal/2026-09-23.jsonl.md:preamble",
+      "entity:people-archive/dana.md:preamble",
+      "entity:people/archive-dana.md:preamble",
+      "journal-2026-09-23.jsonl-0",
+      "journal-2026-09-23.jsonl-1",
+    ]);
+
+    // Simulate an pre-upgrade index storing legacy `<type>-<stem>-preamble` id:
+    // reconcileCorpus reuses the stored vector via content match and prunes the legacy id.
+    const raw = JSON.parse(readFileSync(indexPath(), "utf-8"));
+    for (const it of raw.items) {
+      if (it.id === "entity:people/archive-dana.md:preamble") {
+        it.id = "people-archive-dana-preamble";
+      }
+    }
+    writeFileSync(indexPath(), JSON.stringify(raw));
+    recall.resetIndexCache();
+    embedded.length = 0;
+
+    const migrated = await recall.reconcileCorpus();
+    expect(migrated).toMatchObject({ embedded: 0, relabeled: 1, pruned: 1, complete: true });
+    expect(embedded).toEqual([]);
+    expect(ids()).toContain("entity:people/archive-dana.md:preamble");
+    expect(ids()).not.toContain("people-archive-dana-preamble");
+  });
+
   describe("a partial scan", () => {
     test("never deletes an unreadable source's vectors", async () => {
       put(entity("people/alice.md"), "# Alice\n\n## Role\n\nEngineer.\n");
@@ -376,7 +412,7 @@ describe("recall reconciliation", () => {
       } finally {
         chmodSync(entity("people/alice.md"), 0o644);
       }
-      expect(ids()).toContain("people-alice-1");
+      expect(ids()).toContain("entity:people/alice.md:1");
     });
 
     test("never deletes a file that may sit under a directory that failed to list", async () => {
@@ -395,7 +431,7 @@ describe("recall reconciliation", () => {
       } finally {
         chmodSync(entity("projects"), 0o755);
       }
-      expect(ids()).toEqual(["projects-x-preamble"]);
+      expect(ids()).toEqual(["entity:projects/x.md:preamble"]);
     });
 
     test("a symlink elsewhere in the corpus does not block pruning a real deletion", async () => {
@@ -408,7 +444,7 @@ describe("recall reconciliation", () => {
       const r = await recall.reconcileCorpus();
 
       expect(r).toMatchObject({ complete: false, pruned: 1 });
-      expect(ids()).toEqual(["people-bob-preamble"]);
+      expect(ids()).toEqual(["entity:people/bob.md:preamble"]);
     });
 
     test("a journal line caught mid-append is not a malformed record", async () => {
@@ -431,7 +467,7 @@ describe("recall reconciliation", () => {
           chmodSync(root, 0o755);
         }
       }
-      expect(ids()).toEqual(["journal-2026-09-23.jsonl-0", "people-alice-preamble"]);
+      expect(ids()).toEqual(["entity:people/alice.md:preamble", "journal-2026-09-23.jsonl-0"]);
     });
 
     test("a directory whose entries cannot be stat'd keeps their vectors", async () => {
@@ -446,7 +482,7 @@ describe("recall reconciliation", () => {
       } finally {
         chmodSync(entity("projects"), 0o755);
       }
-      expect(ids()).toEqual(["projects-x-preamble"]);
+      expect(ids()).toEqual(["entity:projects/x.md:preamble"]);
     });
 
     test("a file with a size but no allocated blocks is unread, not empty", async () => {
@@ -462,7 +498,7 @@ describe("recall reconciliation", () => {
         complete: false,
         pruned: 0,
       });
-      expect(ids()).toEqual(["people-alice-preamble"]);
+      expect(ids()).toEqual(["entity:people/alice.md:preamble"]);
     });
 
     test("a truncated final journal line keeps its indexed vector", async () => {
@@ -493,7 +529,7 @@ describe("recall reconciliation", () => {
       } finally {
         chmodSync(entity("people/bob.md"), 0o644);
       }
-      expect(ids()).toEqual(["people-alice-preamble", "people-bob-preamble"]);
+      expect(ids()).toEqual(["entity:people/alice.md:preamble", "entity:people/bob.md:preamble"]);
     });
 
     test("keeps a malformed journal's lines rather than reading them as deletions", async () => {
@@ -532,7 +568,7 @@ describe("recall reconciliation", () => {
       const r = await recall.reconcileSource(entity("people/alice.md"));
 
       expect(r).toMatchObject({ pruned: 2, complete: true });
-      expect(ids()).toEqual(["people-bob-preamble"]);
+      expect(ids()).toEqual(["entity:people/bob.md:preamble"]);
     });
 
     test("a rename converges when both paths are reconciled", async () => {
@@ -559,7 +595,7 @@ describe("recall reconciliation", () => {
       } finally {
         chmodSync(entity("people/alice.md"), 0o644);
       }
-      expect(ids()).toEqual(["people-alice-preamble"]);
+      expect(ids()).toEqual(["entity:people/alice.md:preamble"]);
     });
 
     test("a missing root is not read as a deletion", async () => {
@@ -570,7 +606,7 @@ describe("recall reconciliation", () => {
       const r = await recall.reconcileSource(entity("people/alice.md"));
 
       expect(r).toMatchObject({ complete: false, pruned: 0 });
-      expect(ids()).toEqual(["people-alice-preamble"]);
+      expect(ids()).toEqual(["entity:people/alice.md:preamble"]);
     });
 
     test("a deleted directory prunes every source under it", async () => {
@@ -583,7 +619,7 @@ describe("recall reconciliation", () => {
       const r = await recall.reconcileSource(entity("people"));
 
       expect(r).toMatchObject({ pruned: 2, complete: true });
-      expect(ids()).toEqual(["projects-x-preamble"]);
+      expect(ids()).toEqual(["entity:projects/x.md:preamble"]);
     });
 
     test("ignores paths the corpus scan would not index", async () => {
@@ -610,7 +646,7 @@ describe("recall reconciliation", () => {
         });
       }
       expect(embedded).toEqual([]);
-      expect(ids()).toEqual(["journal-2026-09-23.jsonl-0", "people-alice-preamble"]);
+      expect(ids()).toEqual(["entity:people/alice.md:preamble", "journal-2026-09-23.jsonl-0"]);
     });
 
     test("a vanished journal-rooted path never deletes entity vectors", async () => {
@@ -620,7 +656,7 @@ describe("recall reconciliation", () => {
       // Same relative source string as the entity, but under journal/.
       const r = await recall.reconcileSource(journal("people/alice.md"));
       expect(r.pruned).toBe(0);
-      expect(ids()).toEqual(["people-alice-preamble"]);
+      expect(ids()).toEqual(["entity:people/alice.md:preamble"]);
     });
 
     test("rejects a path through a symlinked directory", async () => {
@@ -649,7 +685,7 @@ describe("recall reconciliation", () => {
           pruned: 0,
         });
       }
-      expect(ids()).toEqual(["people-alice-preamble"]);
+      expect(ids()).toEqual(["entity:people/alice.md:preamble"]);
     });
 
     test("rejects a path outside the corpus", async () => {

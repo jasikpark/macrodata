@@ -156,21 +156,21 @@ describe("corpus projection", () => {
       expect(snap.type).toBe("people");
       expect(snap.items).toEqual([
         {
-          id: "people-alice-preamble",
+          id: "entity:people/alice.md:preamble",
           type: "people",
           content: "# Alice\n\nIntro line.",
           source: "people/alice.md",
           section: "preamble",
         },
         {
-          id: "people-alice-1",
+          id: "entity:people/alice.md:1",
           type: "people",
           content: "## About\n\nEngineer.",
           source: "people/alice.md",
           section: "About",
         },
         {
-          id: "people-alice-2",
+          id: "entity:people/alice.md:2",
           type: "people",
           content: "## Notes\n\nFrontend.",
           source: "people/alice.md",
@@ -180,7 +180,7 @@ describe("corpus projection", () => {
       expect(corpus.projectEntityFile(file)).toEqual(snap);
     });
 
-    test("nested files keep their full category-relative path in source and id", () => {
+    test("nested files keep their full entities-relative path in source and id", () => {
       const dir = join(ctx.entitiesDir, "people", "team");
       mkdirSync(dir, { recursive: true });
       const file = join(dir, "bob.md");
@@ -191,7 +191,7 @@ describe("corpus projection", () => {
       expect(snap.source).toBe("people/team/bob.md");
       expect(snap.type).toBe("people");
       expect(snap.items).toHaveLength(1);
-      expect(snap.items[0]?.id).toBe("people-team/bob-preamble");
+      expect(snap.items[0]?.id).toBe("entity:people/team/bob.md:preamble");
       expect(snap.items[0]?.source).toBe("people/team/bob.md");
     });
 
@@ -285,7 +285,51 @@ describe("corpus projection", () => {
         expect(item.type).not.toBe("note.md");
       }
       // The unaffected category file is still projected normally.
-      expect(proj.items.map((i) => i.id)).toContain("people-alice-preamble");
+      expect(proj.items.map((i) => i.id)).toContain("entity:people/alice.md:preamble");
+    });
+
+    test("cross-category hyphen boundaries and entities/journal/ never collide on item ids", () => {
+      mkdirSync(join(ctx.entitiesDir, "people-archive"), { recursive: true });
+      mkdirSync(join(ctx.entitiesDir, "people"), { recursive: true });
+      mkdirSync(join(ctx.entitiesDir, "journal"), { recursive: true });
+      mkdirSync(ctx.journalDir, { recursive: true });
+
+      writeFileSync(
+        join(ctx.entitiesDir, "people-archive", "alice.md"),
+        "# Archived Alice\n\n## Bio\n\nArchived.\n",
+      );
+      writeFileSync(
+        join(ctx.entitiesDir, "people", "archive-alice.md"),
+        "# Active Archive-Alice\n\n## Bio\n\nActive.\n",
+      );
+      writeFileSync(
+        join(ctx.entitiesDir, "journal", "2026-09-18.jsonl.md"),
+        "# Notes\n\n## Section\n\nEntity under journal category.\n",
+      );
+      writeFileSync(
+        join(ctx.journalDir, "2026-09-18.jsonl"),
+        [
+          JSON.stringify({ topic: "a", content: "line 0" }),
+          JSON.stringify({ topic: "b", content: "line 1" }),
+        ].join("\n") + "\n",
+      );
+
+      const proj = corpus.scanCorpus();
+      expect(proj.complete).toBe(true);
+      const ids = proj.items.map((i) => i.id).sort();
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(ids).toEqual(
+        [
+          "entity:journal/2026-09-18.jsonl.md:1",
+          "entity:journal/2026-09-18.jsonl.md:preamble",
+          "entity:people-archive/alice.md:1",
+          "entity:people-archive/alice.md:preamble",
+          "entity:people/archive-alice.md:1",
+          "entity:people/archive-alice.md:preamble",
+          "journal-2026-09-18.jsonl-0",
+          "journal-2026-09-18.jsonl-1",
+        ].sort(),
+      );
     });
   });
 
@@ -320,12 +364,12 @@ describe("corpus projection", () => {
       const ids = proj.items.map((i) => i.id).sort();
       expect(ids).toEqual(
         [
+          "entity:people/alice.md:preamble",
+          "entity:people/team/bob.md:preamble",
+          "entity:projects/widget.md:1",
+          "entity:projects/widget.md:preamble",
           "journal-2026-09-18.jsonl-0",
           "journal-2026-09-19.jsonl-0",
-          "people-alice-preamble",
-          "people-team/bob-preamble",
-          "projects-widget-1",
-          "projects-widget-preamble",
         ].sort(),
       );
       // Dot files and dot dirs never leak into the corpus.
@@ -353,7 +397,7 @@ describe("corpus projection", () => {
         expect(proj.failures[0]?.status).toBe("incomplete");
         expect(proj.failures[0]?.source).toBe("locked.jsonl");
         // Valid, readable material is still projected.
-        expect(proj.items.map((i) => i.id)).toContain("people-alice-preamble");
+        expect(proj.items.map((i) => i.id)).toContain("entity:people/alice.md:preamble");
       } finally {
         chmodSync(locked, 0o644);
       }
@@ -428,7 +472,7 @@ describe("corpus projection", () => {
         expect(f.kind).toBe("entity");
         expect(f.error).toContain("listing failed");
         // Readable material outside the broken subtree is still projected.
-        expect(proj.items.map((i) => i.id)).toContain("people-alice-preamble");
+        expect(proj.items.map((i) => i.id)).toContain("entity:people/alice.md:preamble");
         // The directory failure is a seen source; it belongs in snapshots too.
         expect(proj.snapshots).toContainEqual(f);
       } finally {
