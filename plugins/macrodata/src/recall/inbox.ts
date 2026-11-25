@@ -52,12 +52,23 @@ export function atomicWrite(path: string, data: string): void {
 }
 
 /**
+ * Collapse runs of whitespace to single spaces and escape any case-variant of
+ * the `</macrodata-recall` closing tag so untrusted text stays on one line and
+ * cannot close `<macrodata-recall>` early.
+ */
+function sanitizeInline(s: string): string {
+  return s.replace(/\s+/g, " ").replace(/<\/(macrodata-recall)/gi, "<\\/$1");
+}
+
+/**
  * Log and display label: the file, qualified by the section when present. A
  * bare `section ?? source` collapses two files sharing a section title into one
  * label, and blackout forensics exist to identify WHICH hit was suppressed.
  */
 export function srcLabel(h: SearchResult): string {
-  return h.section ? `${h.source} › ${h.section}` : h.source;
+  const source = sanitizeInline(h.source).trim();
+  const section = h.section ? sanitizeInline(h.section).trim() : "";
+  return section ? `${source} › ${section}` : source;
 }
 
 /**
@@ -126,9 +137,9 @@ export function recallRow(h: SearchResult, now = Date.now()): string {
   };
   const mmrSeg = h.mmrPick != null ? ` · mmr (#${h.mmrPick} · w#${h.wRank ?? "?"} · sim ${fmt(h.mmrSim, 2)})` : "";
   // Raw content can quote the literal closing tag (the corpus holds web pages
-  // and transcripts); escape it so a hit can't end the block early and pass
-  // itself off as post-recall context.
-  const excerpt = h.content.replace(/\s+/g, " ").split("</macrodata-recall").join("<\\/macrodata-recall").slice(0, 220);
+  // and transcripts); escape any case-variant so a hit can't end the block
+  // early and pass itself off as post-recall context.
+  const excerpt = sanitizeInline(h.content).slice(0, 220);
   return `- rerank ${h.score.toFixed(2)} · rrf ${fmt(h.rrf, 3)}${mmrSeg} · rec (${fmt(h.recency, 2)} · seen ${ageLabel(h.timestamp)}) — ${srcLabel(h)}\n  ${excerpt}`;
 }
 
