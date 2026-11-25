@@ -10,8 +10,9 @@
  * entities dir, POSIX spelling, i.e. exactly the `source` field the indexers
  * have always stored for immediate files. A nested entity file at
  * `entities/people/team/bob.md` is source `people/team/bob.md` and type
- * `people`; its ids carry the full category-relative stem so they cannot
- * collide with an immediate sibling of the same name.
+ * `people`; its ids (`entity:<source>:preamble`, `entity:<source>:<i>`) carry
+ * the full entities-relative source under the `entity:` namespace so they are
+ * injective across categories and disjoint from `journal-` ids.
  *
  * Nested / dot-directory policy: scanning walks entity categories recursively.
  * Any path segment starting with "." — a directory (.obsidian, .trash, .git)
@@ -275,11 +276,13 @@ export function projectJournalFile(absPath: string, journalDir = getJournalDir()
 /**
  * Parse one entity Markdown file into a SourceSnapshot.
  *
- * Preamble + `##`-section splitting, content formatting, and the
- * `<type>-<name>-preamble` id shape are the existing index contract. The
- * category (type) is the first segment under the entities dir; nested files
- * keep their full category-relative stem in both `source` and their ids.
- * Files outside `entities/` or under a dot path are errors, not silences.
+ * Preamble + `##`-section splitting, content formatting, and injective
+ * `entity:<source>:preamble` / `entity:<source>:<i>` ids are the index
+ * contract. Keying on the full `entities/`-relative `source` under the
+ * `entity:` prefix prevents collisions across hyphenated category/file names
+ * (`people-archive/alice.md` vs `people/archive-alice.md`) and against
+ * `journal-` ids (`entities/journal/…`). Files outside `entities/` or under a
+ * dot path are errors, not silences.
  */
 export function projectEntityFile(absPath: string, entitiesDir = getEntitiesDir()): SourceSnapshot {
   const kind: SourceKind = "entity";
@@ -336,16 +339,11 @@ export function projectEntityFile(absPath: string, entitiesDir = getEntitiesDir(
   }
 
   const items: MemoryItem[] = [];
-  // Category-relative stem: "alice" for people/alice.md, "team/bob" for
-  // people/team/bob.md, so a nested file's id cannot collide with an
-  // immediate sibling of the same name.
-  const stem = segments.slice(1).join("/").slice(0, -".md".length);
-  const stemId = `${type}-${stem}`;
   const sections = content.split(/^## /m);
 
   if (sections[0].trim()) {
     items.push({
-      id: `${stemId}-preamble`,
+      id: `entity:${source}:preamble`,
       type,
       content: sections[0].trim(),
       source,
@@ -360,7 +358,7 @@ export function projectEntityFile(absPath: string, entitiesDir = getEntitiesDir(
     const sectionContent = section.slice(firstLine.length).trim();
     if (sectionContent) {
       items.push({
-        id: `${stemId}-${i}`,
+        id: `entity:${source}:${i}`,
         type,
         content: `## ${sectionTitle}\n\n${sectionContent}`,
         source,
