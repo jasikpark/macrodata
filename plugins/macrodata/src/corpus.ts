@@ -217,11 +217,14 @@ export function projectJournalFile(absPath: string, journalDir = getJournalDir()
     return { ...snapshot, status: "incomplete", error: `read failed: ${String(err)}` };
   }
 
-  const lines = raw.trim().split("\n").filter(Boolean);
+  const rawLines = raw.split("\n");
+  const lines = rawLines.filter((line) => line.trim().length > 0);
   // Every writer terminates a record with "\n", so an unparsable final line
   // with no newline after it is an append in flight or a truncated rewrite,
-  // not a malformed record; heldFrom keeps its indexed id either way.
-  const appendInFlight = !raw.endsWith("\n");
+  // not a malformed record; heldFrom keeps its indexed id either way. Check
+  // the final split segment directly so trailing spaces after a "\n" cannot
+  // disguise an already-terminated malformed line as in-flight.
+  const appendInFlight = rawLines[rawLines.length - 1].trim().length > 0;
   let malformedLines = 0;
   for (let i = 0; i < lines.length; i++) {
     let entry: unknown;
